@@ -6,6 +6,7 @@ use std::rc::Weak;
 use std::time::Instant;
 
 use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetActiveWindow, GetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{GetCaretBlinkTime, KillTimer, SetTimer};
 
 use super::clock::Clock;
@@ -19,6 +20,7 @@ use super::text::{self, Fonts, Measurer};
 use super::window::Host;
 use super::{ime, uia};
 use crate::chrome::Caption;
+use crate::edit::TextEdit;
 use crate::event::Event;
 use crate::geom::{Point, Rect, Size};
 use crate::layout::Abs;
@@ -98,6 +100,9 @@ pub struct Ui {
     new_slots: Vec<NodeId>,
     pub(super) slots: HashMap<NodeId, (Box<dyn SlotHost>, Told)>,
     pub(super) capture: Capture,
+    /// The pointer target the middle button went down on (a middle click
+    /// is a press and release on the same one).
+    pub(super) middle: Option<NodeId>,
     pub(super) tracking: bool,
     pub(super) nc_tracking: bool,
     pub(super) clicks: (Instant, Point, u32),
@@ -168,6 +173,7 @@ impl Ui {
             new_slots: Vec::new(),
             slots: HashMap::new(),
             capture: Capture::None,
+            middle: None,
             tracking: false,
             nc_tracking: false,
             clicks: (p.created, Point::ZERO, 0),
@@ -238,12 +244,18 @@ impl Ui {
 
     /// Light, dark, or follow Windows.
     pub fn set_appearance(&mut self, a: Appearance) {
+        if self.appearance == a {
+            return;
+        }
         self.appearance = a;
         self.apply_theme();
     }
 
     /// Colour the column for a space (`None`: the app's paper).
     pub fn set_space(&mut self, space: Option<SpaceTheme>) {
+        if self.space == space {
+            return;
+        }
         self.space = space;
         self.apply_theme();
     }
@@ -318,6 +330,14 @@ impl Ui {
             self.tree.with_field(b, |f| f.edit.cancel_composition());
         }
         self.tree.focus(id, visible);
+        // Focusing a control while a page holds the keyboard takes the
+        // keyboard back — but only inside the active window: a focus
+        // change never activates it.
+        // SAFETY: plain reads of this thread's input state.
+        let (focus, active) = unsafe { (GetFocus(), GetActiveWindow()) };
+        if id.is_some() && focus != self.hwnd && active == self.hwnd {
+            self.commands.push(Command::FocusWindow);
+        }
         let field = id.is_some_and(|i| self.tree.get(i).is_some_and(|n| n.field_ref().is_some()));
         if field != self.ime_on {
             self.ime_on = field;
@@ -355,6 +375,23 @@ impl Ui {
             f.edit.set_text(text, select_all);
         });
         self.fit_field(id);
+    }
+
+    /// Change a field's editing state in place — its selection, an inline
+    /// completion after the caret — and keep the caret in view. The text
+    /// may change too; no [`Event::FieldChanged`] is sent for it.
+    pub fn edit_field<R>(&mut self, id: NodeId, f: impl FnOnce(&mut TextEdit) -> R) -> Option<R> {
+        self.tree.get(id)?.field_ref()?;
+        let r = self.tree.with_field(id, |fl| f(&mut fl.edit));
+        self.fit_field(id);
+        self.restart_caret();
+        r
+    }
+
+    /// Put `text` on the clipboard (Copy Address). `false` if another
+    /// program held the clipboard.
+    pub fn copy_text(&self, text: &str) -> bool {
+        super::clipboard::set(self.hwnd, text)
     }
 
     /// A field's text.
@@ -415,13 +452,27 @@ impl Ui {
     /// Register picture `id` for image nodes: premultiplied BGRA, `w`×`h`.
     pub fn set_image(&mut self, id: u32, pixels: Vec<u8>, w: u32, h: u32) {
         self.painter.set_image(id, pixels, w, h);
-        self.repaint_all();
+        self.repaint_image(id);
     }
 
     /// Forget picture `id`.
     pub fn remove_image(&mut self, id: u32) {
         self.painter.remove_image(id);
-        self.repaint_all();
+        self.repaint_image(id);
+    }
+
+    /// Redraw only the layers that show picture `id` (a favicon arriving
+    /// must not redraw the whole window).
+    fn repaint_image(&mut self, id: u32) {
+        let mut users = Vec::new();
+        self.tree.walk(|n, node| {
+            if matches!(node.content, crate::node::Content::Image(i) if i == id) {
+                users.push(n);
+            }
+        });
+        for n in users {
+            self.tree.mark_paint(n);
+        }
     }
 
     /// Close the window (after [`Event::CloseRequested`], or whenever).

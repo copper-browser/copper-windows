@@ -357,6 +357,22 @@ impl Tree {
         None
     }
 
+    /// How far a [`reveal`](crate::node::Flags::reveal) node is shown: the
+    /// eased hover of the nearest pointer target above it (0–1). Hovering
+    /// a target lights its target ancestors too, so a revealed button stays
+    /// shown while the pointer is on it.
+    pub fn reveal_t(&self, id: NodeId) -> f32 {
+        let mut cur = self.parent(id);
+        while let Some(c) = cur {
+            match self.get(c) {
+                Some(n) if n.flags.hit => return n.state.hover_t.max(n.state.press_t),
+                Some(_) => cur = self.parent(c),
+                None => break,
+            }
+        }
+        0.0
+    }
+
     /// `id`'s layer must be redrawn.
     pub fn mark_paint(&mut self, id: NodeId) {
         let Some(layer) = self.layer_of(id) else {

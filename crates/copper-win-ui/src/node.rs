@@ -228,6 +228,9 @@ pub struct Flags {
     pub drag: bool,
     /// Holds focus inside it while it is the modal (the open card).
     pub modal: bool,
+    /// Drawn only while the nearest pointer target above it is hovered,
+    /// fading in and out with it (a row's close cross).
+    pub reveal: bool,
 }
 
 /// Live interaction state (set by the tree, read by paint).
@@ -423,6 +426,10 @@ impl Node {
         self.style.min_h = v;
         self
     }
+    pub fn max_height(mut self, v: f32) -> Node {
+        self.style.max_h = v;
+        self
+    }
     pub fn padding(mut self, p: Insets) -> Node {
         self.style.padding = p;
         self
@@ -559,6 +566,12 @@ impl Node {
     }
     pub fn drag(mut self) -> Node {
         self.flags.drag = true;
+        self
+    }
+    /// Show only while the pointer is over the nearest pointer target
+    /// above: see [`Flags::reveal`].
+    pub fn reveal(mut self) -> Node {
+        self.flags.reveal = true;
         self
     }
     pub fn modal(mut self) -> Node {

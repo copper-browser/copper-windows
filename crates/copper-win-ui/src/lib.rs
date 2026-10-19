@@ -41,6 +41,7 @@ pub mod win;
 pub use event::Event;
 pub use geom::{Color, Insets, Point, Rect, Size};
 pub use layout::{Abs, Align, Dim, Dir, Justify};
+pub use menu::Menu;
 pub use node::{Cursor, Edge, Node, Role, TextAlign, Trim, Weight};
 pub use spring::{Motion, Spring};
 pub use theme::{Appearance, Swatch, Theme, Token};

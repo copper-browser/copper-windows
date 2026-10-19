@@ -30,10 +30,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetCursorPos,
     GetWindowLongPtrW, IDC_ARROW, LoadCursorW, MINMAXINFO, RegisterClassExW, SW_MAXIMIZE,
-    SW_MINIMIZE, SW_RESTORE, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-    WM_DPICHANGED, WM_GETMINMAXINFO, WM_GETOBJECT, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY,
-    WM_NCHITTEST, WM_SIZE, WNDCLASSEXW, WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
+    SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+    ShowWindow, WM_DPICHANGED, WM_GETMINMAXINFO, WM_GETOBJECT, WM_NCCALCSIZE, WM_NCCREATE,
+    WM_NCDESTROY, WM_NCHITTEST, WM_SIZE, WNDCLASSEXW, WS_EX_NOREDIRECTIONBITMAP,
+    WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{Result, w};
 
@@ -521,6 +522,11 @@ impl Window {
 
     /// Draw the first frame and show the window.
     pub fn show(&self) {
+        self.show_as(false);
+    }
+
+    /// [`Window::show`], maximised when `maximized` (a remembered place).
+    pub fn show_as(&self, maximized: bool) {
         let first = self
             .host
             .with_ui(|ui| {
@@ -533,7 +539,14 @@ impl Window {
         // SAFETY: showing our own window (outside the state's borrow: it
         // sends size, activation and focus messages).
         unsafe {
-            let _ = ShowWindow(self.hwnd, SW_SHOWNORMAL);
+            let _ = ShowWindow(
+                self.hwnd,
+                if maximized {
+                    SW_SHOWMAXIMIZED
+                } else {
+                    SW_SHOWNORMAL
+                },
+            );
         }
         if first {
             let process = since_process_ms();

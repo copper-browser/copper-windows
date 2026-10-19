@@ -31,6 +31,13 @@ use crate::geom::{Point, Rect};
 use crate::theme::Theme;
 use crate::tree::{NodeId, Tree};
 
+/// `AddVisual(v, insertAbove, None)`: with no reference visual, `FALSE`
+/// puts the new visual above all its siblings and `TRUE` below them all
+/// (measured on Windows 11: the reverse of what the parameter's name
+/// suggests).
+const STACK_TOP: bool = false;
+const STACK_BOTTOM: bool = true;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Applied {
     x: f32,
@@ -158,8 +165,12 @@ impl Scene {
                 // SAFETY: detaching children of our own visual.
                 unsafe { l.kids.RemoveAllVisuals()? };
                 if let Some(s) = &l.slot {
-                    // SAFETY: re-adding our own slot visual at the bottom.
-                    unsafe { l.kids.AddVisual(s, false, None::<&IDCompositionVisual>)? };
+                    // SAFETY: re-adding our own slot visual at the bottom
+                    // (see `STACK_BOTTOM`).
+                    unsafe {
+                        l.kids
+                            .AddVisual(s, STACK_BOTTOM, None::<&IDCompositionVisual>)?
+                    };
                 }
                 continue;
             }
@@ -170,7 +181,7 @@ impl Scene {
             let slot = if is_slot {
                 let s = new_visual(gfx)?;
                 // SAFETY: as above.
-                unsafe { kids.AddVisual(&s, false, None::<&IDCompositionVisual>)? };
+                unsafe { kids.AddVisual(&s, STACK_BOTTOM, None::<&IDCompositionVisual>)? };
                 new_slots.push(id);
                 Some(s)
             } else {
@@ -199,11 +210,11 @@ impl Scene {
             let (Some(child), Some(p)) = (self.layers.get(&id), self.layers.get(&parent)) else {
                 continue;
             };
-            // SAFETY: each visual is added to exactly one parent, in
-            // document order, so later layers sit above earlier ones.
+            // SAFETY: each visual is added to exactly one parent, on top,
+            // in document order, so later layers sit above earlier ones.
             unsafe {
                 p.kids
-                    .AddVisual(&child.visual, true, None::<&IDCompositionVisual>)?
+                    .AddVisual(&child.visual, STACK_TOP, None::<&IDCompositionVisual>)?
             };
         }
         if let (Some(t), Some(r)) = (&self.target, root.and_then(|r| self.layers.get(&r))) {

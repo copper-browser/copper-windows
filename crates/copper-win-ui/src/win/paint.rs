@@ -221,12 +221,16 @@ impl Painter {
         if n.style.hidden || (!is_root && n.flags.layer) {
             return;
         }
-        let faded = !is_root && n.transform.opacity < 0.999;
+        let mut opacity = if is_root { 1.0 } else { n.transform.opacity };
+        if n.flags.reveal {
+            opacity *= tree.reveal_t(id);
+        }
+        let faded = opacity < 0.999;
         if faded {
-            if n.transform.opacity <= 0.001 {
+            if opacity <= 0.001 {
                 return;
             }
-            self.push_layer(f, None, Matrix3x2::identity(), n.transform.opacity);
+            self.push_layer(f, None, Matrix3x2::identity(), opacity);
         }
         let r = Rect::new(at.x, at.y, n.frame.w, n.frame.h);
         self.background(f, n, r);
@@ -440,10 +444,11 @@ impl Painter {
         if radius > 0.0
             && let Some(g) = self.shapes.rounded(f.gfx, r.w, r.h, radius)
         {
-            let mut t = Matrix3x2::identity();
-            // SAFETY: reading the current transform.
-            unsafe { f.dc.GetTransform(&mut t) };
-            self.push_layer(f, Some(g), Matrix3x2::translation(r.x, r.y) * t, 1.0);
+            // The world transform applies to a layer's mask as well, so the
+            // mask's own transform only places it (applying the world
+            // transform here too would shift it by the surface's atlas
+            // offset and clip away whatever it misses).
+            self.push_layer(f, Some(g), Matrix3x2::translation(r.x, r.y), 1.0);
             return;
         }
         // SAFETY: balanced by pop_clip.

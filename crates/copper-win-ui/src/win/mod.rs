@@ -24,7 +24,7 @@ mod uia;
 mod window;
 
 pub use frame::Backdrop;
-pub use slot::{FocusReason, SlotHost, SlotMouse, SlotPointer};
+pub use slot::{FocusReason, SlotHost, SlotMouse, SlotPointer, request_frame};
 pub use ui::Ui;
 pub use window::{Options, Window};
 

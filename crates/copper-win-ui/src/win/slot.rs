@@ -10,9 +10,9 @@
 //!
 //! [`Node::slot`]: crate::node::Node::slot
 
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::DirectComposition::IDCompositionVisual;
-use windows::Win32::UI::WindowsAndMessaging::HCURSOR;
+use windows::Win32::UI::WindowsAndMessaging::{HCURSOR, PostMessageW};
 use windows::core::IUnknown;
 
 /// Why focus moves into the page (WebView2's
@@ -76,6 +76,11 @@ pub trait SlotHost {
     fn cursor(&self) -> Option<HCURSOR>;
     /// The page's UI Automation root (an `IRawElementProviderSimple`).
     fn automation(&self) -> Option<IUnknown>;
+    /// The window moved on screen (the slot's client-relative bounds did
+    /// not change). WebView2 places its popups — `<select>` lists, IME
+    /// candidates, tooltips — in screen coordinates and must hear of it
+    /// (`NotifyParentWindowPositionChanged`).
+    fn window_moved(&self) {}
 }
 
 /// What the window last told a slot, so it only says what changed.
@@ -84,4 +89,13 @@ pub struct Told {
     pub bounds: Option<(i32, i32, i32, i32)>,
     pub visible: Option<bool>,
     pub scale: Option<f32>,
+}
+
+/// Ask the window `hwnd` (the one given to [`SlotHost::attach`]) for a
+/// frame, and so a DirectComposition commit, from outside it: a host whose
+/// content gets connected under the slot visual later, on its own, calls
+/// this, or the change shows only at the window's next commit.
+pub fn request_frame(hwnd: HWND) {
+    // SAFETY: posting a message; a window already gone fails harmlessly.
+    let _ = unsafe { PostMessageW(Some(hwnd), super::clock::WM_FRAME, WPARAM(0), LPARAM(0)) };
 }
