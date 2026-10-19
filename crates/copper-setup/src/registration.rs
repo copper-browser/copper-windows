@@ -48,6 +48,10 @@ pub const CAPABILITIES_KEY: &str = r"Software\Clients\StartMenuInternet\Copper\C
 pub const FILE_TYPES: &[&str] = &[".htm", ".html", ".pdf", ".svg", ".webp", ".xhtml"];
 /// URL schemes Copper opens.
 pub const URL_SCHEMES: &[&str] = &["http", "https"];
+/// `HKCU\` + this: Copper's own `copper:` links (`copper://cloud/join?…`,
+/// `copper://canvas/…`) open in Copper whatever the default browser is, as
+/// the Mac app's `CFBundleURLSchemes` `copper` does.
+pub const COPPER_SCHEME_KEY: &str = r"Software\Classes\copper";
 
 /// A registry value, in the types Copper needs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,6 +196,20 @@ pub fn writes(install: &Install) -> Vec<Write> {
         w.set(&format!(r"{root}\shell\open\command"), None, s(&open));
     }
 
+    // `copper:` links: Copper's own, so registered outright (not a default
+    // browser choice).
+    w.set(COPPER_SCHEME_KEY, None, s("URL:Copper")).set(
+        COPPER_SCHEME_KEY,
+        Some("URL Protocol"),
+        s(""),
+    );
+    w.set(&format!(r"{COPPER_SCHEME_KEY}\DefaultIcon"), None, s(&icon));
+    w.set(
+        &format!(r"{COPPER_SCHEME_KEY}\shell\open\command"),
+        None,
+        s(&open),
+    );
+
     // The browser itself, as Start menu and Default apps know browsers.
     w.set(CLIENT_KEY, None, s(APP_NAME));
     w.set(&format!(r"{CLIENT_KEY}\DefaultIcon"), None, s(&icon));
@@ -242,6 +260,7 @@ pub fn removals() -> Vec<Removal> {
         Removal::Tree(CLIENT_KEY.to_owned()),
         Removal::Tree(format!(r"Software\Classes\{PROGID_HTML}")),
         Removal::Tree(format!(r"Software\Classes\{PROGID_URL}")),
+        Removal::Tree(COPPER_SCHEME_KEY.to_owned()),
         Removal::Value {
             key: REGISTERED_APPS_KEY.to_owned(),
             name: APP_NAME.to_owned(),
@@ -397,6 +416,28 @@ mod tests {
         assert_eq!(
             str_of(&w, r"Software\Classes\CopperURL", Some("URL Protocol")),
             ""
+        );
+    }
+
+    #[test]
+    fn copper_scheme_opens_copper() {
+        let i = install();
+        let w = writes(&i);
+        assert_eq!(str_of(&w, COPPER_SCHEME_KEY, None), "URL:Copper");
+        assert_eq!(str_of(&w, COPPER_SCHEME_KEY, Some("URL Protocol")), "");
+        assert_eq!(
+            str_of(
+                &w,
+                &format!(r"{COPPER_SCHEME_KEY}\shell\open\command"),
+                None
+            ),
+            i.open_command()
+        );
+        assert!(
+            removals()
+                .iter()
+                .any(|r| matches!(r, Removal::Tree(t) if t == COPPER_SCHEME_KEY)),
+            "uninstall removes the copper: scheme"
         );
     }
 
