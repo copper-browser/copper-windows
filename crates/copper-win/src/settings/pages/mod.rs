@@ -8,9 +8,9 @@
 use super::Page;
 use std::rc::Rc;
 
-mod addons;
 mod agents;
 mod cloud;
+mod extensions;
 mod general;
 mod passwords;
 mod privacy;
@@ -25,7 +25,7 @@ pub fn all() -> Vec<Rc<dyn Page>> {
         Rc::new(cloud::Cloud),
         Rc::new(agents::Agents),
         Rc::new(updates::Updates),
-        Rc::new(addons::Addons),
+        Rc::new(extensions::Extensions),
     ]
 }
 

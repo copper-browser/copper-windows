@@ -1,19 +1,19 @@
-//! Add-ons: Chrome extensions.
+//! Extensions: Chrome extensions (Settings › Extensions). Copper's own addons are Settings › Addons.
 
 use crate::chrome::glyph;
 use crate::platform::Shell;
 use crate::settings::Page;
 use crate::settings::form::Form;
 
-/// Add-ons: Chrome extensions.
-pub(super) struct Addons;
+/// Extensions: Chrome extensions.
+pub(super) struct Extensions;
 
-impl Page for Addons {
+impl Page for Extensions {
     fn id(&self) -> &'static str {
-        "addons"
+        "extensions"
     }
     fn title(&self) -> &'static str {
-        "Add-ons"
+        "Extensions"
     }
     fn blurb(&self) -> &'static str {
         "Chrome extensions: add, pin, allow on sites, and remove."
