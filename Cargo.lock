@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "copper-cloud"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "copper-core",
@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "copper-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "directories",
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "copper-engine"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "directories",
  "futures-channel",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "copper-mcp"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "copper-pagejs"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "copper-shield"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "copper-core",
  "copper-engine",
