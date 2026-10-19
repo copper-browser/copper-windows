@@ -51,7 +51,7 @@ inside). Logs in `Data\logs\`. Nothing roams.
 
 | Wave | Work | Owner model |
 |---|---|---|
-| 1 | Shared crates Windows-correct (core/cloud/mcp/engine paths; creds → Credential Manager/DPAPI; import → Chrome/Edge/Brave DPAPI + AES-GCM). Shell-core foundation (crate, `MainLoop` trait, generic engine plumbing, engine trait additions) in copper-linux. WebView2 engine crate. Toolkit core. Installer library. CI/release workflows. | Opus high/xhigh; CI on Luna |
+| 1 | Shared crates Windows-correct (core/cloud/mcp/engine paths; creds → Credential Manager/DPAPI; import → Chrome/Edge/Brave/Vivaldi/Chromium/Arc profiles, bookmarks, history, tabs; passwords through the browser's own CSV export only — Copper never opens another browser's `Login Data` on Windows). Shell-core foundation (crate, `MainLoop` trait, generic engine plumbing, engine trait additions) in copper-linux. WebView2 engine crate. Toolkit core. Installer library. CI/release workflows. | Opus high/xhigh; CI on Luna |
 | 2 | Shell-core module moves (canvas, cloud, agents, forms, palette/spaces/features/session). Windows app: window + tab column + one field + palette + Spaces + panels + settings + downloads + find + permissions + Canvas + Cloud + agents/MCP + passwords/import + updater. | Opus xhigh (UX), high (wiring) |
 | 3 | Validate on Felipe's Windows PC (hyperv-manager `ws-farce`), fix waves, visual parity pass against the Mac, perf pass, release `v0.1.0` (CopperSetup-x64.exe, -arm64.exe, portable zip, SHA256SUMS, `copper-version.json` `platform:"windows"`). | Opus |
 
