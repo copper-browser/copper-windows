@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
+description = "Copper for Windows: the one copper.exe (browser, CLI, MCP bridge and installer)."
+build = "build.rs"
 
 [[bin]]
 name = "copper"
@@ -17,6 +19,12 @@ copper-pagejs.workspace = true
 copper-shield.workspace = true
 copper-cloud.workspace = true
 copper-mcp.workspace = true
+copper-setup = { path = "../copper-setup" }
+
+[build-dependencies]
+# Compiles the icon, manifest and version resource (llvm-rc when
+# cross-compiling, rc.exe on Windows) and links them into copper.exe.
+embed-resource = "3.0"
 
 [lints]
 workspace = true

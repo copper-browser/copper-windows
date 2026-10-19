@@ -1,0 +1,39 @@
+// copper.exe's resources. build.rs fills in the @…@ values and writes the
+// result to OUT_DIR; numeric ids and types keep it free of SDK headers.
+
+// The app icon. Id 1 is the lowest, so it is the one Explorer, the taskbar
+// and Settings > Apps show; setup draws it too (copper_setup gfx APP_ICON_ID).
+1 ICON "@ICON@"
+
+// The application manifest: RT_MANIFEST (24), CREATEPROCESS_MANIFEST_RESOURCE_ID (1).
+1 24 "@MANIFEST@"
+
+// The version Explorer's Details tab and Settings > Apps show.
+1 VERSIONINFO
+FILEVERSION @V1@,@V2@,@V3@,0
+PRODUCTVERSION @V1@,@V2@,@V3@,0
+FILEFLAGSMASK 0x3F
+FILEFLAGS 0x0
+FILEOS 0x40004
+FILETYPE 0x1
+FILESUBTYPE 0x0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Copper"
+            VALUE "FileDescription", "Copper"
+            VALUE "FileVersion", "@VERSION@"
+            VALUE "InternalName", "copper"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Office Commun"
+            VALUE "OriginalFilename", "copper.exe"
+            VALUE "ProductName", "Copper"
+            VALUE "ProductVersion", "@VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
