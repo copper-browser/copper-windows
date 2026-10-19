@@ -25,6 +25,7 @@ pub fn register(shell: &Shell) {
     crate::panels::register(shell);
     crate::settings::register(shell);
     crate::find::register(shell);
+    crate::palette::register(shell);
     page_commands(shell);
     shell.on_page_created(page_created);
     let pages: Vec<(TabId, WebView2Page)> = shell

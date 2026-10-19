@@ -11,13 +11,14 @@ use super::build::{door, fill_mark, mark, tip};
 use super::glyph;
 use super::images::Images;
 use super::model::{Model, Nav, SpaceView};
+use crate::palette::symbols;
 use crate::platform::Icon;
 use copper_core::browser::TabId;
 use copper_shell_core::TabView;
 use copper_win_ui::tokens::{metrics, motion, side};
 use copper_win_ui::win::Ui;
 use copper_win_ui::{
-    Align, Insets, Justify, Node, NodeId, Prop, Role, Swatch, TextAlign, Token, Weight,
+    Align, Insets, Justify, Node, NodeId, Point, Prop, Role, Swatch, TextAlign, Token, Trim, Weight,
 };
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -36,9 +37,14 @@ pub enum Hit {
     Settings,
     Bookmarks,
     Canvas,
+    /// A chip: another space's switches to it, the current one's opens
+    /// its page.
     Space(String),
     NewSpace,
+    /// The header's name: the space menu.
     SpaceMenu,
+    /// The header's mark: Settings › Spaces.
+    SpaceMark,
 }
 
 /// One tab's row.
@@ -96,11 +102,14 @@ pub struct Column {
     pill_placed: bool,
     /// Where the pill was put last (list DIPs).
     pill_y: f32,
+    header: NodeId,
     header_name: NodeId,
     header_mark: NodeId,
+    header_count: NodeId,
+    header_drawn: Option<SpaceView>,
     divider: NodeId,
     new_tab: NodeId,
-    chips: NodeId,
+    chips_row: NodeId,
     chips_drawn: Vec<SpaceView>,
     rows: HashMap<TabId, Row>,
     /// Every pointer target in the column and what it means.
@@ -108,8 +117,26 @@ pub struct Column {
     nav: Nav,
 }
 
-/// The rows' scroll: the space's name, then the rows.
+/// The rows' scroll: the space's name, then the rows. The header keeps
+/// the rows' rhythm (`GroupedRows.row`).
 const HEADER: f32 = side::ROW;
+/// The header's mark door: 24 square, 6 round, 6 before the name.
+const HEADER_MARK: f32 = 24.0;
+const HEADER_MARK_RADIUS: f32 = 6.0;
+const HEADER_MARK_GAP: f32 = 6.0;
+/// The mark drawn in it.
+const HEADER_GLYPH: f32 = 16.0;
+/// The count and the ellipsis: 11, the ellipsis in a 16 frame, 10 apart.
+const HEADER_SMALL: f32 = 11.0;
+const HEADER_MORE: f32 = 16.0;
+const HEADER_GAP: f32 = 10.0;
+/// A chip's mark (`SpaceGlyph(size: 17, bare: true)`).
+const CHIP_GLYPH: f32 = 17.0;
+/// The plus at the foot.
+const PLUS_GLYPH: f32 = 15.0;
+/// A resting chip's mark, and the second copy that lifts it to
+/// [`side::CHIP_HOVER`] under the pointer (the two compose).
+const CHIP_LIFT: f32 = 1.0 - (1.0 - side::CHIP_HOVER) / (1.0 - side::CHIP_RESTING);
 /// The divider: a hairline with room above and below.
 const DIVIDER: f32 = 1.0 + 2.0 * side::DIVIDER_PAD;
 
@@ -207,12 +234,16 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
             ))
             .align(Align::Center)
             .button("Address")
-            .tooltip(&tip("Search or enter an address", "focus-field")),
+            .tooltip(&format!(
+                "Change the address   {}",
+                crate::keys::shortcut("focus-field").unwrap_or_default()
+            )),
     );
     let address_text = ui.tree.add(
         address,
         Node::text(PLACEHOLDER, side::ADDRESS_TEXT)
-            .ink(Swatch::Fade(Token::ColumnInk, side::ADDRESS_INK))
+            .ink(Token::ColumnFaint)
+            .trim(Trim::Middle)
             .grow(1.0)
             .role(Role::None),
     );
@@ -273,17 +304,20 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
             .gap(side::GAP)
             .layer(),
     );
+    // The header (`SpaceHeader`): the space's mark, its own door to
+    // Settings › Spaces; the rest of the row is the space menu, with the
+    // tab count and an ellipsis under the pointer.
     let header = ui.tree.add(
         list,
         Node::row()
             .height(HEADER)
+            .shrink(0.0)
             .padding(Insets::new(
                 side::ROW_INSET - 4.0,
                 0.0,
                 side::ROW_TRAILING,
                 0.0,
             ))
-            .gap(6.0)
             .align(Align::Center)
             .radius(side::ROW_RADIUS)
             .hover_fill(Token::ColumnHover)
@@ -291,20 +325,45 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
     );
     let header_mark = ui.tree.add(
         header,
-        Node::text("", 13.0)
-            .weight(Weight::Semibold)
-            .ink(Token::ColumnMuted)
-            .text_align(TextAlign::Center)
-            .width(24.0)
+        Node::stack()
+            .size(HEADER_MARK, HEADER_MARK)
             .shrink(0.0)
-            .role(Role::None),
+            .radius(HEADER_MARK_RADIUS)
+            .hover_fill(Token::ColumnHover)
+            .align(Align::Center)
+            .justify(Justify::Center)
+            .button("Customize space"),
     );
+    targets.insert(header_mark, Hit::SpaceMark);
+    ui.tree
+        .add(header, Node::new().width(HEADER_MARK_GAP).shrink(0.0));
     let header_name = ui.tree.add(
         header,
         Node::text("", side::SPACE_NAME)
             .weight(Weight::Semibold)
             .ink(Token::ColumnMuted)
-            .grow(1.0)
+            .shrink(1.0)
+            .role(Role::None),
+    );
+    ui.tree
+        .add(header, Node::new().grow(1.0).min_width(HEADER_GAP + 4.0));
+    let header_count = ui.tree.add(
+        header,
+        Node::text("", HEADER_SMALL)
+            .ink(Token::ColumnFaint)
+            .shrink(0.0)
+            .reveal()
+            .role(Role::None),
+    );
+    ui.tree
+        .add(header, Node::new().width(HEADER_GAP).shrink(0.0));
+    ui.tree.add(
+        header,
+        Node::glyph(glyph::MORE, HEADER_SMALL, HEADER_MORE)
+            .weight(Weight::Semibold)
+            .ink(Token::ColumnMuted)
+            .shrink(0.0)
+            .reveal()
             .role(Role::None),
     );
     targets.insert(header, Hit::SpaceMenu);
@@ -388,13 +447,25 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
         targets.insert(d, hit);
     }
     ui.tree.add(foot, Node::new().grow(1.0).min_width(4.0));
+    // The chips scroll sideways rather than shrink: the row is clipped and
+    // slid so the current one stays in view.
     let chips = ui.tree.add(
         foot,
         Node::row()
-            .gap(side::CHIP_GAP)
+            .shrink(1.0)
+            .clip()
             .align(Align::Center)
             .role(Role::List)
             .name("Spaces"),
+    );
+    let chips_row = ui.tree.add(
+        chips,
+        Node::row()
+            .shrink(0.0)
+            .gap(side::CHIP_GAP)
+            .padding(Insets::hv(0.0, 1.0))
+            .align(Align::Center)
+            .layer(),
     );
     ui.tree.add(foot, Node::new().grow(1.0).min_width(4.0));
     let (plus, _) = door(
@@ -402,9 +473,9 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
         foot,
         glyph::PLUS,
         side::FOOT_DOOR,
-        side::FOOT_GLYPH,
-        "New space",
-        "New space",
+        PLUS_GLYPH,
+        "New Space",
+        "New Space \u{2014} right-click for New Canvas",
     );
     targets.insert(plus, Hit::NewSpace);
 
@@ -423,11 +494,14 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
         pill,
         pill_placed: false,
         pill_y: -1.0,
+        header,
         header_name,
         header_mark,
+        header_count,
+        header_drawn: None,
         divider,
         new_tab,
-        chips,
+        chips_row,
         chips_drawn: Vec::new(),
         rows: HashMap::new(),
         targets,
@@ -435,8 +509,8 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
     }
 }
 
-/// The address field's words when there is no page.
-pub const PLACEHOLDER: &str = "Search or enter address";
+/// The address field's words when there is no page (`Side.swift` 886).
+pub const PLACEHOLDER: &str = "Search or Enter URL\u{2026}";
 
 impl Column {
     /// What clicking `id` means, if it is the column's.
@@ -493,7 +567,7 @@ impl Column {
 
     fn sync_address(&mut self, ui: &mut Ui, host: &str) {
         let (text, ink) = if host.is_empty() {
-            (PLACEHOLDER, Swatch::Token(Token::ColumnMuted))
+            (PLACEHOLDER, Swatch::Token(Token::ColumnFaint))
         } else {
             (host, Swatch::Fade(Token::ColumnInk, side::ADDRESS_INK))
         };
@@ -508,24 +582,55 @@ impl Column {
     }
 
     fn sync_header(&mut self, ui: &mut Ui, space: &SpaceView) {
-        if ui
-            .tree
-            .get(self.header_name)
-            .is_some_and(|n| n.a11y.name != space.title)
-        {
-            ui.tree.set_text(self.header_name, &space.title);
+        if self.header_drawn.as_ref() == Some(space) {
+            return;
         }
-        if ui
-            .tree
-            .get(self.header_mark)
-            .is_some_and(|n| n.a11y.name != space.letter)
-        {
-            ui.tree.set_text(self.header_mark, &space.letter);
-        }
+        let title = symbols::title(space.icon.as_deref(), &space.title);
+        ui.tree.set_text(self.header_name, &title);
+        ui.tree
+            .set_text(self.header_count, &symbols::tabs(space.count));
+        ui.tree.edit(self.header, |n| {
+            n.a11y.name = title.clone();
+            n.tooltip = Some(format!("{title} \u{2014} click for the space menu"));
+        });
+        ui.tree.edit(self.header_mark, |n| {
+            n.a11y.name = format!("Customize {title}\u{2026}");
+            n.tooltip = Some(format!("Customize {title}\u{2026}"));
+        });
+        ui.tree.clear_children(self.header_mark);
+        space_mark(
+            ui,
+            self.header_mark,
+            space,
+            HEADER_GLYPH,
+            Swatch::Token(Token::ColumnMuted),
+            1.0,
+        );
+        self.header_drawn = Some(space.clone());
     }
 
-    /// The favourites' grid: rebuilt when anything in it changes (it holds
-    /// a dozen at most).
+    /// Where the space menu opens from the header: under its name.
+    pub fn header_menu_point(&self, ui: &Ui) -> Point {
+        let r = ui.tree.window_rect(self.header_name);
+        Point::new(r.x, ui.tree.window_rect(self.header).bottom())
+    }
+
+    /// The spaces door `id` is part of (a chip, the header, its mark, the
+    /// plus), for a right-click.
+    pub fn space_hit(&self, ui: &Ui, id: NodeId) -> Option<Hit> {
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            match self.targets.get(&c) {
+                Some(h @ (Hit::Space(_) | Hit::SpaceMenu | Hit::SpaceMark | Hit::NewSpace)) => {
+                    return Some(h.clone());
+                }
+                Some(_) => return None,
+                None => cur = ui.tree.parent(c),
+            }
+        }
+        None
+    }
+
     fn sync_pins(&mut self, ui: &mut Ui, images: &mut Images, pins: &[TabView<Icon>]) {
         let drawn: Vec<(TabId, Drawn)> =
             pins.iter().map(|t| (t.id.clone(), Drawn::of(t))).collect();
@@ -714,47 +819,104 @@ impl Column {
         ui.tree.scroll(self.scroll, |s| s.scroll_to(to, true));
     }
 
-    /// The space chips: rebuilt when the spaces change.
+    /// The space chips (`SpaceStrip`): rebuilt when the spaces change. One
+    /// space still shows its chip — the way to its page.
     fn sync_chips(&mut self, ui: &mut Ui, spaces: &[SpaceView]) {
         if spaces == self.chips_drawn.as_slice() {
             return;
         }
-        for c in ui.tree.children(self.chips).to_vec() {
+        for c in ui.tree.children(self.chips_row).to_vec() {
             self.forget_targets(ui, c);
         }
-        ui.tree.clear_children(self.chips);
-        // One space needs no chip: the strip shows them once there is a
-        // choice to make.
-        if spaces.len() > 1 {
-            for s in spaces {
-                let chip = ui.tree.add(
-                    self.chips,
-                    Node::stack()
-                        .size(side::CHIP, side::CHIP)
-                        .shrink(0.0)
-                        .radius(side::CHIP_RADIUS)
-                        .hover_fill(Token::ColumnHover)
-                        .selected_fill(Token::Chip)
-                        .selected(s.current)
-                        .align(Align::Center)
-                        .justify(Justify::Center)
-                        .button(&s.title)
-                        .tooltip(&s.title)
-                        .opacity(if s.current { 1.0 } else { side::CHIP_RESTING }),
-                );
-                ui.tree.add(
-                    chip,
-                    Node::text(&s.letter, 13.0)
-                        .weight(Weight::Semibold)
-                        .ink(Swatch::Fixed(s.color))
-                        .text_align(TextAlign::Center)
-                        .role(Role::None),
-                );
-                self.targets.insert(chip, Hit::Space(s.id.clone()));
+        ui.tree.clear_children(self.chips_row);
+        for s in spaces {
+            let title = symbols::title(s.icon.as_deref(), &s.title);
+            let help = if s.current {
+                format!("{title} \u{2014} click to customize")
+            } else {
+                title.clone()
+            };
+            let mut chip = Node::stack()
+                .size(side::CHIP, side::CHIP)
+                .shrink(0.0)
+                .radius(side::CHIP_RADIUS)
+                .align(Align::Center)
+                .justify(Justify::Center)
+                .button(&title)
+                .tooltip(&help);
+            if !s.current {
+                chip = chip.hover_fill(Token::ColumnHover);
             }
+            let chip = ui.tree.add(self.chips_row, chip);
+            ui.tree.edit(chip, |n| n.flags.selected = s.current);
+            let ink = Swatch::Token(Token::ColumnInk);
+            if s.current {
+                space_mark(ui, chip, s, CHIP_GLYPH, ink, 1.0);
+            } else {
+                // Thinned at rest; a second copy lifts it under the pointer.
+                space_mark(ui, chip, s, CHIP_GLYPH, ink, side::CHIP_RESTING);
+                let lift = space_mark(ui, chip, s, CHIP_GLYPH, ink, CHIP_LIFT);
+                ui.tree.edit(lift, |n| n.flags.reveal = true);
+            }
+            self.targets.insert(chip, Hit::Space(s.id.clone()));
         }
+        // More chips than room: slide the row so the current one is in
+        // the middle of what shows.
+        let n = spaces.len() as f32;
+        let whole = n * side::CHIP + (n - 1.0).max(0.0) * side::CHIP_GAP;
+        let room = chip_room();
+        let at = spaces.iter().position(|s| s.current).unwrap_or(0) as f32;
+        let centre = at * (side::CHIP + side::CHIP_GAP) + side::CHIP / 2.0;
+        let slide = if whole > room {
+            (centre - room / 2.0).clamp(0.0, whole - room)
+        } else {
+            0.0
+        };
+        ui.tree
+            .animate(self.chips_row, Prop::X, -slide.round(), motion::GLIDE);
         self.chips_drawn = spaces.to_vec();
     }
+}
+
+/// How wide the chips' window is: the foot less its padding, its three
+/// doors, the plus and the two spacers either side of the chips.
+fn chip_room() -> f32 {
+    metrics::SIDE - 2.0 * side::FOOT_PAD_H - 4.0 * side::FOOT_DOOR - 3.0 * 2.0 - 2.0 * (4.0 + 2.0)
+}
+
+/// Draw `space`'s mark (`SpaceGlyph`, bare) into `parent`, `size` square:
+/// its emoji, its symbol, or a dot — never a letter. Returns the mark.
+fn space_mark(
+    ui: &mut Ui,
+    parent: NodeId,
+    space: &SpaceView,
+    size: f32,
+    ink: Swatch,
+    opacity: f32,
+) -> NodeId {
+    let node = match symbols::mark(space.icon.as_deref(), &space.title) {
+        symbols::Mark::Emoji(e) => Node::text(&e, (size * 0.9).round())
+            .text_align(TextAlign::Center)
+            .size(size, size),
+        symbols::Mark::Symbol(g) => Node::glyph(g, (size * 0.78).round(), size)
+            .weight(Weight::Semibold)
+            .ink(ink),
+        symbols::Mark::Dot => {
+            let d = size * 0.42;
+            Node::new().size(d, d).radius(d / 2.0).fill(ink)
+        }
+    };
+    let node = node.opacity(opacity).role(Role::None);
+    let holder = ui.tree.add(
+        parent,
+        Node::stack()
+            .absolute(copper_win_ui::Abs::FILL)
+            .align(Align::Center)
+            .justify(Justify::Center)
+            .role(Role::None),
+    );
+    ui.tree.add(holder, node);
+    holder
 }
 
 /// A new row for `t`, appended to `list` (ordered afterwards).

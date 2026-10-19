@@ -54,3 +54,7 @@ pub const GEAR: char = '\u{E713}';
 pub const COPY: char = '\u{E8C8}';
 /// `rectangle.on.rectangle`: a private tab's mark.
 pub const PRIVATE: char = '\u{E727}';
+/// `ellipsis`: the space header's menu door.
+pub const MORE: char = '\u{E712}';
+/// `square.on.square`: Settings › Spaces.
+pub const SPACES: char = '\u{E8A9}';
