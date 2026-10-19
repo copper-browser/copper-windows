@@ -1,0 +1,961 @@
+//! WebView2's events on one webview → `PageEvent`s, `PageChange`s and the
+//! page's cached state.
+//!
+//! Every handler holds the page weakly and is removed when the webview is
+//! let go (`PageInner::tokens`).
+
+use std::rc::Rc;
+
+use copper_engine::{
+    CrashReason, Image, LinkHover, LoadState, NewWindowRequest, PageEvent, PermissionId,
+    WindowDisposition,
+};
+use serde_json::json;
+use webview2_com::GetFaviconCompletedHandler;
+use webview2_com::Microsoft::Web::WebView2::Win32::*;
+use windows::Win32::UI::Shell::SHCreateMemStream;
+use windows::core::Interface;
+
+use super::hosting::{MODIFIED_CLICK_WINDOW, accelerator_key, focus_changed};
+use super::{Life, PageInner, PendingPermission, WebView2Page, script};
+use crate::convert::{WEB_ERROR_CANCELED, crash_reason, permission_kind, web_error_name};
+use crate::history::NativeHistory;
+use crate::hosting::{FocusExit, PageChange};
+use crate::util::png_size;
+use crate::win::com::{Tokens, get, get_bool, get_string, hs, read_stream};
+use crate::win::controller::{self, Wv};
+use crate::win::{cdp, downloads};
+
+type WinResult = windows::core::Result<()>;
+
+/// Load progress milestones (WebView2 reports none).
+const PROGRESS_STARTED: f64 = 0.1;
+const PROGRESS_COMMITTED: f64 = 0.3;
+const PROGRESS_DOM_READY: f64 = 0.7;
+
+/// Register every handler of `page` on `wv`.
+pub(super) fn wire(page: &Rc<PageInner>, wv: &Wv) -> WinResult {
+    let mut t = page.tokens.borrow_mut();
+    t.clear();
+    let view = &wv.view;
+    let w = Rc::downgrade(page);
+
+    // -- navigation --------------------------------------------------------
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        NavigationStarting,
+        NavigationStartingEventHandler,
+        move |_, a: Option<ICoreWebView2NavigationStartingEventArgs>| {
+            if let (Some(p), Some(a)) = (pw.upgrade(), a) {
+                let url = get_string(|s| unsafe { a.Uri(s) }).ok();
+                let redirected = get_bool(|b| unsafe { a.IsRedirected(b) }).unwrap_or(false);
+                p.nav_started(url, redirected);
+            }
+            Ok(())
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        ContentLoading,
+        ContentLoadingEventHandler,
+        move |v: Option<ICoreWebView2>, _| {
+            if let (Some(p), Some(v)) = (pw.upgrade(), v) {
+                let url = get_string(|s| unsafe { v.Source(s) }).ok();
+                p.find.reset();
+                // Requests of the old document are void.
+                p.deny_pending_permissions();
+                p.set_progress(PROGRESS_COMMITTED);
+                p.emit(PageEvent::Load(LoadState::Committed { url }));
+            }
+            Ok(())
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        SourceChanged,
+        SourceChangedEventHandler,
+        move |v: Option<ICoreWebView2>, _| {
+            if let (Some(p), Some(v)) = (pw.upgrade(), v) {
+                let url = get_string(|s| unsafe { v.Source(s) })
+                    .ok()
+                    .filter(|u| !u.is_empty());
+                let changed = {
+                    let mut st = p.status.borrow_mut();
+                    let changed = st.url != url;
+                    st.url = url.clone();
+                    changed
+                };
+                if changed {
+                    p.emit(PageEvent::Url(url));
+                }
+            }
+            Ok(())
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        HistoryChanged,
+        HistoryChangedEventHandler,
+        move |_, _| {
+            if let Some(p) = pw.upgrade() {
+                p.refresh_history();
+            }
+            Ok(())
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        NavigationCompleted,
+        NavigationCompletedEventHandler,
+        move |_, a: Option<ICoreWebView2NavigationCompletedEventArgs>| {
+            if let (Some(p), Some(a)) = (pw.upgrade(), a) {
+                p.nav_completed(&a);
+            }
+            Ok(())
+        }
+    )?;
+    if let Ok(v2) = view.cast::<ICoreWebView2_2>() {
+        let pw = w.clone();
+        on!(
+            t,
+            v2,
+            DOMContentLoaded,
+            DOMContentLoadedEventHandler,
+            move |_, _| {
+                if let Some(p) = pw.upgrade() {
+                    p.set_progress(PROGRESS_DOM_READY);
+                }
+                Ok(())
+            }
+        )?;
+    }
+
+    // -- page state ----------------------------------------------------------
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        DocumentTitleChanged,
+        DocumentTitleChangedEventHandler,
+        move |v: Option<ICoreWebView2>, _| {
+            if let (Some(p), Some(v)) = (pw.upgrade(), v) {
+                let title = get_string(|s| unsafe { v.DocumentTitle(s) })
+                    .ok()
+                    .filter(|t| !t.is_empty());
+                p.status.borrow_mut().title = title.clone();
+                p.emit(PageEvent::Title(title));
+            }
+            Ok(())
+        }
+    )?;
+    if let Ok(v15) = view.cast::<ICoreWebView2_15>() {
+        let pw = w.clone();
+        let v = v15.clone();
+        on!(
+            t,
+            v15,
+            FaviconChanged,
+            FaviconChangedEventHandler,
+            move |_, _| {
+                if let Some(p) = pw.upgrade() {
+                    p.favicon_changed(&v);
+                }
+                Ok(())
+            }
+        )?;
+    }
+    if let Ok(v12) = view.cast::<ICoreWebView2_12>() {
+        let pw = w.clone();
+        let v = v12.clone();
+        on!(
+            t,
+            v12,
+            StatusBarTextChanged,
+            StatusBarTextChangedEventHandler,
+            move |_, _| {
+                if let Some(p) = pw.upgrade() {
+                    let text = get_string(|s| unsafe { v.StatusBarText(s) })
+                        .ok()
+                        .filter(|t| !t.is_empty());
+                    p.status_text_changed(text);
+                }
+                Ok(())
+            }
+        )?;
+    }
+    if let Ok(v8) = view.cast::<ICoreWebView2_8>() {
+        let pw = w.clone();
+        let v = v8.clone();
+        on!(
+            t,
+            v8,
+            IsDocumentPlayingAudioChanged,
+            IsDocumentPlayingAudioChangedEventHandler,
+            move |_, _| {
+                if let Some(p) = pw.upgrade() {
+                    let audio =
+                        get_bool(|b| unsafe { v.IsDocumentPlayingAudio(b) }).unwrap_or(false);
+                    p.status.borrow_mut().audio = audio;
+                    p.emit(PageEvent::AudioPlaying(audio));
+                }
+                Ok(())
+            }
+        )?;
+        let pw = w.clone();
+        let v = v8.clone();
+        on!(
+            t,
+            v8,
+            IsMutedChanged,
+            IsMutedChangedEventHandler,
+            move |_, _| {
+                if let Some(p) = pw.upgrade() {
+                    let muted = get_bool(|b| unsafe { v.IsMuted(b) }).unwrap_or(false);
+                    p.status.borrow_mut().muted = muted;
+                    p.change(PageChange::Muted(muted));
+                }
+                Ok(())
+            }
+        )?;
+    }
+    let pw = w.clone();
+    on!(
+        t,
+        wv.ctl,
+        ZoomFactorChanged,
+        ZoomFactorChangedEventHandler,
+        move |c: Option<ICoreWebView2Controller>, _| {
+            if let (Some(p), Some(c)) = (pw.upgrade(), c) {
+                let zoom: f64 = get(|z| unsafe { c.ZoomFactor(z) }).unwrap_or(1.0);
+                p.status.borrow_mut().zoom = zoom;
+                p.change(PageChange::Zoom(zoom));
+            }
+            Ok(())
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        ContainsFullScreenElementChanged,
+        ContainsFullScreenElementChangedEventHandler,
+        move |v: Option<ICoreWebView2>, _| {
+            if let (Some(p), Some(v)) = (pw.upgrade(), v) {
+                let full = get_bool(|b| unsafe { v.ContainsFullScreenElement(b) }).unwrap_or(false);
+                if full && p.backstaged() {
+                    // Nothing a held page opens appears: leave full screen again.
+                    p.profile.engine.backstage.blocked();
+                    let js = hs("document.fullscreenElement && document.exitFullscreen()");
+                    unsafe { v.ExecuteScript(&js, None)? };
+                    return Ok(());
+                }
+                p.status.borrow_mut().fullscreen = full;
+                p.change(PageChange::Fullscreen(full));
+            }
+            Ok(())
+        }
+    )?;
+
+    // -- crashes, closing ------------------------------------------------------
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        ProcessFailed,
+        ProcessFailedEventHandler,
+        move |_, a: Option<ICoreWebView2ProcessFailedEventArgs>| {
+            if let (Some(p), Some(a)) = (pw.upgrade(), a) {
+                let kind = get(|k| unsafe { a.ProcessFailedKind(k) })
+                    .unwrap_or(COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED);
+                let reason = a
+                    .cast::<ICoreWebView2ProcessFailedEventArgs2>()
+                    .ok()
+                    .and_then(|a2| {
+                        get(|r: *mut COREWEBVIEW2_PROCESS_FAILED_REASON| unsafe { a2.Reason(r) })
+                            .ok()
+                    })
+                    .map(|r| r.0);
+                // Not inside the handler: handling it closes this webview.
+                copper_win_rt::spawn_local(async move { p.process_failed(kind, reason) });
+            }
+            Ok(())
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        WindowCloseRequested,
+        WindowCloseRequestedEventHandler,
+        move |_, _| {
+            if let Some(p) = pw.upgrade() {
+                p.emit(PageEvent::CloseRequested);
+            }
+            Ok(())
+        }
+    )?;
+
+    // -- permissions, popups, dialogs, menus ---------------------------------------
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        PermissionRequested,
+        PermissionRequestedEventHandler,
+        move |_, a: Option<ICoreWebView2PermissionRequestedEventArgs>| {
+            match (pw.upgrade(), a) {
+                (Some(p), Some(a)) => p.permission_requested(a),
+                _ => Ok(()),
+            }
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        NewWindowRequested,
+        NewWindowRequestedEventHandler,
+        move |_, a: Option<ICoreWebView2NewWindowRequestedEventArgs>| {
+            match (pw.upgrade(), a) {
+                (Some(p), Some(a)) => p.new_window_requested(a),
+                _ => Ok(()),
+            }
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        ScriptDialogOpening,
+        ScriptDialogOpeningEventHandler,
+        move |_, a: Option<ICoreWebView2ScriptDialogOpeningEventArgs>| {
+            if let (Some(p), Some(a)) = (pw.upgrade(), a) {
+                p.swallow_dialog(&a);
+            }
+            Ok(())
+        }
+    )?;
+    if let Ok(v11) = view.cast::<ICoreWebView2_11>() {
+        let pw = w.clone();
+        on!(
+            t,
+            v11,
+            ContextMenuRequested,
+            ContextMenuRequestedEventHandler,
+            move |_, a: Option<ICoreWebView2ContextMenuRequestedEventArgs>| {
+                if let (Some(p), Some(a)) = (pw.upgrade(), a)
+                    && p.backstaged()
+                {
+                    unsafe { a.SetHandled(true)? };
+                    p.profile.engine.backstage.blocked();
+                }
+                Ok(())
+            }
+        )?;
+    }
+
+    // -- messages, frames, resources, downloads ------------------------------------
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        WebMessageReceived,
+        WebMessageReceivedEventHandler,
+        move |_, a: Option<ICoreWebView2WebMessageReceivedEventArgs>| {
+            if let (Some(p), Some(a)) = (pw.upgrade(), a)
+                && let Ok(json) = get_string(|s| unsafe { a.WebMessageAsJson(s) })
+            {
+                script::route_web_message(&p, &json);
+            }
+            Ok(())
+        }
+    )?;
+    if let Ok(v4) = view.cast::<ICoreWebView2_4>() {
+        let pw = w.clone();
+        on!(
+            t,
+            v4,
+            FrameCreated,
+            FrameCreatedEventHandler,
+            move |_, a: Option<ICoreWebView2FrameCreatedEventArgs>| {
+                if let (Some(p), Some(a)) = (pw.upgrade(), a) {
+                    p.frame_created(unsafe { a.Frame()? });
+                }
+                Ok(())
+            }
+        )?;
+        let pw = w.clone();
+        on!(
+            t,
+            v4,
+            DownloadStarting,
+            DownloadStartingEventHandler,
+            move |_, a: Option<ICoreWebView2DownloadStartingEventArgs>| {
+                match (pw.upgrade(), a) {
+                    (Some(p), Some(a)) => {
+                        let dir = p.profile.download_dir();
+                        downloads::take_over(
+                            &p.profile.downloads,
+                            &a,
+                            &dir,
+                            Some(Rc::downgrade(&p)),
+                            None,
+                        )
+                    }
+                    _ => Ok(()),
+                }
+            }
+        )?;
+    }
+    let pw = w.clone();
+    on!(
+        t,
+        view,
+        WebResourceRequested,
+        WebResourceRequestedEventHandler,
+        move |v: Option<ICoreWebView2>, a: Option<ICoreWebView2WebResourceRequestedEventArgs>| {
+            match (pw.upgrade(), v, a) {
+                (Some(p), Some(v), Some(a)) => p.serve_html(&v, &a),
+                _ => Ok(()),
+            }
+        }
+    )?;
+    let pw = w.clone();
+    cdp::subscribe(view, "Page.fileChooserOpened", &mut t, move |_| {
+        // Only intercepted while backstaged (`refresh_backstaged`).
+        if let Some(p) = pw.upgrade() {
+            p.profile.engine.backstage.blocked();
+        }
+    })?;
+    let pw = w.clone();
+    cdp::subscribe(view, "Runtime.bindingCalled", &mut t, move |params| {
+        if let Some(p) = pw.upgrade() {
+            script::route_binding(&p, &params);
+        }
+    })?;
+
+    // -- hosting: cursor, keys, focus -------------------------------------------------
+    let pw = w.clone();
+    on!(
+        t,
+        wv.comp,
+        CursorChanged,
+        CursorChangedEventHandler,
+        move |c: Option<ICoreWebView2CompositionController>, _| {
+            if let (Some(p), Some(c)) = (pw.upgrade(), c) {
+                let mut cursor = Default::default();
+                if unsafe { c.Cursor(&mut cursor) }.is_ok() {
+                    p.host.cursor_changed(cursor);
+                }
+            }
+            Ok(())
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        wv.ctl,
+        AcceleratorKeyPressed,
+        AcceleratorKeyPressedEventHandler,
+        move |_, a: Option<ICoreWebView2AcceleratorKeyPressedEventArgs>| {
+            if let (Some(p), Some(a)) = (pw.upgrade(), a)
+                && let Ok(key) = accelerator_key(&a)
+                && p.host.accelerator(&key)
+            {
+                unsafe { a.SetHandled(true)? };
+            }
+            Ok(())
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        wv.ctl,
+        MoveFocusRequested,
+        MoveFocusRequestedEventHandler,
+        move |_, a: Option<ICoreWebView2MoveFocusRequestedEventArgs>| {
+            if let (Some(p), Some(a)) = (pw.upgrade(), a) {
+                let reason =
+                    get(|r| unsafe { a.Reason(r) }).unwrap_or(COREWEBVIEW2_MOVE_FOCUS_REASON_NEXT);
+                let exit = if reason == COREWEBVIEW2_MOVE_FOCUS_REASON_PREVIOUS {
+                    FocusExit::Previous
+                } else {
+                    FocusExit::Next
+                };
+                if p.host.focus_exit(exit) {
+                    unsafe { a.SetHandled(true)? };
+                }
+            }
+            Ok(())
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        wv.ctl,
+        GotFocus,
+        FocusChangedEventHandler,
+        move |_, _| {
+            if let Some(p) = pw.upgrade() {
+                focus_changed(&p, true);
+            }
+            Ok(())
+        }
+    )?;
+    let pw = w.clone();
+    on!(
+        t,
+        wv.ctl,
+        LostFocus,
+        FocusChangedEventHandler,
+        move |_, _| {
+            if let Some(p) = pw.upgrade() {
+                focus_changed(&p, false);
+            }
+            Ok(())
+        }
+    )?;
+    Ok(())
+}
+
+impl PageInner {
+    fn set_progress(&self, v: f64) {
+        self.status.borrow_mut().progress = v;
+        self.emit(PageEvent::Progress(v));
+    }
+
+    fn nav_started(&self, url: Option<String>, redirected: bool) {
+        self.status.borrow_mut().loading = true;
+        if redirected {
+            self.emit(PageEvent::Load(LoadState::Redirected { url }));
+        } else {
+            self.set_progress(PROGRESS_STARTED);
+            self.emit(PageEvent::Load(LoadState::Started { url }));
+        }
+    }
+
+    fn nav_completed(self: &Rc<Self>, a: &ICoreWebView2NavigationCompletedEventArgs) {
+        let ok = get_bool(|b| unsafe { a.IsSuccess(b) }).unwrap_or(false);
+        let http = a
+            .cast::<ICoreWebView2NavigationCompletedEventArgs2>()
+            .ok()
+            .and_then(|a2| get(|s: *mut i32| unsafe { a2.HttpStatusCode(s) }).ok())
+            .unwrap_or(0);
+        let status = get(|s| unsafe { a.WebErrorStatus(s) })
+            .unwrap_or(COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN);
+        let url = self.status.borrow().url.clone();
+        self.status.borrow_mut().loading = false;
+        // An HTTP error page the server sent is a page, not a failed load.
+        if ok || http >= 400 {
+            self.set_progress(1.0);
+            self.emit(PageEvent::Load(LoadState::Finished { url }));
+        } else {
+            self.nav.borrow_mut().cancel_pending();
+            self.clear_html_filter();
+            self.status.borrow_mut().progress = 1.0;
+            self.emit(PageEvent::Load(LoadState::Failed {
+                url: url.unwrap_or_default(),
+                error: web_error_name(status.0).to_owned(),
+                cancelled: status.0 == WEB_ERROR_CANCELED,
+            }));
+        }
+        self.refresh_history();
+    }
+
+    /// Fold the webview's history into the page's URL stack.
+    fn refresh_history(self: &Rc<Self>) {
+        let Some(wv) = self.wv() else { return };
+        let me = Rc::downgrade(self);
+        let generation = self.generation.get();
+        copper_win_rt::spawn_local(async move {
+            let reply = cdp::call(&wv.view, "Page.getNavigationHistory", json!({})).await;
+            let Some(p) = me.upgrade() else { return };
+            if p.generation.get() != generation {
+                return;
+            }
+            let native = reply
+                .ok()
+                .and_then(|v| serde_json::from_value::<NativeHistory>(v).ok());
+            if let Some(native) = native
+                && p.nav.borrow_mut().observe(&native)
+            {
+                p.change(PageChange::History);
+            }
+        });
+    }
+
+    fn favicon_changed(self: &Rc<Self>, v15: &ICoreWebView2_15) {
+        let uri = get_string(|s| unsafe { v15.FaviconUri(s) }).unwrap_or_default();
+        if uri.is_empty() {
+            self.emit(PageEvent::Favicon(None));
+            return;
+        }
+        let me = Rc::downgrade(self);
+        let handler = GetFaviconCompletedHandler::create(Box::new(move |hr, stream| {
+            let Some(p) = me.upgrade() else { return Ok(()) };
+            let png = hr.ok().and(stream).and_then(|s| read_stream(&s).ok());
+            let image = png.and_then(|png| {
+                let (width, height) = png_size(&png)?;
+                Some(Image { png, width, height })
+            });
+            p.emit(PageEvent::Favicon(image));
+            Ok(())
+        }));
+        unsafe {
+            let _ = v15.GetFavicon(COREWEBVIEW2_FAVICON_IMAGE_FORMAT_PNG, &handler);
+        }
+    }
+
+    /// The status text is the hovered link's URL (the shell draws it).
+    fn status_text_changed(&self, text: Option<String>) {
+        self.status.borrow_mut().status_text = text.clone();
+        self.change(PageChange::StatusText(text.clone()));
+        let hover = text
+            .filter(|t| url::Url::parse(t).is_ok())
+            .map(|url| LinkHover {
+                url,
+                title: None,
+                label: None,
+            });
+        self.emit(PageEvent::LinkHover(hover));
+    }
+
+    fn process_failed(
+        self: &Rc<Self>,
+        kind: COREWEBVIEW2_PROCESS_FAILED_KIND,
+        reason: Option<i32>,
+    ) {
+        match kind {
+            COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => {
+                tracing::warn!("WebView2 browser process exited");
+                if let Some(wv) = self.release_webview(Life::Dead) {
+                    controller::close(&wv);
+                }
+                self.status.borrow_mut().loading = false;
+                self.profile.engine.browser_died();
+                self.emit(PageEvent::Crashed(CrashReason::Crashed));
+                // A page on screen comes back at once; others when next used.
+                if self.host.rendering() {
+                    self.wake();
+                }
+            }
+            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED => {
+                self.status.borrow_mut().loading = false;
+                let why = crash_reason(reason, self.terminating.replace(false));
+                self.emit(PageEvent::Crashed(why));
+            }
+            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE => {
+                tracing::warn!("page renderer unresponsive: {:?}", self.status.borrow().url);
+            }
+            _ => {}
+        }
+    }
+
+    fn permission_requested(&self, a: ICoreWebView2PermissionRequestedEventArgs) -> WinResult {
+        let kind = get(|k| unsafe { a.PermissionKind(k) })?;
+        if self.backstaged() {
+            unsafe { a.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY)? };
+            self.profile.engine.backstage.blocked();
+            return Ok(());
+        }
+        let url = get_string(|s| unsafe { a.Uri(s) })
+            .ok()
+            .filter(|u| !u.is_empty());
+        if let Ok(a3) = a.cast::<ICoreWebView2PermissionRequestedEventArgs3>() {
+            // Answers live in the shell's permission store, not Edge's.
+            unsafe { a3.SetSavesInProfile(false)? };
+        }
+        let deferral = unsafe { a.GetDeferral()? };
+        let id = PermissionId(crate::util::next_id());
+        self.permissions
+            .borrow_mut()
+            .insert(id, PendingPermission { args: a, deferral });
+        self.emit(PageEvent::PermissionRequest {
+            id,
+            kind: permission_kind(kind.0),
+            url,
+        });
+        Ok(())
+    }
+
+    fn new_window_requested(
+        self: &Rc<Self>,
+        a: ICoreWebView2NewWindowRequestedEventArgs,
+    ) -> WinResult {
+        let url = get_string(|s| unsafe { a.Uri(s) })
+            .ok()
+            .filter(|u| !u.is_empty());
+        let user_gesture = get_bool(|b| unsafe { a.IsUserInitiated(b) }).unwrap_or(false);
+        let frame_name = a
+            .cast::<ICoreWebView2NewWindowRequestedEventArgs2>()
+            .ok()
+            .and_then(|a2| get_string(|s| unsafe { a2.Name(s) }).ok())
+            .filter(|n| !n.is_empty());
+        let new_tab = self
+            .modified_click
+            .take()
+            .is_some_and(|t| t.elapsed() < MODIFIED_CLICK_WINDOW);
+        let disposition = if new_tab {
+            WindowDisposition::NewTab
+        } else {
+            WindowDisposition::Popup
+        };
+        let req = NewWindowRequest {
+            url,
+            user_gesture,
+            frame_name,
+            disposition,
+        };
+        let popup = if new_tab {
+            None
+        } else {
+            // Taken out while it runs, so it may replace itself.
+            let handler = self.new_window.borrow_mut().take();
+            let page = handler.as_ref().and_then(|h| h(&req));
+            if handler.is_some() && self.new_window.borrow().is_none() {
+                *self.new_window.borrow_mut() = handler;
+            }
+            page
+        };
+        match popup {
+            Some(popup)
+                if popup.inner.related && Rc::ptr_eq(&popup.inner.profile, &self.profile) =>
+            {
+                let deferral = unsafe { a.GetDeferral()? };
+                become_popup(
+                    &popup,
+                    Opener {
+                        args: a,
+                        deferral: Some(deferral),
+                    },
+                );
+            }
+            other => {
+                if other.is_some() {
+                    tracing::warn!(
+                        "new-window handler returned a page not made by new_related; opening a tab"
+                    );
+                }
+                unsafe { a.SetHandled(true)? };
+                self.emit(PageEvent::NewWindow(req));
+            }
+        }
+        Ok(())
+    }
+
+    /// A dialog of a page held in the backstage (default dialogs are off
+    /// then): alerts and `beforeunload` are accepted, confirms and prompts
+    /// declined, nothing is shown.
+    fn swallow_dialog(&self, a: &ICoreWebView2ScriptDialogOpeningEventArgs) {
+        let kind = get(|k| unsafe { a.Kind(k) }).unwrap_or(COREWEBVIEW2_SCRIPT_DIALOG_KIND_ALERT);
+        if kind == COREWEBVIEW2_SCRIPT_DIALOG_KIND_ALERT
+            || kind == COREWEBVIEW2_SCRIPT_DIALOG_KIND_BEFOREUNLOAD
+        {
+            unsafe {
+                let _ = a.Accept();
+            }
+        }
+        self.profile.engine.backstage.blocked();
+    }
+
+    /// Route a child frame's page-world messages (and its children's).
+    fn frame_created(self: &Rc<Self>, frame: ICoreWebView2Frame) {
+        let mut tokens = Tokens::default();
+        let w = Rc::downgrade(self);
+        if let Ok(f2) = frame.cast::<ICoreWebView2Frame2>() {
+            let pw = w.clone();
+            let r = on!(
+                tokens,
+                f2,
+                FrameWebMessageReceived,
+                FrameWebMessageReceivedEventHandler,
+                move |_, a: Option<ICoreWebView2WebMessageReceivedEventArgs>| {
+                    if let (Some(p), Some(a)) = (pw.upgrade(), a)
+                        && let Ok(json) = get_string(|s| unsafe { a.WebMessageAsJson(s) })
+                    {
+                        script::route_web_message(&p, &json);
+                    }
+                    Ok(())
+                }
+            );
+            if let Err(e) = r {
+                tracing::debug!("frame messages: {e}");
+            }
+        }
+        if let Ok(f7) = frame.cast::<ICoreWebView2Frame7>() {
+            let pw = w.clone();
+            let r = on!(
+                tokens,
+                f7,
+                FrameChildFrameCreated,
+                FrameChildFrameCreatedEventHandler,
+                move |_, a: Option<ICoreWebView2FrameCreatedEventArgs>| {
+                    if let (Some(p), Some(a)) = (pw.upgrade(), a) {
+                        p.frame_created(unsafe { a.Frame()? });
+                    }
+                    Ok(())
+                }
+            );
+            if let Err(e) = r {
+                tracing::debug!("child frames: {e}");
+            }
+        }
+        let pw = w.clone();
+        let gone = frame.clone();
+        let r = on!(
+            tokens,
+            frame,
+            FrameDestroyed,
+            FrameDestroyedEventHandler,
+            move |_, _| {
+                let pw = pw.clone();
+                let gone = gone.clone();
+                // Not inside the frame's own callback: removing its handlers
+                // there would release the handler that is running.
+                copper_win_rt::spawn_local(async move {
+                    if let Some(p) = pw.upgrade() {
+                        p.frames.borrow_mut().retain(|(f, _)| f != &gone);
+                    }
+                });
+                Ok(())
+            }
+        );
+        if let Err(e) = r {
+            tracing::debug!("frame lifetime: {e}");
+        }
+        self.frames.borrow_mut().push((frame, tokens));
+    }
+
+    /// Answer the one request `load_html` registered a filter for.
+    fn serve_html(
+        &self,
+        v: &ICoreWebView2,
+        a: &ICoreWebView2WebResourceRequestedEventArgs,
+    ) -> WinResult {
+        let req = unsafe { a.Request()? };
+        let uri = get_string(|s| unsafe { req.Uri(s) })?;
+        let html = match &*self.html.borrow() {
+            Some((url, html)) if same_document(url, &uri) => html.clone(),
+            _ => return Ok(()),
+        };
+        self.clear_html_filter_on(v);
+        self.html.borrow_mut().take();
+        let env = unsafe { v.cast::<ICoreWebView2_2>()?.Environment()? };
+        let stream = unsafe { SHCreateMemStream(Some(html.as_bytes())) }
+            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_OUTOFMEMORY))?;
+        let resp = unsafe {
+            env.CreateWebResourceResponse(
+                &stream,
+                200,
+                &hs("OK"),
+                &hs("Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store"),
+            )?
+        };
+        unsafe { a.SetResponse(&resp) }
+    }
+
+    fn clear_html_filter(&self) {
+        if let Some(wv) = self.wv() {
+            self.clear_html_filter_on(&wv.view);
+        }
+        self.html.borrow_mut().take();
+    }
+
+    fn clear_html_filter_on(&self, v: &ICoreWebView2) {
+        if let Some((url, _)) = &*self.html.borrow() {
+            unsafe {
+                let _ = v.RemoveWebResourceRequestedFilter(
+                    &hs(url),
+                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
+                );
+            }
+        }
+    }
+}
+
+/// Whether request URI `b` is the document `a` (ignoring the fragment and
+/// URL normalisation).
+fn same_document(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        url::Url::parse(s).map(|mut u| {
+            u.set_fragment(None);
+            u.to_string()
+        })
+    };
+    match (norm(a), norm(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// The opener's `NewWindowRequested`, held (by deferral) until the popup's
+/// webview exists. Completing without a webview (the popup page was
+/// dropped, or making its webview failed) marks the request handled, so no
+/// window opens.
+struct Opener {
+    args: ICoreWebView2NewWindowRequestedEventArgs,
+    deferral: Option<ICoreWebView2Deferral>,
+}
+
+impl Opener {
+    fn complete(mut self, view: Option<&ICoreWebView2>) {
+        unsafe {
+            match view {
+                Some(v) => {
+                    if let Err(e) = self.args.SetNewWindow(v) {
+                        tracing::warn!("popup: {e}");
+                        let _ = self.args.SetHandled(true);
+                    }
+                }
+                None => {
+                    let _ = self.args.SetHandled(true);
+                }
+            }
+            if let Some(d) = self.deferral.take() {
+                let _ = d.Complete();
+            }
+        }
+    }
+}
+
+impl Drop for Opener {
+    fn drop(&mut self) {
+        if let Some(d) = self.deferral.take() {
+            unsafe {
+                let _ = self.args.SetHandled(true);
+                let _ = d.Complete();
+            }
+        }
+    }
+}
+
+/// Give the popup page's webview to the opener's request, as soon as it
+/// exists (it must not have navigated before).
+fn become_popup(popup: &WebView2Page, opener: Opener) {
+    popup
+        .inner
+        .with_view_or_fail(move |_, wv| opener.complete(wv.map(|w| &w.view)));
+}
+
+impl PageInner {
+    /// Like `with_view`, but `op` also runs (with `None`) when there will be
+    /// no webview.
+    fn with_view_or_fail(self: &Rc<Self>, op: impl FnOnce(&Rc<PageInner>, Option<&Wv>) + 'static) {
+        if let Some(wv) = self.wv() {
+            op(self, Some(&wv));
+            return;
+        }
+        self.push_op(Box::new(move |p, wv| op(p, wv.ok())));
+        self.wake();
+    }
+}
