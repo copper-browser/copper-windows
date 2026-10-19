@@ -1,0 +1,239 @@
+name: release
+
+# The tag is the Cargo workspace version. workflow_dispatch builds an existing
+# tag too, so a failed release can be retried without changing the sources.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (for example v0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  meta:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      commit: ${{ steps.meta.outputs.commit }}
+      published_at: ${{ steps.meta.outputs.published_at }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+      - name: Validate existing tag and Cargo version
+        id: meta
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          cargo_version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          if [ "$TAG" != "v$cargo_version" ]; then
+            echo "::error::tag $TAG does not match Cargo.toml [workspace.package] version $cargo_version"
+            exit 1
+          fi
+          tag_commit=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
+          if [ "$(git rev-parse HEAD)" != "$tag_commit" ]; then
+            echo "::error::checkout did not resolve the requested release tag $TAG"
+            exit 1
+          fi
+          prerelease=false
+          case "$cargo_version" in *-*) prerelease=true ;; esac
+          {
+            echo "version=$cargo_version"
+            echo "tag=$TAG"
+            echo "commit=$tag_commit"
+            echo "published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "prerelease=$prerelease"
+          } >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: meta
+    name: build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-latest, arch: x64, target: x86_64-pc-windows-msvc }
+          - { runner: windows-11-arm, arch: arm64, target: aarch64-pc-windows-msvc }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      ARCH: ${{ matrix.arch }}
+      TARGET: ${{ matrix.target }}
+      COMMIT: ${{ needs.meta.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.meta.outputs.tag }}
+          persist-credentials: false
+          submodules: recursive
+      - name: Confirm tagged source
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -ne $env:COMMIT) {
+            throw 'The tag moved between release jobs; aborting.'
+          }
+      - name: Toolchain and MSVC target (rust-toolchain.toml)
+        shell: pwsh
+        run: |
+          rustup toolchain install
+          rustup target add $env:TARGET
+      - name: Build copper.exe
+        shell: pwsh
+        run: cargo build --release -p copper-win --target $env:TARGET --locked
+      # A full configuration signs the one executable before it is copied to
+      # CopperSetup.exe or added to the portable zip. Missing secrets are an
+      # intentional unsigned build, not an attempt to sign with partial data.
+      - name: Check optional signing configuration
+        id: signing
+        shell: pwsh
+        env:
+          AZURE_TRUSTED_SIGNING_TENANT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          AZURE_TRUSTED_SIGNING_CLIENT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          AZURE_TRUSTED_SIGNING_CLIENT_SECRET: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_SECRET }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+        run: |
+          $names = @(
+            'AZURE_TRUSTED_SIGNING_TENANT_ID',
+            'AZURE_TRUSTED_SIGNING_CLIENT_ID',
+            'AZURE_TRUSTED_SIGNING_CLIENT_SECRET',
+            'AZURE_TRUSTED_SIGNING_ENDPOINT',
+            'AZURE_TRUSTED_SIGNING_ACCOUNT_NAME',
+            'AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME'
+          )
+          $missing = @($names | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+          if ($missing.Count -gt 0) {
+            'enabled=false' | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "::notice::Authenticode signing skipped ($($missing.Count) Azure Trusted Signing secrets not configured)."
+          } else {
+            'enabled=true' | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+      - uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        name: Sign copper.exe (Azure Artifact Signing)
+        if: steps.signing.outputs.enabled == 'true'
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\target\${{ matrix.target }}\release\copper.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+      - name: Verify Authenticode signature
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE "target/$env:TARGET/release/copper.exe"
+          $signature = Get-AuthenticodeSignature -FilePath $exe
+          if ($signature.Status -ne 'Valid') {
+            throw "Authenticode signature verification failed: $($signature.Status)"
+          }
+      - name: Stage installer and portable zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:GITHUB_WORKSPACE "target/$env:TARGET/release/copper.exe"
+          if (-not (Test-Path -LiteralPath $exe)) { throw "Missing built executable: $exe" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          # The filename alone activates the installer path in this same binary.
+          Copy-Item -LiteralPath $exe -Destination "dist/CopperSetup-$env:ARCH.exe"
+          Compress-Archive -Path $exe, 'LICENSE', 'README.md' -DestinationPath "dist/copper-windows-$env:ARCH.zip"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [meta, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      TAG: ${{ needs.meta.outputs.tag }}
+      COMMIT: ${{ needs.meta.outputs.commit }}
+      PUBLISHED_AT: ${{ needs.meta.outputs.published_at }}
+      PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.meta.outputs.tag }}
+          persist-credentials: false
+          submodules: recursive
+      - name: Confirm tagged source
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Validate assets and create copper-version.json
+        run: |
+          set -euo pipefail
+          python3 packaging/version-manifest.py --dist dist --version "$VERSION" --tag "$TAG" \
+            --commit "$COMMIT" --repo "$GITHUB_REPOSITORY" --published-at "$PUBLISHED_AT" \
+            >dist/copper-version.json
+          cat dist/copper-version.json
+      - name: SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          # Hash the final signed installer, portable zips, and their manifest.
+          for file in CopperSetup-x64.exe CopperSetup-arm64.exe \
+            copper-windows-x64.zip copper-windows-arm64.zip copper-version.json; do
+            test -s "$file" || { echo "::error::missing release asset $file"; exit 1; }
+          done
+          sha256sum CopperSetup-x64.exe CopperSetup-arm64.exe \
+            copper-windows-x64.zip copper-windows-arm64.zip copper-version.json >SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "Copper $VERSION for Windows — built from $GITHUB_REPOSITORY@${COMMIT:0:12}."
+            echo
+            echo 'Download CopperSetup-x64.exe (Windows x64) or CopperSetup-arm64.exe (Windows ARM64) to install Copper per-user.'
+            echo 'The copper-windows-*.zip files contain the same browser/CLI executable as copper.exe, plus the license and README.'
+            echo 'No separate installer code or VC++ redistributable is required. WebView2 Evergreen is required at runtime.'
+            echo 'Verify downloads against SHA256SUMS; copper-version.json gives individual asset URLs and hashes.'
+          } >"$notes"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # A rerun repairs missing/failed asset uploads without a new tag.
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Copper $VERSION for Windows" --notes-file "$notes" \
+              --prerelease="$PRERELEASE" --latest="$([ "$PRERELEASE" = false ] && echo true || echo false)"
+          else
+            flags=(--latest)
+            [ "$PRERELEASE" = true ] && flags=(--prerelease --latest=false)
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Copper $VERSION for Windows" --notes-file "$notes" \
+              "${flags[@]}" dist/*
+          fi
