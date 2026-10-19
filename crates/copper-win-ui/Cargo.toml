@@ -1,5 +1,6 @@
 [package]
 name = "copper-win-ui"
+description = "Copper's native UI toolkit for Windows: custom-frame Mica windows, a DirectComposition layer tree drawn with Direct2D/DirectWrite, flex layout, springs, the one text field with IME, menus, tooltips, UI Automation and the WebSlot that hosts a page's visual."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,6 +8,50 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Grapheme clusters for the text field: the caret never lands inside an
+# emoji, a flag or a letter with its combining marks.
+unicode-segmentation = "1.12"
+
+[target.'cfg(windows)'.dependencies]
+copper-win-rt = { workspace = true }
+windows-core = { workspace = true }
+# Matrix3x2 / Vector2 as the Direct2D and DirectComposition bindings take them
+# (already a dependency of `windows`; named here so the types can be built).
+windows-numerics = "0.3"
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Performance",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_Ime",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input_Pointer",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[[example]]
+name = "gallery"
 
 [lints]
 workspace = true
