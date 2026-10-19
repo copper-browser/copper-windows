@@ -10,14 +10,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::cli::InstallOptions;
-use crate::files::{EXE_NAME, STAGED_NAME, aside_name, is_leftover};
+use anyhow::Context;
+
+use crate::files::{self, EXE_NAME, STAGED_NAME, aside_name, is_leftover};
 use crate::log::log;
 use crate::plan::{Plan, Step};
 use crate::registration::{self, APP_NAME, APP_USER_MODEL_ID, DESCRIPTION, Install};
 use crate::sys::{process, reg, shell};
 use crate::webview2;
 
-/// How long a running Copper gets to close before its exe is moved aside.
+/// How long a running Copper gets to close before setup ends it.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Why an install stopped.
@@ -40,7 +42,7 @@ impl Failure {
                 "Copper needs Microsoft Edge WebView2, and it couldn't be downloaded. Check your connection and try again."
                     .to_owned()
             }
-            Failure::Install(e) => format!("Something went wrong: {e}"),
+            Failure::Install(e) => files::failure_sentence(e).to_owned(),
         }
     }
 }
@@ -122,7 +124,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 
 /// Put `src` at `dir\copper.exe`, replacing a running one if need be.
 fn place_exe(src: &Path, dir: &Path) -> anyhow::Result<PathBuf> {
-    std::fs::create_dir_all(dir)?;
+    std::fs::create_dir_all(dir).with_context(|| format!("couldn't create {}", dir.display()))?;
     let target = dir.join(EXE_NAME);
     if target.exists() && same_file(src, &target) {
         log!("already running from {}; nothing to copy", target.display());
@@ -130,7 +132,7 @@ fn place_exe(src: &Path, dir: &Path) -> anyhow::Result<PathBuf> {
     }
     let staged = dir.join(STAGED_NAME);
     std::fs::copy(src, &staged)
-        .map_err(|e| anyhow::anyhow!("couldn't copy Copper into {}: {e}", dir.display()))?;
+        .with_context(|| format!("couldn't copy Copper into {}", dir.display()))?;
 
     // The easy case: nothing there, or nothing holding it.
     if std::fs::rename(&staged, &target).is_ok() {
@@ -142,13 +144,15 @@ fn place_exe(src: &Path, dir: &Path) -> anyhow::Result<PathBuf> {
         .map(|n| dir.join(aside_name(n)))
         .find(|p| !p.exists())
         .ok_or_else(|| anyhow::anyhow!("too many old copies of Copper in {}", dir.display()))?;
-    std::fs::rename(&target, &aside)
-        .map_err(|e| anyhow::anyhow!("couldn't move the old Copper aside: {e}"))?;
+    if let Err(e) = std::fs::rename(&target, &aside) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e).context("couldn't move the old Copper aside");
+    }
     if let Err(e) = std::fs::rename(&staged, &target) {
         // Put the old one back rather than leave no Copper at all.
         let _ = std::fs::rename(&aside, &target);
         let _ = std::fs::remove_file(&staged);
-        anyhow::bail!("couldn't put the new Copper in place: {e}");
+        return Err(e).context("couldn't put the new Copper in place");
     }
     log!("moved running exe aside to {}", aside.display());
     Ok(target)
@@ -264,9 +268,8 @@ pub fn run(
         Failure::Install(e)
     };
 
-    report(Step::CloseCopper);
     if !same_file(&src, &dir.join(EXE_NAME)) {
-        process::close_running_copper(CLOSE_TIMEOUT);
+        process::close_running_copper(&dir, CLOSE_TIMEOUT, || report(Step::CloseCopper));
     }
 
     report(Step::CopyFiles);

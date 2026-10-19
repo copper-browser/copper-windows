@@ -12,12 +12,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::cli::UninstallOptions;
+use crate::files::is_inside;
 use crate::install::{desktop_shortcut, install_dir, start_menu_shortcut};
 use crate::log::log;
 use crate::registration::APP_NAME;
 use crate::sys::{process, shell};
 
-/// How long a running Copper gets to close.
+/// How long a running Copper gets to close before setup ends it.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// `%LOCALAPPDATA%\Copper` (CONTRACT §4): everything Copper keeps.
@@ -51,14 +52,6 @@ fn remove_dir_patiently(dir: &Path) -> anyhow::Result<()> {
     ))
 }
 
-/// Is `path` inside `dir` (case-insensitively, as NTFS sees it)?
-fn is_inside(path: &Path, dir: &Path) -> bool {
-    let p = path.to_string_lossy().to_lowercase();
-    let d = dir.to_string_lossy().to_lowercase();
-    let d = d.trim_end_matches('\\');
-    p.starts_with(&format!("{d}\\"))
-}
-
 /// Uninstall. `report` hears progress as a fraction 0…1. Every step is
 /// attempted even if an earlier one failed; the first failure is returned
 /// beside what is still to do at exit.
@@ -77,7 +70,7 @@ pub fn run(
     };
 
     report(0.05);
-    process::close_running_copper(CLOSE_TIMEOUT);
+    process::close_running_copper(&install_dir(), CLOSE_TIMEOUT, || {});
 
     report(0.25);
     for lnk in [start_menu_shortcut(), desktop_shortcut()]
@@ -107,7 +100,7 @@ pub fn run(
     let dir = install_dir();
     let me = std::env::current_exe().ok();
     let mut pending = Pending::default();
-    match me.filter(|me| is_inside(me, &dir)) {
+    match me.filter(|me| is_inside(&me.to_string_lossy(), &dir.to_string_lossy())) {
         Some(me) => {
             // Everything but ourselves now; ourselves at exit.
             if let Ok(entries) = std::fs::read_dir(&dir) {

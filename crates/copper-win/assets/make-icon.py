@@ -7,7 +7,8 @@ a rounded square. Windows wants the same plate, but on its own grid: Windows
 11 icons fill more of their square than macOS's 824/1024, so the plate here
 takes 15/16 of the canvas at large sizes and nearly all of it at the small
 ones, where every pixel of copper counts. Each size is drawn on its own (mask
-supersampled 8x, plate resampled with Lanczos), not shrunk from the 256.
+supersampled 8x, plate resampled with Lanczos and lightly sharpened), not
+shrunk from the 256, which is stored as a truecolour PNG.
 
 Usage: python3 make-icon.py <path/to/plate.jpg> [out.ico]
 Needs Pillow. Run once by hand; the .ico is checked in and build.rs embeds it.
@@ -17,7 +18,7 @@ import io
 import struct
 import sys
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 SIZES = [16, 20, 24, 32, 40, 48, 64, 256]
 SUPERSAMPLE = 8
@@ -35,6 +36,16 @@ def radius_for(plate: float) -> float:
     return plate * 0.2237
 
 
+def sharpen_for(size: int) -> dict:
+    """Unsharp-mask settings: firmer at the sizes Explorer's lists and the
+    taskbar use, gentle at 256 where the photo's own detail carries."""
+    if size <= 24:
+        return {"radius": 0.6, "percent": 70, "threshold": 0}
+    if size <= 64:
+        return {"radius": 0.8, "percent": 55, "threshold": 1}
+    return {"radius": 1.0, "percent": 30, "threshold": 2}
+
+
 def draw(plate_img: Image.Image, size: int) -> Image.Image:
     m = margin_for(size)
     side = size - 2 * m
@@ -47,6 +58,9 @@ def draw(plate_img: Image.Image, size: int) -> Image.Image:
     )
     mask = mask.resize((size, size), Image.Resampling.LANCZOS)
     face = plate_img.resize((size, size), Image.Resampling.LANCZOS)
+    # Downscaling a photo this far softens it; a light unsharp mask, scaled
+    # to the size, brings the river's edges back without halos.
+    face = face.filter(ImageFilter.UnsharpMask(**sharpen_for(size)))
     out = face.convert("RGBA")
     out.putalpha(mask)
     return out
@@ -59,12 +73,11 @@ def ico(images: list[Image.Image]) -> bytes:
     for im in images:
         w = im.width
         if w >= 256:
-            # A 256-colour palette with error diffusion is indistinguishable
-            # from truecolour on a photo this busy, at a quarter of the bytes
-            # — and every byte here is a byte of copper.exe.
-            quantized = im.quantize(256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.FLOYDSTEINBERG)
+            # Truecolour RGBA PNG: a palette would quantise the alpha too,
+            # leaving the plate faintly see-through and its corners stepped
+            # at Explorer's Large and Extra large views.
             buf = io.BytesIO()
-            quantized.save(buf, format="PNG", optimize=True)
+            im.save(buf, format="PNG", optimize=True)
             blobs.append(buf.getvalue())
             continue
         # BITMAPINFOHEADER + bottom-up BGRA rows + 1-bpp AND mask (all zero:

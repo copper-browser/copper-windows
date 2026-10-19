@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 
 use super::gfx::{Align, Gfx, Painter, Rect, Style};
 use super::theme::{Palette, alpha, mix};
-use crate::motion::{GLIDE, QUICK, SETTLE, Spring, lerp};
+use crate::motion::{FILL, GLIDE, QUICK, SETTLE, Spring, lerp};
 
 /// The window's size in DIPs.
 pub const WIDTH: f32 = 420.0;
@@ -130,10 +130,18 @@ impl Fade {
     fn step(&mut self, dt: f32) -> bool {
         self.mix.step(dt)
     }
-    /// (text, opacity) pairs to draw.
+    /// (text, opacity) pairs to draw. A fade *through*, not a plain
+    /// cross-fade: the old words are mostly gone before the new ones come
+    /// up, so two titles never sit on top of each other half-legible.
     fn layers(&self) -> [(&str, f32); 2] {
         let t = self.mix.value().clamp(0.0, 1.0);
-        [(&self.was, 1.0 - t), (&self.now, t)]
+        let out = (1.0 - t / 0.55).clamp(0.0, 1.0);
+        let inn = ((t - 0.35) / 0.65).clamp(0.0, 1.0);
+        if self.was.is_empty() {
+            // Nothing going out (a first label): no need to wait for it.
+            return [(&self.was, 0.0), (&self.now, t)];
+        }
+        [(&self.was, out), (&self.now, inn)]
     }
 }
 
@@ -161,10 +169,18 @@ const ICON: f32 = 72.0;
 const BUTTON_H: f32 = 36.0;
 const ZONE_H: f32 = 40.0;
 const CHECK_H: f32 = 24.0;
-const LINK_H: f32 = 20.0;
+const LINK_H: f32 = 24.0;
+/// Air between the buttons' zone and the link.
+const LINK_GAP: f32 = 8.0;
 const TEXT_W: f32 = WIDTH - 72.0;
 const BAR_W: f32 = 240.0;
 const CLOSE: Rect = Rect::new(WIDTH - 46.0, 0.0, 46.0, 32.0);
+/// Least space above the icon and below the last row.
+const TOP_AIR: f32 = 28.0;
+const BOTTOM_AIR: f32 = 30.0;
+/// The one line wraps to at most three lines (a long error); the rest is
+/// trimmed with an ellipsis rather than pushing the buttons off the card.
+const LINE_MAX_H: f32 = 3.0 * 17.5;
 
 /// The card.
 pub struct Card {
@@ -211,7 +227,7 @@ impl Card {
             link_vis: Spring::new(vis(scene.link.is_some()), SETTLE),
             checks_vis: Spring::new(vis(scene.checks.is_some()), GLIDE),
             progress_vis: Spring::new(vis(scene.progress.is_some()), SETTLE),
-            progress: Spring::new(0.0, GLIDE),
+            progress: Spring::new(0.0, FILL),
             hover_springs: Vec::new(),
             close_hover: Spring::new(0.0, QUICK),
             link_hover: Spring::new(0.0, QUICK),
@@ -353,20 +369,22 @@ impl Card {
         self.focus_visible = true;
     }
 
-    /// What Enter/Space act on: the focused thing, else the primary button.
+    /// What Enter/Space act on, the way Windows dialogs do it: Space
+    /// presses whatever has focus; Enter presses a focused button, link or
+    /// ×, and otherwise — nothing focused, or a switch — the default
+    /// (primary) button, so Enter after ticking a box still installs.
     pub fn activation_target(&self, enter: bool) -> Option<Target> {
-        if let Some(f) = self.focus {
-            return Some(f);
-        }
-        if enter {
-            return self
+        match (self.focus, enter) {
+            (Some(f), false) => Some(f),
+            (Some(f @ (Target::Button(_) | Target::Link | Target::Close)), true) => Some(f),
+            (_, true) => self
                 .scene
                 .buttons
                 .iter()
                 .position(|b| b.primary)
-                .map(Target::Button);
+                .map(Target::Button),
+            (None, false) => None,
         }
-        None
     }
 
     pub fn set_hover(&mut self, t: Option<Target>) -> bool {
@@ -399,16 +417,21 @@ impl Card {
             .iter()
             .filter(|(_, a)| *a > 0.0)
             .map(|(t, _)| gfx.height(t, Style::Body, TEXT_W))
-            .fold(18.0f32, f32::max);
+            .fold(18.0f32, f32::max)
+            .min(LINE_MAX_H);
         let checks_above = self.scene.checks == Some(ChecksAt::Above);
 
         // The stack, with optional parts weighted by how visible they are,
         // so it re-centres smoothly as they come and go.
         let mut total = ICON + 16.0 + 30.0 + 4.0 + line_h + 26.0 + ZONE_H;
-        total += lv * (10.0 + LINK_H);
+        total += lv * (LINK_GAP + LINK_H);
         total += cv * (CHECK_H + 12.0);
-        // A little below centre: the top 32 DIPs belong to the caption.
-        let top = ((HEIGHT - total) / 2.0 + 10.0).max(36.0);
+        // Optically centred — a touch low, since the × weighs on the top
+        // band — but never closer to an edge than the air it needs: the
+        // bottom-most row (a link, the switches) must not sit on the edge.
+        let top = ((HEIGHT - total) / 2.0 + 6.0)
+            .min(HEIGHT - BOTTOM_AIR - total)
+            .max(TOP_AIR);
 
         let icon = Rect::new((WIDTH - ICON) / 2.0, top, ICON, ICON);
         let title_y = icon.y + ICON + 16.0;
@@ -441,14 +464,14 @@ impl Card {
             })
             .collect();
 
-        y += lv * 10.0;
+        y += lv * LINK_GAP;
         let link_w = gfx.measure(&self.link_label.now, Style::Small)
             + if self.shown_link_disclosure {
                 14.0
             } else {
                 0.0
             };
-        let link = Rect::new((WIDTH - link_w) / 2.0 - 8.0, y, link_w + 16.0, LINK_H);
+        let link = Rect::new((WIDTH - link_w) / 2.0 - 10.0, y, link_w + 20.0, LINK_H);
         y += lv * LINK_H;
         if !checks_above {
             y += cv * 12.0;
@@ -532,12 +555,10 @@ impl Card {
         }
         for (text, a) in self.line.layers() {
             if !text.is_empty() {
-                p.text(
+                p.text_clipped(
                     text,
                     Style::Body,
-                    (36.0, l.line_y + rise),
-                    TEXT_W,
-                    Align::Center,
+                    Rect::new(36.0, l.line_y + rise, TEXT_W, LINE_MAX_H),
                     alpha(pal.muted, a * enter),
                 );
             }
@@ -658,7 +679,7 @@ impl Card {
     fn draw_link(&self, p: &Painter<'_>, gfx: &Gfx, pal: &Palette, r: Rect, a: f32) {
         let color = mix(pal.muted, pal.ink, self.link_hover.value());
         let label_w = gfx.measure(&self.link_label.now, Style::Small);
-        let x = r.x + 8.0;
+        let x = r.x + 10.0;
         for (text, la) in self.link_label.layers() {
             if !text.is_empty() {
                 p.label(
@@ -684,7 +705,8 @@ impl Card {
             p.line(rot(2.0, 0.0), rot(-1.5, 3.5), 1.2, col);
         }
         if self.focus_visible && self.focus == Some(Target::Link) {
-            p.stroke_round(r, 6.0, 2.0, alpha(pal.focus, a));
+            // A pill, like the buttons' rings, with air around the words.
+            p.stroke_round(r, r.h / 2.0, 2.0, alpha(pal.focus, a));
         }
     }
 
@@ -714,7 +736,9 @@ impl Card {
             alpha(pal.ink, a),
         );
         if focused {
-            p.stroke_round(r.inset(-3.0), 6.0, 2.0, alpha(pal.focus, a));
+            // Even air on both sides of box-and-words, as on the buttons.
+            let ring = Rect::new(r.x - 7.0, r.y - 2.0, r.w + 14.0, r.h + 4.0);
+            p.stroke_round(ring, 7.0, 2.0, alpha(pal.focus, a));
         }
     }
 

@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::card::{ButtonSpec, Card, Check, ChecksAt, LinkSpec, Scene, Target};
 use super::window::{Controller, Ctx};
@@ -19,6 +19,12 @@ use crate::sys::{process, shell};
 
 /// How long "Copper is ready" stays up before Copper opens over it.
 const READY_BEAT: Duration = Duration::from_millis(900);
+/// An install takes a fraction of a second when WebView2 is already there.
+/// The bar still runs its course, so the window never flicks from "Install"
+/// to "ready" in one frame: at least this long from Install to the end.
+const LEAST_WORKING: Duration = Duration::from_millis(1100);
+/// And once the work is done, the full bar shows at least this long.
+const FULL_BAR: Duration = Duration::from_millis(350);
 
 const CHECK_DESKTOP: usize = 0;
 const CHECK_LAUNCH: usize = 1;
@@ -26,13 +32,18 @@ const CHECK_LAUNCH: usize = 1;
 pub enum Msg {
     Step(Step),
     Finished(Result<PathBuf, Failure>),
+    /// The bar has had its time: say "Copper is ready".
+    Ready,
     /// The ready beat is over: open Copper.
     Launch,
 }
 
 enum Phase {
     Ready,
-    Working,
+    /// Installing, since this moment.
+    Working(Instant),
+    /// Installed; the bar is finishing its run before "Copper is ready".
+    Finishing(PathBuf),
     Done(PathBuf),
     Failed,
 }
@@ -141,14 +152,14 @@ impl Installer {
         // WebView2 may have arrived since the window opened (a retry).
         self.plan = install::plan();
         self.cancel.store(false, Ordering::Relaxed);
-        self.phase = Phase::Working;
+        self.phase = Phase::Working(Instant::now());
         let first = if self.plan.webview2 {
             Step::DownloadWebView2 {
                 done: 0,
                 total: None,
             }
         } else {
-            Step::CloseCopper
+            Step::Start
         };
         card.show(working(&self.plan, first));
         let (options, plan, cancel) = (self.options.clone(), self.plan, self.cancel.clone());
@@ -195,7 +206,7 @@ impl Controller for Installer {
     fn message(&mut self, msg: Msg, card: &mut Card, ctx: &mut Ctx<Msg>) {
         match msg {
             Msg::Step(step) => {
-                if matches!(self.phase, Phase::Working) && !self.close_when_done {
+                if matches!(self.phase, Phase::Working(_)) && !self.close_when_done {
                     card.show(working(&self.plan, step));
                 }
             }
@@ -205,6 +216,22 @@ impl Controller for Installer {
                     ctx.close();
                     return;
                 }
+                let elapsed = match self.phase {
+                    Phase::Working(since) => since.elapsed(),
+                    _ => LEAST_WORKING,
+                };
+                card.show(working(&self.plan, Step::Done));
+                self.phase = Phase::Finishing(exe);
+                let wait = LEAST_WORKING.saturating_sub(elapsed).max(FULL_BAR);
+                ctx.spawn(move |poster| {
+                    std::thread::sleep(wait);
+                    poster.send(Msg::Ready);
+                });
+            }
+            Msg::Ready => {
+                let Phase::Finishing(exe) = std::mem::replace(&mut self.phase, Phase::Ready) else {
+                    return;
+                };
                 let launching = self.options.launch;
                 card.show(done(launching));
                 self.phase = Phase::Done(exe);
@@ -242,7 +269,7 @@ impl Controller for Installer {
 
     fn close_requested(&mut self, card: &mut Card, ctx: &mut Ctx<Msg>) {
         match self.phase {
-            Phase::Working => {
+            Phase::Working(_) => {
                 // Stop at the next safe point; the worker reports back and
                 // the window closes then.
                 self.cancel.store(true, Ordering::Relaxed);

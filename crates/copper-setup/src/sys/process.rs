@@ -1,26 +1,32 @@
-//! Other processes: asking a running Copper to quit, starting Copper, and
+//! Other processes: closing a running Copper, starting Copper, and
 //! the short-lived `cmd.exe` that deletes an uninstalled copper.exe.
 
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WAIT_TIMEOUT, WPARAM};
 use windows::Win32::Storage::FileSystem::{MOVEFILE_DELAY_UNTIL_REBOOT, MoveFileExW};
 use windows::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows::Win32::System::Threading::{
-    CREATE_NO_WINDOW, GetCurrentProcessId, OpenProcess, PROCESS_SYNCHRONIZE, WaitForMultipleObjects,
+    CREATE_NO_WINDOW, GetCurrentProcessId, OpenProcess, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
 };
-use windows_core::{BOOL, HSTRING, PCWSTR};
+use windows_core::{BOOL, HSTRING, PCWSTR, PWSTR};
 
+use crate::files::is_inside;
 use crate::log::log;
 
 /// The browser's top-level window class (copper-win-ui registers it).
 pub const COPPER_WINDOW_CLASS: &str = "CopperWindow";
+
+/// The exit code of a Copper that setup had to end after the grace period.
+const ENDED_BY_SETUP: u32 = 1;
 
 /// Top-level windows of `class` owned by other processes: (window, pid).
 fn windows_of_class(class: &str) -> Vec<(HWND, u32)> {
@@ -57,54 +63,149 @@ fn windows_of_class(class: &str) -> Vec<(HWND, u32)> {
     search.found
 }
 
-/// Ask every running Copper to close (`WM_CLOSE` to each `CopperWindow`)
-/// and wait up to `timeout` for those processes to exit.
-///
-/// Returns how many are still running afterwards. Not an error if some
-/// are: the caller moves the running exe aside instead of overwriting it.
-pub fn close_running_copper(timeout: Duration) -> usize {
-    let found = windows_of_class(COPPER_WINDOW_CLASS);
-    if found.is_empty() {
-        return 0;
+/// The full path of process `pid`'s executable, if it can be read.
+fn image_path(process: HANDLE) -> Option<String> {
+    let mut buf = [0u16; 1024];
+    let mut len = buf.len() as u32;
+    // SAFETY: a handle opened with PROCESS_QUERY_LIMITED_INFORMATION; sized
+    // buffer, its length in and the written length out.
+    unsafe {
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        )
     }
-    let mut pids: Vec<u32> = found.iter().map(|&(_, pid)| pid).collect();
-    pids.sort_unstable();
-    pids.dedup();
-    log!(
-        "asking {} Copper process(es) to close: {pids:?}",
-        pids.len()
-    );
+    .ok()?;
+    Some(String::from_utf16_lossy(&buf[..len as usize]))
+}
 
-    let handles: Vec<HANDLE> = pids
-        .iter()
-        // SAFETY: SYNCHRONIZE-only handle to a process we may wait on.
-        .filter_map(|&pid| unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }.ok())
-        .collect();
-    for &(hwnd, _) in &found {
-        // SAFETY: posting is fire-and-forget; a window gone by now is fine.
-        let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+/// A running Copper that has to go: its process and the windows it was
+/// asked to close.
+struct Running {
+    pid: u32,
+    handle: HANDLE,
+    asked: Vec<HWND>,
+}
+
+impl Running {
+    fn exited(&self) -> bool {
+        // SAFETY: a handle we opened with SYNCHRONIZE.
+        let r = unsafe { WaitForSingleObject(self.handle, 0) };
+        r != WAIT_TIMEOUT
     }
+}
 
-    // WaitForMultipleObjects takes at most 64 handles; Copper is one process
-    // in practice, but don't fall over on a pathological case.
-    let deadline = std::time::Instant::now() + timeout;
-    let mut running = 0;
-    for chunk in handles.chunks(64) {
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        // SAFETY: valid handles.
-        let r = unsafe { WaitForMultipleObjects(chunk, true, left.as_millis() as u32) };
-        if r == WAIT_TIMEOUT {
-            running += chunk.len();
+/// Post `WM_CLOSE` to every `CopperWindow` of the processes in `running`
+/// not yet asked, and pick up processes started meanwhile from `dir`.
+fn ask_to_close(dir: &Path, running: &mut Vec<Running>) {
+    let dir = dir.to_string_lossy();
+    for (hwnd, pid) in windows_of_class(COPPER_WINDOW_CLASS) {
+        let at = match running.iter().position(|r| r.pid == pid) {
+            Some(i) => i,
+            None => {
+                // SAFETY: a handle to wait on, end, and read the exe path of.
+                let opened = unsafe {
+                    OpenProcess(
+                        PROCESS_SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION,
+                        false,
+                        pid,
+                    )
+                };
+                let Ok(handle) = opened else {
+                    continue;
+                };
+                // Only a Copper started from the install folder holds the
+                // files being replaced or removed. A portable copy or a
+                // developer's build elsewhere is someone else's session.
+                let path = image_path(handle);
+                if !path.as_deref().is_some_and(|p| is_inside(p, &dir)) {
+                    // SAFETY: the handle just opened.
+                    let _ = unsafe { CloseHandle(handle) };
+                    continue;
+                }
+                log!(
+                    "Copper is running: pid {pid} ({})",
+                    path.unwrap_or_default()
+                );
+                running.push(Running {
+                    pid,
+                    handle,
+                    asked: Vec::new(),
+                });
+                running.len() - 1
+            }
+        };
+        let r = &mut running[at];
+        if !r.asked.contains(&hwnd) {
+            // SAFETY: posting is fire-and-forget; a window gone by now is fine.
+            let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+            r.asked.push(hwnd);
         }
     }
-    for h in handles {
-        // SAFETY: handles we opened.
-        let _ = unsafe { CloseHandle(h) };
+}
+
+/// Close every Copper running from `dir` before its files change.
+///
+/// Each of its windows (class `CopperWindow`, however many there are) gets
+/// `WM_CLOSE`, so the browser shuts down the way it does when the user
+/// closes it: session saved, WebView2 released. Windows it opens while
+/// closing are asked too. Whatever is still running after `grace` is ended
+/// with `TerminateProcess` — an upgrade must not wait on a browser stuck
+/// in a dialog. Returns how many processes were still running at the very
+/// end (a process that can't be ended); the caller then moves the running
+/// exe aside instead of overwriting it. `found` is called once, before any
+/// waiting, if there is a Copper to close at all (for "Closing Copper…").
+pub fn close_running_copper(dir: &Path, grace: Duration, found: impl FnOnce()) -> usize {
+    let mut running = Vec::new();
+    ask_to_close(dir, &mut running);
+    if running.is_empty() {
+        return 0;
     }
-    if running > 0 {
-        log!("{running} Copper process(es) still running after {timeout:?}");
+    found();
+    let pids: Vec<u32> = running.iter().map(|r| r.pid).collect();
+    let windows: usize = running.iter().map(|r| r.asked.len()).sum();
+    log!("asked {windows} Copper window(s) in {pids:?} to close");
+
+    let started = Instant::now();
+    while started.elapsed() < grace {
+        if running.iter().all(Running::exited) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        ask_to_close(dir, &mut running);
     }
-    running
+
+    let mut ended = Vec::new();
+    for r in running.iter().filter(|r| !r.exited()) {
+        // SAFETY: a handle opened with PROCESS_TERMINATE.
+        match unsafe { TerminateProcess(r.handle, ENDED_BY_SETUP) } {
+            Ok(()) => ended.push(r.pid),
+            Err(e) => log!("couldn't end Copper (pid {}): {e}", r.pid),
+        }
+    }
+    if !ended.is_empty() {
+        log!("ended Copper {ended:?}: still running after {grace:?}");
+        // TerminateProcess is asynchronous; give the handles a moment to
+        // signal so the files are free when the caller copies.
+        let until = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < until && !running.iter().all(Running::exited) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    } else {
+        log!("Copper closed in {:?}", started.elapsed());
+    }
+
+    let left = running.iter().filter(|r| !r.exited()).count();
+    for r in running {
+        // SAFETY: handles we opened, closed once.
+        let _ = unsafe { CloseHandle(r.handle) };
+    }
+    if left > 0 {
+        log!("{left} Copper process(es) still running");
+    }
+    left
 }
 
 /// Start Copper, detached, from its own folder.

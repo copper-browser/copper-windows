@@ -23,23 +23,26 @@ use windows::Win32::Graphics::Gdi::{
     ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Controls::{MARGINS, WM_MOUSELEAVE};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
-    VK_ESCAPE, VK_RETURN, VK_SHIFT, VK_SPACE, VK_TAB,
+    GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    VK_ESCAPE, VK_F4, VK_RETURN, VK_SHIFT, VK_SPACE, VK_TAB,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    DispatchMessageW, GWLP_USERDATA, GetCursorPos, GetMessageW, GetWindowLongPtrW, HCURSOR, HICON,
+    BringWindowToTop, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW,
+    DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetClientRect, GetCursorPos,
+    GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId, HCURSOR, HICON,
     HTCAPTION, HTCLIENT, IDC_ARROW, IDC_HAND, IMAGE_ICON, LR_DEFAULTCOLOR, LoadCursorW, LoadImageW,
     MSG, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
-    SWP_NOACTIVATE, SWP_NOZORDER, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY, WM_DPICHANGED,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE,
-    WM_NCCREATE, WM_NCHITTEST, WM_PAINT, WM_QUIT, WM_SETCURSOR, WM_SETTINGCHANGE,
-    WM_SYSCOLORCHANGE, WM_THEMECHANGED, WNDCLASSEXW, WS_CAPTION, WS_EX_APPWINDOW,
-    WS_EX_NOREDIRECTIONBITMAP, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCCREATE,
+    WM_NCHITTEST, WM_PAINT, WM_QUIT, WM_SETCURSOR, WM_SETTINGCHANGE, WM_SYSCOLORCHANGE,
+    WM_SYSKEYDOWN, WM_THEMECHANGED, WNDCLASSEXW, WS_CAPTION, WS_EX_APPWINDOW,
+    WS_EX_NOREDIRECTIONBITMAP, WS_MINIMIZEBOX, WS_POPUP,
 };
 use windows_core::{BOOL, HSTRING, PCWSTR};
 
@@ -183,7 +186,15 @@ impl<C: Controller> State<C> {
         }
     }
 
-    fn client_size(&self) -> (u32, u32) {
+    /// The client area in physical pixels — the whole window, once
+    /// `WM_NCCALCSIZE` has taken the frame away; the swap chain matches it
+    /// exactly so nothing is ever stretched.
+    fn client_size(&self, hwnd: HWND) -> (u32, u32) {
+        let mut r = RECT::default();
+        // SAFETY: our window; sized out-struct.
+        if unsafe { GetClientRect(hwnd, &mut r) }.is_ok() && r.right > 0 && r.bottom > 0 {
+            return (r.right as u32, r.bottom as u32);
+        }
         (px(WIDTH, self.dpi) as u32, px(HEIGHT, self.dpi) as u32)
     }
 
@@ -194,7 +205,7 @@ impl<C: Controller> State<C> {
         self.moving = self.card.step(dt);
 
         if self.gfx.is_none() {
-            match Gfx::new(hwnd, self.client_size(), self.dpi as f32) {
+            match Gfx::new(hwnd, self.client_size(hwnd), self.dpi as f32) {
                 Ok(g) => self.gfx = Some(g),
                 Err(e) => {
                     log!("graphics init failed: {e:#}");
@@ -309,7 +320,16 @@ fn handle<C: Controller>(
 ) -> Option<LRESULT> {
     match msg {
         // The whole window is client area: no frame, no caption to draw.
-        WM_NCCALCSIZE if wparam.0 != 0 => Some(LRESULT(0)),
+        // Both forms: the one CreateWindowEx sends (wParam FALSE, a bare
+        // RECT) and the one every later frame change sends (TRUE, the
+        // NCCALCSIZE_PARAMS). Leaving the rect as proposed makes the client
+        // rect the window rect; DefWindowProc would carve a caption out.
+        WM_NCCALCSIZE => Some(LRESULT(0)),
+        // Alt+F4 even without a system menu to carry it.
+        WM_SYSKEYDOWN if wparam.0 as u16 == VK_F4.0 => {
+            st.activate(Target::Close);
+            Some(LRESULT(0))
+        }
         WM_NCHITTEST => {
             let (x, y) = st.dip_point(hwnd, lparam, true);
             // Anything clickable is client; everything else drags the window.
@@ -388,16 +408,19 @@ fn handle<C: Controller>(
         }
         WM_KEYDOWN => {
             let key = wparam.0 as u16;
+            // Bit 30: the key was already down (auto-repeat). Holding Enter
+            // must not run Install, then Open Copper, then close.
+            let repeat = (lparam.0 >> 30) & 1 == 1;
             if key == VK_TAB.0 {
                 // SAFETY: plain key-state query.
                 let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
                 st.card.move_focus(shift);
                 st.kick();
-            } else if key == VK_RETURN.0 || key == VK_SPACE.0 {
+            } else if (key == VK_RETURN.0 || key == VK_SPACE.0) && !repeat {
                 if let Some(t) = st.card.activation_target(key == VK_RETURN.0) {
                     st.activate(t);
                 }
-            } else if key == VK_ESCAPE.0 {
+            } else if key == VK_ESCAPE.0 && !repeat {
                 st.activate(Target::Close);
             }
             Some(LRESULT(0))
@@ -429,7 +452,7 @@ fn handle<C: Controller>(
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
             }
-            let size = st.client_size();
+            let size = st.client_size(hwnd);
             let dpi = st.dpi as f32;
             if let Some(g) = st.gfx.as_mut()
                 && g.resize(size, dpi).is_err()
@@ -478,6 +501,51 @@ fn startup_monitor() -> (u32, RECT) {
         };
         let _ = GetMonitorInfoW(mon, &mut info);
         (dx.max(96), info.rcWork)
+    }
+}
+
+/// The window's styles. `WS_CAPTION` is what makes DWM treat it as a real
+/// top-level window — shadow, rounded corners, Snap, the minimise and
+/// restore animations — while `WM_NCCALCSIZE` gives the caption's room back
+/// to the client. There is deliberately no `WS_SYSMENU`: with the frame
+/// extended into the client area (for Mica), DWM draws the system caption
+/// buttons over the content of any window that has one, which is exactly
+/// the doubled chrome this card must not have. The card draws its own ×;
+/// Alt+F4, Esc and the taskbar's Close still reach `WM_CLOSE`.
+const FRAME_STYLE: WINDOW_STYLE = WINDOW_STYLE(WS_POPUP.0 | WS_CAPTION.0 | WS_MINIMIZEBOX.0);
+
+/// Bring the window to the front and give it the keyboard.
+///
+/// A program started from Explorer may take the foreground, and this is
+/// normally a plain `SetForegroundWindow`. When Windows refuses (the user
+/// clicked elsewhere while setup was starting, or the launcher was itself
+/// in the background), joining the foreground thread's input queue for the
+/// moment of the call is the documented condition under which it is
+/// allowed; the window must never sit behind Explorer waiting for a click
+/// before Enter works.
+fn come_forward(hwnd: HWND) {
+    // SAFETY: window and thread queries and focus calls on our own window;
+    // the input queues are detached again before returning.
+    unsafe {
+        if SetForegroundWindow(hwnd).as_bool() && GetForegroundWindow() == hwnd {
+            let _ = SetFocus(Some(hwnd));
+            return;
+        }
+        let fg = GetForegroundWindow();
+        let me = GetCurrentThreadId();
+        let theirs = if fg.0.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(fg, None)
+        };
+        let attached = theirs != 0 && theirs != me && AttachThreadInput(me, theirs, true).as_bool();
+        let _ = BringWindowToTop(hwnd);
+        let _ = SetForegroundWindow(hwnd);
+        let _ = SetFocus(Some(hwnd));
+        if attached {
+            let _ = AttachThreadInput(me, theirs, false);
+        }
+        log!("setup window foreground: {}", GetForegroundWindow() == hwnd);
     }
 }
 
@@ -544,13 +612,11 @@ pub fn run<C: Controller>(title: &str, card: Card, controller: C) -> anyhow::Res
         let (w, h) = (px(WIDTH, dpi), px(HEIGHT, dpi));
         let x = work.left + ((work.right - work.left) - w) / 2;
         let y = work.top + ((work.bottom - work.top) - h) / 2;
-        // WS_CAPTION keeps DWM's shadow, snap animations and taskbar
-        // behaviour; WM_NCCALCSIZE takes the visible caption away again.
         CreateWindowExW(
             WS_EX_APPWINDOW | WS_EX_NOREDIRECTIONBITMAP | WINDOW_EX_STYLE(0),
             &class,
             &HSTRING::from(title),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+            FRAME_STYLE,
             x,
             y,
             w,
@@ -562,6 +628,19 @@ pub fn run<C: Controller>(title: &str, card: Card, controller: C) -> anyhow::Res
         )?
     };
 
+    // SAFETY: our window. Re-run WM_NCCALCSIZE now that the window proc
+    // owns it, so no frame computed before then survives.
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
     {
         let mut st = cell.borrow_mut();
         st.ctx.poster.hwnd = hwnd.0 as isize;
@@ -601,8 +680,8 @@ pub fn run<C: Controller>(title: &str, card: Card, controller: C) -> anyhow::Res
     // SAFETY: our window.
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = SetForegroundWindow(hwnd);
     }
+    come_forward(hwnd);
 
     let mut msg = MSG::default();
     'outer: loop {

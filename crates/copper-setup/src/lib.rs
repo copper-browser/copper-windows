@@ -23,6 +23,7 @@ mod log;
 pub mod motion;
 pub mod plan;
 pub mod registration;
+pub mod transfer;
 pub mod webview2;
 
 #[cfg(windows)]
@@ -51,6 +52,13 @@ pub mod exit {
     pub const FAILED: i32 = 1;
     /// The user closed setup before it finished.
     pub const CANCELLED: i32 = 2;
+
+    /// When another setup already holds the lock. A windowed run has done
+    /// its job by bringing that window forward; a silent one waited its five
+    /// minutes and did nothing, which a script must not read as success.
+    pub fn busy(silent: bool) -> i32 {
+        if silent { FAILED } else { SUCCESS }
+    }
 }
 
 /// What this start of copper.exe is for, from its file name and arguments.
@@ -90,7 +98,7 @@ fn uninstall_options() -> UninstallOptions {
 pub fn run_installer() -> i32 {
     let options = install_options();
     let Some(_lock) = single::acquire(options.silent) else {
-        return exit::SUCCESS;
+        return exit::busy(options.silent);
     };
     let _com = sys::shell::Com::init();
     if options.silent {
@@ -134,7 +142,7 @@ fn silent_install(options: &InstallOptions) -> i32 {
 pub fn run_uninstaller() -> i32 {
     let options = uninstall_options();
     let Some(_lock) = single::acquire(options.silent) else {
-        return exit::SUCCESS;
+        return exit::busy(options.silent);
     };
     let _com = sys::shell::Com::init();
     if options.silent {
@@ -177,7 +185,7 @@ mod single {
     use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0};
     use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, SW_RESTORE, SetForegroundWindow, ShowWindow,
+        FindWindowW, IsIconic, SW_RESTORE, SetForegroundWindow, ShowWindow,
     };
     use windows_core::{HSTRING, PCWSTR, w};
 
@@ -207,12 +215,33 @@ mod single {
         // SAFETY: as above.
         unsafe {
             let _ = CloseHandle(handle);
-            if let Ok(other) = FindWindowW(&HSTRING::from(super::ui::CLASS), PCWSTR::null()) {
-                let _ = ShowWindow(other, SW_RESTORE);
-                let _ = SetForegroundWindow(other);
-            }
         }
-        crate::log::line("another setup is running");
+        if silent {
+            crate::log::line("another setup held the lock for five minutes; gave up");
+            return None;
+        }
+        // The other setup may have only just started and not have its window
+        // yet (a double-click that registered twice): look for it a little.
+        // This process was launched by the user, so it may hand the
+        // foreground over; the first one, long in the background, may not.
+        let class = HSTRING::from(super::ui::CLASS);
+        let mut forward = false;
+        for _ in 0..20 {
+            // SAFETY: a class-name lookup, then plain calls on its result.
+            if let Ok(other) = unsafe { FindWindowW(&class, PCWSTR::null()) } {
+                unsafe {
+                    if IsIconic(other).as_bool() {
+                        let _ = ShowWindow(other, SW_RESTORE);
+                    }
+                    forward = SetForegroundWindow(other).as_bool();
+                }
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        crate::log::line(&format!(
+            "another setup is running; brought it forward: {forward}"
+        ));
         None
     }
 }
