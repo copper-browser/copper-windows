@@ -1,0 +1,3 @@
+[submodule "shared/copper-linux"]
+	path = shared/copper-linux
+	url = https://github.com/copper-browser/copper-linux.git

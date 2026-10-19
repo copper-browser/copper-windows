@@ -1,0 +1,20 @@
+[package]
+name = "copper-win-rt"
+description = "UI-thread runtime for Copper on Windows: a Win32 message-loop driven local executor, timers, and cross-thread posting."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_Graphics_Gdi",
+] }
+
+[lints]
+workspace = true

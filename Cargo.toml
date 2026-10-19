@@ -1,0 +1,66 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/copper-win-rt",
+    "crates/copper-engine-webview2",
+    "crates/copper-win-ui",
+    "crates/copper-win",
+    "crates/copper-setup",
+]
+# Shared crates live in copper-linux (git submodule): they are the one shared
+# code place for Linux and Windows. Never copy them here.
+exclude = ["shared"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/copper-browser/copper-windows"
+publish = false
+
+[workspace.dependencies]
+# Shared Copper crates (toolkit-free, also used by Copper for Linux).
+copper-core = { path = "shared/copper-linux/crates/copper-core" }
+copper-engine = { path = "shared/copper-linux/crates/copper-engine" }
+copper-pagejs = { path = "shared/copper-linux/crates/copper-pagejs" }
+copper-shield = { path = "shared/copper-linux/crates/copper-shield" }
+copper-creds = { path = "shared/copper-linux/crates/copper-creds" }
+copper-import = { path = "shared/copper-linux/crates/copper-import" }
+copper-cloud = { path = "shared/copper-linux/crates/copper-cloud" }
+copper-mcp = { path = "shared/copper-linux/crates/copper-mcp" }
+
+# Windows crates in this repo.
+copper-engine-webview2 = { path = "crates/copper-engine-webview2" }
+copper-win-ui = { path = "crates/copper-win-ui" }
+copper-win-rt = { path = "crates/copper-win-rt" }
+
+# Windows platform.
+windows = "0.62"
+windows-core = "0.62"
+webview2-com = "0.39"
+
+# Shared non-GUI deps (keep versions in step with copper-linux).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+directories = "6"
+url = { version = "2", features = ["serde"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.dev.package."*"]
+opt-level = 1
