@@ -49,6 +49,49 @@ pub fn is_real_version(pv: &str) -> bool {
         && parts.iter().any(|p| p.bytes().any(|b| b != b'0'))
 }
 
+/// Who must have signed the bootstrapper (its leaf certificate's subject
+/// common name). A valid signature by anyone else is not good enough.
+pub const PUBLISHER: &str = "Microsoft Corporation";
+
+/// What `WinVerifyTrust`'s answer means for running the download.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trust {
+    /// Signed, the chain ends in a trusted root, nothing revoked.
+    Valid,
+    /// Signed and chained, but the revocation server couldn't be reached
+    /// (a strict proxy, a flaky line). HTTPS from Microsoft already vouches
+    /// for the bytes, so this still counts as signed.
+    RevocationUnchecked,
+    /// Unsigned, tampered with, expired, revoked, untrusted: never run it.
+    Invalid,
+}
+
+/// `CRYPT_E_REVOCATION_OFFLINE`.
+const CRYPT_E_REVOCATION_OFFLINE: i32 = 0x8009_2013_u32 as i32;
+/// `CERT_E_REVOCATION_FAILURE`.
+const CERT_E_REVOCATION_FAILURE: i32 = 0x800B_010E_u32 as i32;
+
+/// Classify a `WinVerifyTrust` status.
+pub fn trust(status: i32) -> Trust {
+    match status {
+        0 => Trust::Valid,
+        CRYPT_E_REVOCATION_OFFLINE | CERT_E_REVOCATION_FAILURE => Trust::RevocationUnchecked,
+        _ => Trust::Invalid,
+    }
+}
+
+/// Is `signer` (the signing certificate's simple display name) Microsoft?
+/// Exact, so `Microsoft Corporation Ltd` or a look-alike never passes.
+pub fn is_publisher(signer: &str) -> bool {
+    signer.trim() == PUBLISHER
+}
+
+/// May the downloaded file at hand be run? Only when the signature holds
+/// up and it is Microsoft's.
+pub fn may_run(status: i32, signer: Option<&str>) -> bool {
+    trust(status) != Trust::Invalid && signer.is_some_and(is_publisher)
+}
+
 #[cfg(windows)]
 pub use imp::*;
 
@@ -61,10 +104,14 @@ mod imp {
     use std::time::{Duration, Instant};
 
     use windows::Win32::Foundation::{HANDLE, HWND};
+    use windows::Win32::Security::Cryptography::{
+        CERT_NAME_SIMPLE_DISPLAY_TYPE, CertGetNameStringW,
+    };
     use windows::Win32::Security::WinTrust::{
         WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO,
         WTD_CHOICE_FILE, WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT, WTD_REVOKE_WHOLECHAIN,
-        WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE, WinVerifyTrust,
+        WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE, WTHelperGetProvSignerFromChain,
+        WTHelperProvDataFromStateData, WinVerifyTrust,
     };
     use windows::Win32::System::Threading::CREATE_NO_WINDOW;
     use windows_core::{GUID, HSTRING, PCWSTR};
@@ -100,9 +147,36 @@ mod imp {
     /// slow line the runtime is a ~150 MB download.
     const INSTALL_LIMIT: Duration = Duration::from_secs(20 * 60);
 
+    /// The simple display name of the certificate that signed the file
+    /// WinVerifyTrust has just checked (`state` is its open state data).
+    fn signer_name(state: HANDLE) -> Option<String> {
+        // SAFETY: provider data owned by WinTrust's open state, read before
+        // the state is closed; every pointer is checked before it is used.
+        unsafe {
+            let data = WTHelperProvDataFromStateData(state);
+            if data.is_null() {
+                return None;
+            }
+            let signer = WTHelperGetProvSignerFromChain(data, 0, false, 0);
+            if signer.is_null() || (*signer).csCertChain == 0 || (*signer).pasCertChain.is_null() {
+                return None;
+            }
+            let cert = (*(*signer).pasCertChain).pCert;
+            if cert.is_null() {
+                return None;
+            }
+            let mut buf = [0u16; 256];
+            let n =
+                CertGetNameStringW(cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, None, Some(&mut buf));
+            // n counts the terminating NUL; 1 means an empty name.
+            (n > 1).then(|| String::from_utf16_lossy(&buf[..n as usize - 1]))
+        }
+    }
+
     /// Is `file` validly Authenticode-signed (chain to a trusted root, not
-    /// revoked)? HTTPS from go.microsoft.com already vouches for it; this
-    /// makes sure a captive portal or a proxy never gets an exe run.
+    /// revoked) by Microsoft ([`PUBLISHER`])? HTTPS from go.microsoft.com
+    /// already vouches for it; this makes sure a captive portal, a proxy or
+    /// a hijacked redirect never gets an exe run.
     fn is_signed(file: &Path) -> bool {
         let path = HSTRING::from(file);
         let mut info = WINTRUST_FILE_INFO {
@@ -123,36 +197,29 @@ mod imp {
         };
         let mut action: GUID = WINTRUST_ACTION_GENERIC_VERIFY_V2;
         // SAFETY: `data` and `info` outlive both calls; the second releases
-        // the state the first allocated.
-        let status = unsafe {
+        // the state the first allocated, after the signer has been read.
+        let (status, signer) = unsafe {
             let s = WinVerifyTrust(
                 HWND(-1isize as *mut _),
                 &mut action,
                 (&mut data as *mut WINTRUST_DATA).cast(),
             );
+            let signer = signer_name(data.hWVTStateData);
             data.dwStateAction = WTD_STATEACTION_CLOSE;
             WinVerifyTrust(
                 HWND(-1isize as *mut _),
                 &mut action,
                 (&mut data as *mut WINTRUST_DATA).cast(),
             );
-            s
+            (s, signer)
         };
-        // A revocation server out of reach (a strict proxy, a flaky line)
-        // doesn't make a valid signature invalid; anything else does.
-        const CRYPT_E_REVOCATION_OFFLINE: i32 = 0x8009_2013_u32 as i32;
-        const CERT_E_REVOCATION_FAILURE: i32 = 0x800B_010E_u32 as i32;
-        match status {
-            0 => true,
-            CRYPT_E_REVOCATION_OFFLINE | CERT_E_REVOCATION_FAILURE => {
-                log!("WebView2 bootstrapper signed; revocation unchecked (0x{status:08x})");
-                true
-            }
-            _ => {
-                log!("WebView2 bootstrapper signature check failed: 0x{status:08x}");
-                false
-            }
-        }
+        let ok = may_run(status, signer.as_deref());
+        log!(
+            "WebView2 bootstrapper: signature 0x{status:08x} ({:?}), signer {signer:?}: {}",
+            trust(status),
+            if ok { "ok" } else { "refused" }
+        );
+        ok
     }
 
     fn scratch_dir() -> anyhow::Result<PathBuf> {
@@ -177,7 +244,7 @@ mod imp {
             )?;
             log!("downloaded WebView2 bootstrapper: {bytes} bytes");
             if !is_signed(&exe) {
-                anyhow::bail!("the WebView2 download isn't signed by Microsoft");
+                anyhow::bail!("the WebView2 download isn't signed by {PUBLISHER}");
             }
 
             let started = Instant::now();
@@ -235,6 +302,50 @@ mod tests {
         for pv in ["", "0.0.0.0", "1.2.3", "a.b.c.d", "1..2.3", "1.2.3.4.5"] {
             assert!(!is_real_version(pv), "{pv}");
         }
+    }
+
+    #[test]
+    fn trust_statuses() {
+        assert_eq!(trust(0), Trust::Valid);
+        assert_eq!(trust(0x8009_2013_u32 as i32), Trust::RevocationUnchecked);
+        assert_eq!(trust(0x800B_010E_u32 as i32), Trust::RevocationUnchecked);
+        for bad in [
+            0x800B_0100_u32, // TRUST_E_NOSIGNATURE
+            0x8009_6010,     // TRUST_E_BAD_DIGEST (tampered)
+            0x800B_0109,     // CERT_E_UNTRUSTEDROOT
+            0x800B_010C,     // CERT_E_REVOKED
+            0x800B_0101,     // CERT_E_EXPIRED
+            0x800B_0004,     // TRUST_E_SUBJECT_NOT_TRUSTED
+            1,
+        ] {
+            assert_eq!(trust(bad as i32), Trust::Invalid, "0x{bad:08x}");
+        }
+    }
+
+    #[test]
+    fn only_microsoft_signatures_run() {
+        assert!(may_run(0, Some("Microsoft Corporation")));
+        assert!(may_run(
+            0x8009_2013_u32 as i32,
+            Some(" Microsoft Corporation ")
+        ));
+        // Valid signature, wrong publisher.
+        for who in [
+            "Contoso Ltd",
+            "Microsoft Corporation Ltd",
+            "Microsoft",
+            "microsoft corporation",
+            "",
+        ] {
+            assert!(!may_run(0, Some(who)), "{who:?}");
+        }
+        // No signer could be read.
+        assert!(!may_run(0, None));
+        // Microsoft's name on a broken signature.
+        assert!(!may_run(
+            0x8009_6010_u32 as i32,
+            Some("Microsoft Corporation")
+        ));
     }
 
     #[test]

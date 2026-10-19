@@ -8,11 +8,13 @@
 /// One step of an install, with whatever progress it can report.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Step {
+    /// The bar has just appeared; nothing has happened yet.
+    Start,
     /// Downloading the WebView2 bootstrapper: bytes so far, total if known.
     DownloadWebView2 { done: u64, total: Option<u64> },
     /// The bootstrapper is running; it reports nothing, so time stands in.
     InstallWebView2 { seconds: f32 },
-    /// Asking a running Copper to close.
+    /// Closing a running Copper (reported only when one is running).
     CloseCopper,
     /// Putting copper.exe in place.
     CopyFiles,
@@ -45,6 +47,7 @@ impl Plan {
         };
         let at = |(a, b): (f32, f32), t: f32| a + (b - a) * t.clamp(0.0, 1.0);
         match step {
+            Step::Start => 0.0,
             Step::DownloadWebView2 { done, total } => {
                 let t = match total {
                     Some(total) if total > 0 => done as f32 / total as f32,
@@ -75,8 +78,11 @@ impl Plan {
             },
             Step::InstallWebView2 { .. } => "Installing Microsoft Edge WebView2…".to_owned(),
             Step::CloseCopper => "Closing Copper…".to_owned(),
-            Step::CopyFiles | Step::Shortcuts | Step::Register => "Installing…".to_owned(),
-            Step::Done => "Done".to_owned(),
+            // The words hold still while the bar finishes; "Copper is
+            // ready" takes over from there.
+            Step::Start | Step::CopyFiles | Step::Shortcuts | Step::Register | Step::Done => {
+                "Installing…".to_owned()
+            }
         }
     }
 }
@@ -86,7 +92,7 @@ mod tests {
     use super::*;
 
     fn order(plan: Plan) -> Vec<f32> {
-        let mut steps = Vec::new();
+        let mut steps = vec![Step::Start];
         if plan.webview2 {
             steps.push(Step::DownloadWebView2 {
                 done: 0,
@@ -114,6 +120,7 @@ mod tests {
         for plan in [Plan { webview2: true }, Plan { webview2: false }] {
             let f = order(plan);
             assert!(f.windows(2).all(|w| w[0] <= w[1]), "{plan:?}: {f:?}");
+            assert_eq!(f[0], 0.0, "{plan:?}: the bar starts empty");
             assert_eq!(*f.last().unwrap(), 1.0);
             assert!(f.iter().all(|x| (0.0..=1.0).contains(x)));
         }

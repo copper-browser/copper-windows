@@ -32,6 +32,14 @@ pub const QUICK: Curve = Curve {
     damping: 1.0,
 };
 
+/// The progress bar's fill: slower than a glide and critically damped, so
+/// the bar eases along (never past where the work is) and a quick install
+/// still reads as a run from empty to full rather than a jump.
+pub const FILL: Curve = Curve {
+    response: 0.8,
+    damping: 1.0,
+};
+
 /// A value that springs toward its target.
 #[derive(Clone, Copy, Debug)]
 pub struct Spring {
@@ -160,6 +168,22 @@ mod tests {
             s.step(1.0 / 240.0);
             assert!(s.value() <= 1.0 + REST, "{}", s.value());
         }
+    }
+
+    #[test]
+    fn the_bar_runs_rather_than_jumps() {
+        // An install that is done at once: the bar is still visibly short a
+        // tenth of a second in, never passes the end, and is all but full by
+        // the time the installer says "Copper is ready" (1.1 s).
+        let mut s = Spring::new(0.0, FILL);
+        s.set(1.0);
+        run(&mut s, 0.1);
+        assert!(s.value() < 0.25, "{}", s.value());
+        for _ in 0..240 {
+            s.step(1.0 / 240.0);
+            assert!(s.value() <= 1.0 + REST, "{}", s.value());
+        }
+        assert!(s.value() > 0.97, "{}", s.value());
     }
 
     #[test]

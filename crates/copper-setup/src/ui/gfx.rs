@@ -14,10 +14,11 @@ use windows::Win32::Graphics::Direct2D::Common::{
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET,
     D2D1_BITMAP_PROPERTIES1, D2D1_CAP_STYLE_ROUND, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, D2D1_LINE_JOIN_ROUND, D2D1_ROUNDED_RECT,
-    D2D1_STROKE_STYLE_PROPERTIES1, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory,
-    ID2D1Bitmap1, ID2D1DeviceContext, ID2D1Factory1, ID2D1SolidColorBrush, ID2D1StrokeStyle,
+    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+    D2D1_LINE_JOIN_ROUND, D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES1,
+    D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1CreateFactory, ID2D1Bitmap1, ID2D1DeviceContext,
+    ID2D1Factory1, ID2D1SolidColorBrush, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP,
@@ -30,10 +31,11 @@ use windows::Win32::Graphics::DirectComposition::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
-    DWRITE_TEXT_METRICS, DWRITE_WORD_WRAPPING_WRAP, DWriteCreateFactory, IDWriteFactory,
-    IDWriteFontCollection, IDWriteTextFormat, IDWriteTextLayout,
+    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_FONT_WEIGHT_NORMAL,
+    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
+    DWRITE_TRIMMING_GRANULARITY_WORD, DWRITE_WORD_WRAPPING_WRAP, DWriteCreateFactory,
+    IDWriteFactory, IDWriteFontCollection, IDWriteTextFormat, IDWriteTextLayout,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN,
@@ -101,7 +103,7 @@ pub enum Style {
     Body,
     /// Status under the progress bar, checkbox labels, links: 12 DIP.
     Small,
-    /// Button labels: 13 DIP semibold.
+    /// Button labels: 13 DIP medium.
     Button,
 }
 
@@ -165,7 +167,8 @@ impl Fonts {
                 title: format(display, DWRITE_FONT_WEIGHT_SEMI_BOLD, 22.0)?,
                 body: format(text, DWRITE_FONT_WEIGHT_NORMAL, 13.0)?,
                 small: format(text, DWRITE_FONT_WEIGHT_NORMAL, 12.0)?,
-                button: format(text, DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0)?,
+                // Medium, not semibold: the Mac's ink pill reads quiet.
+                button: format(text, DWRITE_FONT_WEIGHT_MEDIUM, 13.0)?,
                 factory,
             })
         }
@@ -547,6 +550,42 @@ impl Painter<'_> {
             }
         }
         metrics(&layout).height
+    }
+
+    /// Draw `text` centred in the column `r.w` wide, wrapping, but never
+    /// below `r`'s bottom: lines that don't fit are cut and the last one
+    /// that does ends in an ellipsis.
+    pub fn text_clipped(&self, text: &str, style: Style, r: Rect, color: D2D1_COLOR_F) {
+        if color.a <= 0.0 {
+            return;
+        }
+        let Some(layout) = self.gfx.fonts.layout(text, style, r.w, true) else {
+            return;
+        };
+        // SAFETY: our own layout and factory; inside BeginDraw.
+        unsafe {
+            if layout.SetMaxHeight(r.h.max(1.0)).is_err() {
+                return;
+            }
+            let trimming = DWRITE_TRIMMING {
+                granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
+                delimiter: 0,
+                delimiterCount: 0,
+            };
+            let sign = self
+                .gfx
+                .fonts
+                .factory
+                .CreateEllipsisTrimmingSign(&layout)
+                .ok();
+            let _ = layout.SetTrimming(&trimming, sign.as_ref());
+            self.gfx.dc.DrawTextLayout(
+                Vector2 { X: r.x, Y: r.y },
+                &layout,
+                self.brush(color),
+                D2D1_DRAW_TEXT_OPTIONS_CLIP,
+            )
+        }
     }
 
     /// Draw one line of `text` centred vertically in `r` (buttons, labels).
