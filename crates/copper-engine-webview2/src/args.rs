@@ -52,14 +52,22 @@ const SWITCHES: &[&str] = &[
     "--disable-domain-reliability",
 ];
 
-/// The command line: Copper's switches, then `extra` (e.g. from
-/// `COPPER_WEBVIEW2_ARGS`). Chromium reads only the *last*
-/// `--disable-features`/`--enable-features`, so every list is merged into
-/// one switch.
-pub(crate) fn browser_arguments(extra: &[String]) -> String {
+/// The command line: Copper's switches, `--accept-lang` for the preferred
+/// `languages` (normalized; see `languages`), then `extra` (e.g. from
+/// `COPPER_WEBVIEW2_ARGS`; an `--accept-lang` there wins). Chromium reads
+/// only the *last* `--disable-features`/`--enable-features`, so every list
+/// is merged into one switch.
+pub(crate) fn browser_arguments(extra: &[String], languages: &[String]) -> String {
     let mut disabled: Vec<String> = DISABLED_FEATURES.iter().map(|s| s.to_string()).collect();
     let mut enabled: Vec<String> = Vec::new();
     let mut switches: Vec<String> = SWITCHES.iter().map(|s| s.to_string()).collect();
+    let caller_langs = extra
+        .iter()
+        .flat_map(|a| a.split_whitespace())
+        .any(|a| a.starts_with("--accept-lang="));
+    if !caller_langs && let Some(s) = crate::languages::accept_lang_switch(languages) {
+        switches.push(s);
+    }
     for arg in extra.iter().flat_map(|a| a.split_whitespace()) {
         let push_features = |list: &mut Vec<String>, v: &str| {
             for f in v.split(',').map(str::trim).filter(|f| !f.is_empty()) {
@@ -92,7 +100,8 @@ mod tests {
 
     #[test]
     fn default_line() {
-        let a = browser_arguments(&[]);
+        let a = browser_arguments(&[], &[]);
+        assert!(!a.contains("--accept-lang"));
         assert_eq!(a.matches("--disable-features=").count(), 1);
         assert!(a.contains("CalculateNativeWinOcclusion"));
         assert!(a.contains("msSmartScreenProtection"));
@@ -105,11 +114,14 @@ mod tests {
 
     #[test]
     fn extra_arguments_merge() {
-        let a = browser_arguments(&[
-            "--disable-features=Foo,MediaRouter --enable-features=Bar".into(),
-            "--remote-debugging-port=9222 --enable-features=MediaRouter".into(),
-            "--disable-domain-reliability".into(),
-        ]);
+        let a = browser_arguments(
+            &[
+                "--disable-features=Foo,MediaRouter --enable-features=Bar".into(),
+                "--remote-debugging-port=9222 --enable-features=MediaRouter".into(),
+                "--disable-domain-reliability".into(),
+            ],
+            &[],
+        );
         assert_eq!(a.matches("--disable-features=").count(), 1);
         assert_eq!(a.matches("--enable-features=").count(), 1);
         assert!(a.contains(",Foo"));
@@ -124,5 +136,16 @@ mod tests {
             .next()
             .unwrap();
         assert!(!disabled.split(',').any(|f| f == "MediaRouter"));
+    }
+
+    #[test]
+    fn languages() {
+        let langs = vec!["de-DE".to_owned(), "fr".to_owned()];
+        let a = browser_arguments(&[], &langs);
+        assert_eq!(a.matches("--accept-lang=de-DE,fr").count(), 1);
+        // The caller's own switch wins.
+        let a = browser_arguments(&["--accept-lang=ja".into()], &langs);
+        assert!(a.contains("--accept-lang=ja"));
+        assert!(!a.contains("de-DE"));
     }
 }
