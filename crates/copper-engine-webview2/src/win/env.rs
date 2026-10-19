@@ -1,10 +1,14 @@
 //! The one `CoreWebView2Environment` of the process.
 //!
-//! Created when the engine is made (so the browser process starts while the
-//! shell builds its window) and shared by every profile and page. If the
-//! browser process dies, every webview dies with it; the environment is then
-//! made again once the old process has exited (WebView2 refuses a second
-//! environment on a user data folder still in use).
+//! Made on the loop turn after the engine is (or by the first page that
+//! needs it, if sooner), so what the shell sets up synchronously right
+//! after `WebView2Engine::new` — preferred languages, custom schemes —
+//! is part of it; the browser process still starts while the shell builds
+//! its window. Shared by every profile and page. If the browser process
+//! dies, every webview dies with it; the environment is then made again
+//! (with everything set up so far) once the old process has exited
+//! (WebView2 refuses a second environment on a user data folder still in
+//! use).
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -14,7 +18,10 @@ use std::time::{Duration, Instant};
 use copper_engine::{EngineError, Result};
 use copper_win_rt::{OneshotTx, oneshot};
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
-use webview2_com::{CoreWebView2EnvironmentOptions, CreateCoreWebView2EnvironmentCompletedHandler};
+use webview2_com::{
+    CoreWebView2CustomSchemeRegistration, CoreWebView2EnvironmentOptions,
+    CreateCoreWebView2EnvironmentCompletedHandler,
+};
 use windows::core::{Interface, PCWSTR};
 
 use super::com::{Tokens, hs, within};
@@ -29,10 +36,25 @@ const EXIT_WAIT: Duration = Duration::from_secs(3);
 pub(crate) struct EnvConfig {
     pub user_data_dir: PathBuf,
     pub browser_folder: Option<PathBuf>,
-    pub arguments: String,
+    /// Switches after Copper's own (`COPPER_WEBVIEW2_ARGS`, then
+    /// `EngineConfig::extra_arguments`).
+    pub extra_arguments: Vec<String>,
+}
+
+/// What the shell set up that only the environment can carry: read each
+/// time one is made.
+#[derive(Default)]
+struct Setup {
+    /// Custom schemes (lowercase), in registration order.
+    schemes: Vec<String>,
+    /// Preferred languages, normalized, best first.
+    languages: Vec<String>,
 }
 
 enum State {
+    /// Not made yet: made on the loop turn after the engine was, or by the
+    /// first `get`.
+    Idle,
     Creating(Vec<OneshotTx<Result<ICoreWebView2Environment>>>),
     Ready(ICoreWebView2Environment),
     Failed(String),
@@ -40,6 +62,7 @@ enum State {
 
 pub(crate) struct Env {
     config: EnvConfig,
+    setup: RefCell<Setup>,
     state: RefCell<State>,
     /// Bumped each time an environment is made; stale browser-exit events
     /// are ignored.
@@ -52,19 +75,64 @@ pub(crate) struct Env {
 }
 
 impl Env {
-    /// Start making the environment.
-    pub fn start(config: EnvConfig) -> Rc<Env> {
+    /// The environment-to-be; it is made on the next loop turn (see the
+    /// module docs).
+    pub fn new(config: EnvConfig) -> Rc<Env> {
         let env = Rc::new(Env {
             config,
-            state: RefCell::new(State::Creating(Vec::new())),
+            setup: RefCell::default(),
+            state: RefCell::new(State::Idle),
             generation: Cell::new(0),
             tokens: RefCell::new(Tokens::default()),
             exited: RefCell::new(None),
             started: Cell::new(None),
             ready_after: Cell::new(None),
         });
-        env.create();
+        let weak = Rc::downgrade(&env);
+        copper_win_rt::spawn_local(async move {
+            if let Some(env) = weak.upgrade() {
+                env.start();
+            }
+        });
         env
+    }
+
+    /// Make the environment now, unless it is made (or being made).
+    pub fn start(self: &Rc<Self>) {
+        let idle = {
+            let mut state = self.state.borrow_mut();
+            let idle = matches!(*state, State::Idle);
+            if idle {
+                *state = State::Creating(Vec::new());
+            }
+            idle
+        };
+        if idle {
+            self.create();
+        }
+    }
+
+    /// Whether an environment was made (or is being made): set-up changes
+    /// now only reach the next one.
+    fn begun(&self) -> bool {
+        !matches!(*self.state.borrow(), State::Idle)
+    }
+
+    /// Register `scheme` (lowercase) as a secure custom scheme. `false` if
+    /// the environment already exists, so only the next one has it.
+    pub fn add_scheme(&self, scheme: &str) -> bool {
+        let mut setup = self.setup.borrow_mut();
+        if !setup.schemes.iter().any(|s| s == scheme) {
+            setup.schemes.push(scheme.to_owned());
+        }
+        !self.begun()
+    }
+
+    /// Set the preferred languages (normalized). `false` if the environment
+    /// already exists, so only the next one has them.
+    pub fn set_languages(&self, languages: Vec<String>) -> bool {
+        self.setup.borrow_mut().languages = languages;
+        !self.begun()
     }
 
     /// How long the first environment took to come up (for the smoke log).
@@ -76,8 +144,9 @@ impl Env {
         &self.config.user_data_dir
     }
 
-    /// The environment, once it exists.
+    /// The environment, once it exists (made now if it was not yet).
     pub async fn get(self: &Rc<Self>) -> Result<ICoreWebView2Environment> {
+        self.start();
         let rx = {
             let mut state = self.state.borrow_mut();
             match &mut *state {
@@ -87,6 +156,11 @@ impl Env {
                     let (tx, rx) = oneshot();
                     waiters.push(tx);
                     rx
+                }
+                State::Idle => {
+                    return Err(EngineError::Other(
+                        "WebView2 environment was not started".into(),
+                    ));
                 }
             }
         };
@@ -106,7 +180,7 @@ impl Env {
     pub fn invalidate(self: &Rc<Self>) {
         let exit_rx = {
             let mut state = self.state.borrow_mut();
-            if matches!(*state, State::Creating(_)) {
+            if matches!(*state, State::Creating(_) | State::Idle) {
                 return;
             }
             *state = State::Creating(Vec::new());
@@ -114,7 +188,9 @@ impl Env {
             *self.exited.borrow_mut() = Some(tx);
             rx
         };
-        self.tokens.borrow_mut().clear();
+        // Removing the handlers calls into WebView2: not under the borrow.
+        let old = std::mem::take(&mut *self.tokens.borrow_mut());
+        drop(old);
         tracing::warn!("WebView2 browser process exited; recreating the environment");
         let weak = Rc::downgrade(self);
         copper_win_rt::spawn_local(async move {
@@ -123,6 +199,47 @@ impl Env {
                 env.create();
             }
         });
+    }
+
+    /// The options for a new environment, from the config and the set-up.
+    fn options(&self) -> ICoreWebView2EnvironmentOptions {
+        let setup = self.setup.borrow();
+        let options = CoreWebView2EnvironmentOptions::default();
+        let arguments =
+            crate::args::browser_arguments(&self.config.extra_arguments, &setup.languages);
+        let registrations: Vec<Option<ICoreWebView2CustomSchemeRegistration>> = setup
+            .schemes
+            .iter()
+            .map(|s| {
+                let r = CoreWebView2CustomSchemeRegistration::new(s.clone());
+                unsafe {
+                    // A secure context like `https:` (crypto.randomUUID,
+                    // service workers, clipboard), with a host part
+                    // (`copper://canvas/<id>` has origin `copper://canvas`).
+                    r.set_treat_as_secure(true);
+                    r.set_has_authority_component(true);
+                }
+                Some(r.into())
+            })
+            .collect();
+        unsafe {
+            options.set_additional_browser_arguments(arguments);
+            if let Some(first) = setup.languages.first() {
+                options.set_language(first.clone());
+            }
+            if !registrations.is_empty() {
+                options.set_scheme_registrations(registrations);
+            }
+            options.set_are_browser_extensions_enabled(true);
+            options.set_enable_tracking_prevention(true);
+            options.set_is_custom_crash_reporting_enabled(true);
+            options.set_allow_single_sign_on_using_os_primary_account(false);
+            options.set_exclusive_user_data_folder_access(false);
+            // Only the installed (stable, Evergreen) runtime: never a
+            // Beta/Dev/Canary Edge the user happens to have.
+            options.set_release_channels(COREWEBVIEW2_RELEASE_CHANNELS_STABLE);
+        }
+        options.into()
     }
 
     fn create(self: &Rc<Self>) {
@@ -150,19 +267,7 @@ impl Env {
             )));
             return;
         }
-        let options = CoreWebView2EnvironmentOptions::default();
-        unsafe {
-            options.set_additional_browser_arguments(self.config.arguments.clone());
-            options.set_are_browser_extensions_enabled(true);
-            options.set_enable_tracking_prevention(true);
-            options.set_is_custom_crash_reporting_enabled(true);
-            options.set_allow_single_sign_on_using_os_primary_account(false);
-            options.set_exclusive_user_data_folder_access(false);
-            // Only the installed (stable, Evergreen) runtime: never a
-            // Beta/Dev/Canary Edge the user happens to have.
-            options.set_release_channels(COREWEBVIEW2_RELEASE_CHANNELS_STABLE);
-        }
-        let options: ICoreWebView2EnvironmentOptions = options.into();
+        let options = self.options();
         let weak: Weak<Env> = Rc::downgrade(self);
         let handler =
             CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(move |hr, env| {
@@ -213,7 +318,8 @@ impl Env {
                 if let Some(this) = weak.upgrade()
                     && this.generation.get() == generation
                 {
-                    if let Some(tx) = this.exited.borrow_mut().take() {
+                    let exited = this.exited.borrow_mut().take();
+                    if let Some(tx) = exited {
                         tx.send(());
                     }
                     // Exited without a ProcessFailed (e.g. killed with the

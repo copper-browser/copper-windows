@@ -224,7 +224,7 @@ dependencies = [
 
 [[package]]
 name = "copper-cloud"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "copper-core",
@@ -249,12 +249,13 @@ dependencies = [
 
 [[package]]
 name = "copper-core"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "directories",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "tracing",
  "url",
@@ -263,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "copper-creds"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "hmac",
  "oo7",
@@ -282,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "copper-engine"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "directories",
  "futures-channel",
@@ -304,6 +305,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tracing",
+ "tracing-subscriber",
  "url",
  "webview2-com",
  "windows",
@@ -312,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "copper-mcp"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -336,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "copper-pagejs"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -354,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "copper-shell-core"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "copper-cloud",
@@ -374,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "copper-shield"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "copper-core",
  "copper-engine",

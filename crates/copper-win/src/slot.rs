@@ -29,6 +29,11 @@ impl SlotHost for PageHost {
     fn attach(&self, hwnd: HWND, visual: &IDCompositionVisual) {
         tracing::debug!(target: "copper::slot", "attach");
         self.page.attach(hwnd, visual);
+        // The engine connects the page's content under our visual later, on
+        // its own; that change only shows at our device's next commit, so ask
+        // for a frame (every frame ends with a DirectComposition Commit).
+        self.page
+            .on_visual_connected(move || copper_win_ui::win::request_frame(hwnd));
     }
 
     fn detach(&self) {

@@ -20,6 +20,8 @@ use windows::Win32::Networking::WinHttp::{
 };
 use windows_core::{HSTRING, PCWSTR, w};
 
+use crate::transfer::{check_complete, check_status};
+
 /// A WinHTTP handle, closed on drop.
 struct Handle(*mut core::ffi::c_void);
 
@@ -124,9 +126,7 @@ pub fn download(
         WinHttpReceiveResponse(request.0, std::ptr::null_mut())?;
 
         let status = query_number(&request, WINHTTP_QUERY_STATUS_CODE).unwrap_or(0);
-        if status != 200 {
-            anyhow::bail!("https://{host}{path} answered HTTP {status}");
-        }
+        check_status(status, &format!("https://{host}{path}")).map_err(anyhow::Error::msg)?;
         let total = query_number(&request, WINHTTP_QUERY_CONTENT_LENGTH).map(u64::from);
 
         let mut file = File::create(to)?;
@@ -159,11 +159,9 @@ pub fn download(
             let _ = std::fs::remove_file(to);
             return Err(e);
         }
-        if let Some(total) = total
-            && done != total
-        {
+        if let Err(e) = check_complete(done, total) {
             let _ = std::fs::remove_file(to);
-            anyhow::bail!("download ended early: {done} of {total} bytes");
+            anyhow::bail!(e);
         }
         Ok(done)
     }

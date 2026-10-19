@@ -50,9 +50,9 @@ impl WebView2Page {
                         v19.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW);
                 }
             }
-            if page.cover.borrow().is_none()
-                && let Ok(c) = capture::cover_now(&wv).await
-            {
+            // Read before the await: a borrow must not live across it.
+            let has_cover = page.cover.borrow().is_some();
+            if !has_cover && let Ok(c) = capture::cover_now(&wv).await {
                 *page.cover.borrow_mut() = Some(c);
             }
             let (tx, rx) = oneshot::<windows::core::Result<bool>>();
@@ -154,11 +154,12 @@ impl WebView2Page {
 impl PageInner {
     /// Apply what a page held hidden in the backstage needs, or undo it:
     /// WebView2's own script dialogs off (`ScriptDialogOpening` answers
-    /// them), file choosers intercepted (counted, never shown), and page
-    /// focus emulated (`WebView2Backstage::set_page_focus`).
+    /// them) and page focus emulated (`WebView2Backstage::set_page_focus`).
+    /// Its file choosers are refused by `chooser`.
     pub(crate) fn refresh_backstaged(self: &Rc<Self>) {
         let on = self.backstaged();
-        let focus = on && self.profile.engine.backstage.page_focus();
+        // Script input (`set_trusted_input(false)`) gets no emulated focus.
+        let focus = on && self.profile.engine.backstage.page_focus() && !self.script_input.get();
         if self.staged_settings.replace(Some((on, focus))) == Some((on, focus)) {
             return;
         }
@@ -172,22 +173,13 @@ impl PageInner {
                 let _ = s.SetAreDefaultScriptDialogsEnabled(!on);
             }
         }
+        // File choosers are intercepted on every page (`chooser`), held
+        // or not.
         let view = wv.view.clone();
         copper_win_rt::spawn_local(async move {
-            let calls = [
-                (
-                    "Page.setInterceptFileChooserDialog",
-                    json!({ "enabled": on }),
-                ),
-                (
-                    "Emulation.setFocusEmulationEnabled",
-                    json!({ "enabled": focus }),
-                ),
-            ];
-            for (method, params) in calls {
-                if let Err(e) = cdp::call(&view, method, params).await {
-                    tracing::debug!("backstage {method}: {e}");
-                }
+            let params = json!({ "enabled": focus });
+            if let Err(e) = cdp::call(&view, "Emulation.setFocusEmulationEnabled", params).await {
+                tracing::debug!("backstage focus emulation: {e}");
             }
         });
     }

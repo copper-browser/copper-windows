@@ -12,7 +12,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use copper_engine::{
     Cookie, DownloadEvent, DownloadId, EngineError, EventStream, LocalFuture, Profile, ProfileId,
@@ -42,6 +42,10 @@ use crate::util::site_matches;
 /// Changes to pages' filters are applied together after this pause.
 const FILTER_DEBOUNCE: Duration = Duration::from_millis(50);
 
+/// How long a cookie deletion may take to show (see
+/// [`ProfileInner::until_deleted`]).
+const COOKIE_DELETE_LIMIT: Duration = Duration::from_secs(2);
+
 enum Spare {
     Empty,
     Creating,
@@ -68,7 +72,12 @@ pub(crate) struct ProfileInner {
     pub name: String,
     download_dir: RefCell<PathBuf>,
     pub downloads: Rc<Downloads>,
+    /// The profile object of the browser process's first webview of this
+    /// profile, once Copper's defaults are applied (`None`: no webview
+    /// yet, or the browser process restarted). Only a marker and a last
+    /// resort: see [`ProfileInner::core`].
     core: RefCell<Option<ICoreWebView2Profile>>,
+    /// Waiting for the next webview of this profile.
     core_waiters: RefCell<Vec<OneshotTx<Result<ICoreWebView2Profile>>>>,
     spare: RefCell<Spare>,
     pub pages: RefCell<Vec<Weak<PageInner>>>,
@@ -143,21 +152,24 @@ impl ProfileInner {
         Ok(wv)
     }
 
-    /// The first webview of this profile: keep its profile object and give
-    /// it Copper's profile defaults.
+    /// A new webview of this profile: the first (per browser process)
+    /// gives the profile Copper's defaults; every one answers whoever waits
+    /// for the profile object.
     fn saw(self: &Rc<Self>, wv: &Wv) {
-        if self.core.borrow().is_some() {
-            return;
-        }
         let Some(core) = controller::profile_of(wv) else {
             return;
         };
-        controller::configure_profile(&core, &self.download_dir());
-        *self.core.borrow_mut() = Some(core.clone());
+        let first = self.core.borrow().is_none();
+        if first {
+            controller::configure_profile(&core, &self.download_dir());
+            *self.core.borrow_mut() = Some(core.clone());
+        }
         for tx in self.core_waiters.take() {
             tx.send(Ok(core.clone()));
         }
-        self.filters_changed();
+        if first {
+            self.filters_changed();
+        }
     }
 
     /// Warm a spare unless one exists or is on its way.
@@ -173,13 +185,26 @@ impl ProfileInner {
         copper_win_rt::spawn_local(async move {
             let Some(p) = me.upgrade() else { return };
             let r = p.create().await;
-            let mut spare = p.spare.borrow_mut();
-            match r {
-                Ok(wv) if matches!(*spare, Spare::Creating) => *spare = Spare::Ready(wv),
-                Ok(wv) => controller::close(&wv),
+            // Decided under the borrow, done after it: closing a controller
+            // and answering waiters call out.
+            let unwanted = {
+                let mut spare = p.spare.borrow_mut();
+                match r {
+                    Ok(wv) if matches!(*spare, Spare::Creating) => {
+                        *spare = Spare::Ready(wv);
+                        Ok(None)
+                    }
+                    Ok(wv) => Ok(Some(wv)),
+                    Err(e) => {
+                        *spare = Spare::Empty;
+                        Err(e)
+                    }
+                }
+            };
+            match unwanted {
+                Ok(Some(wv)) => controller::close(&wv),
+                Ok(None) => {}
                 Err(e) => {
-                    *spare = Spare::Empty;
-                    drop(spare);
                     tracing::warn!("profile {}: {e}", p.id);
                     for tx in p.core_waiters.take() {
                         tx.send(Err(e.clone()));
@@ -189,9 +214,15 @@ impl ProfileInner {
         });
     }
 
-    /// The WebView2 profile object (made with the first webview).
+    /// The WebView2 profile object, taken from a webview that is open now.
+    ///
+    /// Never a profile object kept from an earlier webview: once the webview
+    /// it came from is closed, WebView2 answers every call on it with
+    /// `ERROR_INVALID_STATE` — and the first webview is usually the warm
+    /// spare, which a page takes and closes with it. With no webview open
+    /// this waits for the next one (the spare, made on demand).
     pub async fn core(self: &Rc<Self>) -> Result<ICoreWebView2Profile> {
-        if let Some(c) = self.core.borrow().clone() {
+        if let Some(c) = self.live_profile() {
             return Ok(c);
         }
         let (tx, rx) = oneshot();
@@ -201,19 +232,31 @@ impl ProfileInner {
             .unwrap_or_else(|| Err(EngineError::Other("profile closed".into())))
     }
 
+    /// The profile object of a webview open now, if there is one.
+    fn live_profile(&self) -> Option<ICoreWebView2Profile> {
+        let view = self.live_view()?;
+        unsafe { view.cast::<ICoreWebView2_13>().ok()?.Profile().ok() }
+    }
+
+    /// A webview of this profile open now: the warm spare, a page's, or the
+    /// download fetcher's.
+    fn live_view(&self) -> Option<ICoreWebView2> {
+        if let Spare::Ready(wv) = &*self.spare.borrow() {
+            return Some(wv.view.clone());
+        }
+        let page = self
+            .pages
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find_map(|p| p.wv().map(|w| w.view));
+        page.or_else(|| self.fetcher.borrow().view())
+    }
+
     /// A webview of this profile to send profile-wide CDP calls through.
     async fn any_view(self: &Rc<Self>) -> Result<ICoreWebView2> {
         for _ in 0..2 {
-            if let Spare::Ready(wv) = &*self.spare.borrow() {
-                return Ok(wv.view.clone());
-            }
-            let live = self
-                .pages
-                .borrow()
-                .iter()
-                .filter_map(Weak::upgrade)
-                .find_map(|p| p.wv().map(|w| w.view));
-            if let Some(view) = live {
+            if let Some(view) = self.live_view() {
                 return Ok(view);
             }
             self.core().await?;
@@ -224,9 +267,12 @@ impl ProfileInner {
 
     /// The browser process died: everything WebView2 gave us is gone.
     pub fn reset(&self) {
-        self.core.borrow_mut().take();
-        *self.spare.borrow_mut() = Spare::Empty;
-        self.fetcher.borrow_mut().reset();
+        // Taken out and dropped after each borrow: releasing WebView2
+        // objects calls out.
+        let core = self.core.borrow_mut().take();
+        let spare = std::mem::replace(&mut *self.spare.borrow_mut(), Spare::Empty);
+        let retired = self.fetcher.borrow_mut().reset();
+        drop((core, spare, retired));
         self.filters.installed.borrow_mut().clear();
         self.filters.swept.set(false);
     }
@@ -250,6 +296,17 @@ impl ProfileInner {
             }
         }
         out
+    }
+
+    /// The installed filters are exactly `desired`, at their versions.
+    fn filters_in_step(&self, desired: &BTreeMap<String, WebView2ContentFilter>) -> bool {
+        let installed = self.filters.installed.borrow();
+        installed.len() == desired.len()
+            && desired.iter().all(|(id, f)| {
+                installed
+                    .get(id)
+                    .is_some_and(|(_, version)| *version == f.version())
+            })
     }
 
     /// A page's filters changed (or a page went away): bring the profile's
@@ -288,6 +345,11 @@ impl ProfileInner {
             ));
         };
         let desired = self.desired_filters();
+        // Nothing to do (the usual case when a page merely got a webview):
+        // no round trip to the browser.
+        if self.filters.swept.get() && self.filters_in_step(&desired) {
+            return Ok(());
+        }
         let present = list_extensions(&p7).await?;
         if !self.filters.swept.replace(true) {
             for (ext, name) in &present {
@@ -329,6 +391,12 @@ impl ProfileInner {
                 Err(e) => tracing::warn!("content filter {id}: {e}"),
             }
         }
+        tracing::debug!(
+            "profile {}: content filters in step ({} installed, {} extension(s) found)",
+            self.id,
+            self.filters.installed.borrow().len(),
+            present.len()
+        );
         Ok(())
     }
 
@@ -377,8 +445,33 @@ impl ProfileInner {
 
     async fn drop_cookie(self: &Rc<Self>, c: Cookie) -> Result<()> {
         let mgr = self.cookie_manager().await?;
-        unsafe { mgr.DeleteCookiesWithDomainAndPath(&hs(&c.name), &hs(&c.domain), &hs(&c.path)) }
-            .map_err(|e| EngineError::Cookies(e.to_string()))
+        request_delete(&mgr, &c)?;
+        let url = format!("https://{}{}", c.domain.trim_start_matches('.'), c.path);
+        self.until_deleted(&url, std::slice::from_ref(&c)).await
+    }
+
+    /// WebView2 deletes cookies in the background: a read right after the
+    /// call still lists them (for some tens of ms). Resolve once `url`'s
+    /// cookies (`""`: all) no longer include any of `gone`, so the caller's
+    /// next read agrees — or after a short limit, as the deletion was asked
+    /// for either way.
+    async fn until_deleted(self: &Rc<Self>, url: &str, gone: &[Cookie]) -> Result<()> {
+        let started = Instant::now();
+        loop {
+            let left = self.get_cookies(url).await?;
+            if !left.iter().any(|k| gone.iter().any(|g| same_cookie(k, g))) {
+                return Ok(());
+            }
+            if started.elapsed() >= COOKIE_DELETE_LIMIT {
+                tracing::debug!(
+                    "profile {}: deleted cookies still listed after {} ms",
+                    self.id,
+                    started.elapsed().as_millis()
+                );
+                return Ok(());
+            }
+            copper_win_rt::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     // -- website data ----------------------------------------------------
@@ -408,11 +501,17 @@ impl ProfileInner {
         let mut names = hosts(&|h| site_matches(h, &domain));
         names.insert(domain.clone());
         if kinds.contains(WebsiteDataKinds::COOKIES) {
-            for c in cookies
+            let victims: Vec<Cookie> = cookies
                 .iter()
                 .filter(|c| site_matches(c.domain.trim_start_matches('.'), &domain))
-            {
-                self.drop_cookie(c.clone()).await?;
+                .cloned()
+                .collect();
+            if !victims.is_empty() {
+                let mgr = self.cookie_manager().await?;
+                for c in &victims {
+                    request_delete(&mgr, c)?;
+                }
+                self.until_deleted("", &victims).await?;
             }
         }
         let view = self.any_view().await?;
@@ -493,8 +592,20 @@ impl Drop for ProfileInner {
         if let Spare::Ready(wv) = std::mem::replace(self.spare.get_mut(), Spare::Empty) {
             controller::close(&wv);
         }
-        self.fetcher.get_mut().reset();
+        drop(self.fetcher.get_mut().reset());
     }
+}
+
+/// Ask WebView2 to delete the cookie matching `c`'s name, domain and path.
+fn request_delete(mgr: &ICoreWebView2CookieManager, c: &Cookie) -> Result<()> {
+    unsafe { mgr.DeleteCookiesWithDomainAndPath(&hs(&c.name), &hs(&c.domain), &hs(&c.path)) }
+        .map_err(|e| EngineError::Cookies(e.to_string()))
+}
+
+/// The same cookie: name, domain (as given: `.example.com` is a different
+/// cookie from host-only `example.com`) and path.
+fn same_cookie(a: &Cookie, b: &Cookie) -> bool {
+    a.name == b.name && a.path == b.path && a.domain.eq_ignore_ascii_case(&b.domain)
 }
 
 fn read_cookies(list: &ICoreWebView2CookieList) -> Vec<Cookie> {
@@ -643,12 +754,14 @@ impl Profile for WebView2Profile {
     }
 
     fn set_download_dir(&self, dir: PathBuf) {
-        if let Some(core) = self.inner.core.borrow().as_ref() {
+        *self.inner.download_dir.borrow_mut() = dir.clone();
+        // A profile with no webview open gets it with its next one (`saw`
+        // gives the first of each browser process the download folder).
+        if let Some(core) = self.inner.live_profile() {
             unsafe {
                 let _ = core.SetDefaultDownloadFolderPath(&hs(&dir.to_string_lossy()));
             }
         }
-        *self.inner.download_dir.borrow_mut() = dir;
     }
 
     fn downloads(&self) -> EventStream<DownloadEvent> {

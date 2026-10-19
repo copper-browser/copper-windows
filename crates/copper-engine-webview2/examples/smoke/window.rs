@@ -122,6 +122,12 @@ impl Window {
         unsafe {
             let _ = self.device.Commit();
         }
+        // The webview is made after this returns (or remade later): its
+        // content shows once our device commits again.
+        let device = self.device.clone();
+        page.on_visual_connected(move || unsafe {
+            let _ = device.Commit();
+        });
         let hwnd = self.hwnd.0 as isize;
         page.on_cursor_changed(|c| unsafe {
             SetCursor(Some(c));

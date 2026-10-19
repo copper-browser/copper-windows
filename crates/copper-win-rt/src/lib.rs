@@ -95,7 +95,12 @@ pub fn spawn_local(fut: impl Future<Output = ()> + 'static) {
         n.set(id + 1);
         id
     });
-    TASKS.with(|t| t.borrow_mut().insert(id, Box::pin(fut)));
+    // During thread teardown the task table may already be gone: the future
+    // could never run, so it is simply dropped.
+    let task: LocalTask = Box::pin(fut);
+    if TASKS.try_with(|t| t.borrow_mut().insert(id, task)).is_err() {
+        return;
+    }
     if let Some(shared) = SHARED.get() {
         shared.ready.lock().unwrap().push_back(id);
         notify(shared.hwnd, WM_APP_WAKE);
@@ -167,7 +172,11 @@ impl Future for Sleep {
 impl Drop for Sleep {
     fn drop(&mut self) {
         if let Some(id) = self.id.take() {
-            let live = TIMERS.with(|t| t.borrow_mut().remove(&id).is_some_and(|s| !s.fired));
+            // `try_with`: a Sleep owned by a task dropped during thread-local
+            // teardown must not touch the (possibly destroyed) timer table.
+            let live = TIMERS
+                .try_with(|t| t.borrow_mut().remove(&id).is_some_and(|s| !s.fired))
+                .unwrap_or(false);
             if live {
                 stop_timer(id);
             }
@@ -245,6 +254,40 @@ fn timer_fired(id: usize) {
     });
     if let Some(w) = waker {
         w.wake();
+    }
+}
+
+/// Drop every pending task, timer and hook while the thread-locals are still
+/// alive. [`run`] calls this when the loop ends; without it the task table is
+/// dropped by the TLS destructors, a task's [`Sleep`] then reaches for the
+/// already-destroyed timer table, and the process aborts on exit.
+pub fn shutdown() {
+    // Dropping a task can spawn another (a Drop impl that cleans up), so
+    // drain until the table stays empty; bounded in case something re-spawns
+    // forever.
+    for _ in 0..64 {
+        let tasks = TASKS
+            .try_with(|t| std::mem::take(&mut *t.borrow_mut()))
+            .unwrap_or_default();
+        if tasks.is_empty() {
+            break;
+        }
+        drop(tasks);
+    }
+    let timers = TIMERS
+        .try_with(|t| std::mem::take(&mut *t.borrow_mut()))
+        .unwrap_or_default();
+    for (id, slot) in timers {
+        if !slot.fired {
+            stop_timer(id);
+        }
+    }
+    let hooks = HOOKS
+        .try_with(|h| std::mem::take(&mut *h.borrow_mut()))
+        .unwrap_or_default();
+    drop(hooks);
+    if let Some(shared) = SHARED.get() {
+        shared.ready.lock().unwrap().clear();
     }
 }
 
@@ -401,9 +444,12 @@ pub fn init() -> Result<(), std::io::Error> {
     sys::init()
 }
 
-/// Run the message loop until [`quit`]. Returns the exit code.
+/// Run the message loop until [`quit`]. Returns the exit code. Pending tasks,
+/// timers and hooks are dropped (see [`shutdown`]) before it returns.
 pub fn run() -> i32 {
-    sys::run()
+    let code = sys::run();
+    shutdown();
+    code
 }
 
 /// Post `WM_QUIT` to end [`run`].

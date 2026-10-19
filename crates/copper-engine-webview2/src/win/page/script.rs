@@ -375,11 +375,17 @@ fn handlers_changed(page: &Rc<PageInner>, world: WorldKey) {
                 unsafe {
                     let _ = wv.view.PostWebMessageAsJson(&hs(&msg));
                 }
-                for (f, _) in p.frames.borrow().iter() {
-                    if let Ok(f2) = f.cast::<ICoreWebView2Frame2>() {
-                        unsafe {
-                            let _ = f2.PostWebMessageAsJson(&hs(&msg));
-                        }
+                // Collected first: posting calls into WebView2, which can
+                // raise frame events that change `frames`.
+                let frames: Vec<ICoreWebView2Frame2> = p
+                    .frames
+                    .borrow()
+                    .iter()
+                    .filter_map(|(f, _)| f.cast::<ICoreWebView2Frame2>().ok())
+                    .collect();
+                for f2 in frames {
+                    unsafe {
+                        let _ = f2.PostWebMessageAsJson(&hs(&msg));
                     }
                 }
             }

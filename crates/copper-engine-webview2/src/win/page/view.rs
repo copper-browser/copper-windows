@@ -39,6 +39,8 @@ pub(super) fn navigate(page: &Rc<PageInner>, wv: &Wv, url: &str) {
 /// Serve `html` as the document at `url` (WebResourceRequested answers the
 /// one request; see `events::serve_html`).
 fn navigate_html(page: &Rc<PageInner>, wv: &Wv, html: String, url: String) {
+    // An earlier `load_html` not served yet is void.
+    page.clear_html_filter_on(&wv.view);
     // Filters match request URIs, which carry no fragment.
     let doc = match url::Url::parse(&url) {
         Ok(mut u) => {
@@ -100,40 +102,46 @@ impl PageView for WebView2Page {
         }
     }
 
-    // TODO(engine-shell): the real view size, mapped state, raw snapshot,
-    // trusted-input switch and file chooser (copper-shell-core's needs).
+    /// The page's bounds over its rasterization scale; `(0, 0)` before the
+    /// shell (or the backstage) ever laid it out.
     fn view_size(&self) -> (u32, u32) {
-        (0, 0)
+        self.inner.host.logical_size()
     }
 
+    /// Attached (to a shell window or the backstage's stage) and visible:
+    /// Chromium is rendering it.
     fn is_mapped(&self) -> bool {
-        false
+        self.inner.host.rendering()
     }
 
+    /// The `Visible` snapshot's frame, decoded into straight-alpha RGBA on a
+    /// worker thread (WebView2 only hands out encoded frames).
     fn snapshot_bitmap(&self) -> LocalFuture<Result<copper_engine::Bitmap>> {
-        Box::pin(async {
-            Err(copper_engine::EngineError::Snapshot(
-                "raw snapshots are not wired yet".into(),
-            ))
-        })
+        capture::snapshot_bitmap(&self.inner)
     }
 
     fn trusted_input(&self) -> copper_engine::TrustedInput {
-        copper_engine::TrustedInput {
-            pointer: true,
-            editing: true,
-            page_focus: true,
+        if self.inner.script_input.get() {
+            copper_engine::TrustedInput::NONE
+        } else {
+            input::CDP_TRUSTED
         }
     }
 
-    fn set_trusted_input(&self, _enabled: bool) {}
+    /// `false`: every action from script (`input.js`), and no page focus
+    /// emulation for a held page; `true`: back to CDP.
+    fn set_trusted_input(&self, enabled: bool) {
+        if self.inner.script_input.replace(!enabled) != !enabled {
+            self.inner.refresh_backstaged();
+        }
+    }
 
     fn has_file_chooser(&self) -> bool {
-        false
+        self.inner.chooser.is_open()
     }
 
     fn cancel_file_chooser(&self) -> bool {
-        false
+        self.inner.close_file_chooser(true)
     }
 
     type Filter = WebView2ContentFilter;
@@ -141,7 +149,7 @@ impl PageView for WebView2Page {
     fn load(&self, url: &str) {
         let url = url.to_owned();
         self.inner.nav.borrow_mut().cancel_pending();
-        self.inner.html.borrow_mut().take();
+        self.inner.clear_html_filter();
         self.inner.navigate_with(move |p, wv| navigate(p, wv, &url));
     }
 
@@ -378,7 +386,10 @@ impl PageView for WebView2Page {
     }
 
     fn set_new_window_handler(&self, handler: Option<NewWindowHandler<WebView2Page>>) {
-        *self.inner.new_window.borrow_mut() = handler;
+        // The old handler (and what it holds, maybe a page) is dropped after
+        // the borrow ends.
+        let old = std::mem::replace(&mut *self.inner.new_window.borrow_mut(), handler);
+        drop(old);
     }
 
     fn download(&self, url: &str) -> Result<DownloadId> {
