@@ -14,12 +14,14 @@ mod extensions;
 mod general;
 mod passwords;
 mod privacy;
+mod spaces;
 mod updates;
 
 /// Every page, in the rail's order.
 pub fn all() -> Vec<Rc<dyn Page>> {
     vec![
         Rc::new(general::General),
+        Rc::new(spaces::Spaces),
         Rc::new(privacy::Privacy),
         Rc::new(passwords::Passwords),
         Rc::new(cloud::Cloud),

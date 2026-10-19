@@ -45,7 +45,7 @@ pub fn handle(chrome: &Rc<Chrome>, e: Event) {
         Event::FieldSubmit(id) if is_card_field(chrome, id) => {
             crate::palette::submit(&shell, alt_down())
         }
-        Event::FieldCancel(id) if is_card_field(chrome, id) => crate::palette::close(&shell),
+        Event::FieldCancel(id) if is_card_field(chrome, id) => crate::palette::cancel(&shell),
         Event::FieldChanged(id) | Event::FieldSubmit(id) | Event::FieldCancel(id) => {
             crate::find::field_event(&shell, id, &e);
             crate::panels::field_event(&shell, id, &e);
@@ -129,6 +129,9 @@ fn click(chrome: &Rc<Chrome>, shell: &Shell, id: NodeId) {
         Clicked::Strip(h) => strip_click(shell, h),
         Clicked::Stage(StageHit::StatusButton(tab)) => shell.reload(&tab),
         Clicked::Other(id) => {
+            if crate::palette::click(shell, id) {
+                return;
+            }
             if !crate::panels::click(shell, id) {
                 crate::find::click(shell, id);
             }
@@ -171,13 +174,7 @@ fn column_click(chrome: &Rc<Chrome>, shell: &Shell, h: ColumnHit) {
         ColumnHit::Canvas => {
             crate::commands::run(shell, "new-canvas");
         }
-        ColumnHit::Space(id) => {
-            shell.switch_space(&id);
-        }
-        ColumnHit::NewSpace => {
-            crate::commands::run(shell, "new-space");
-        }
-        ColumnHit::SpaceMenu => crate::palette::open(shell, Purpose::Palette, false),
+        h => crate::palette::spaces::column_hit(chrome, shell, h),
     }
 }
 
@@ -215,6 +212,9 @@ fn tab_at(chrome: &Chrome, id: NodeId) -> Option<TabId> {
 }
 
 fn context_menu(chrome: &Rc<Chrome>, shell: &Shell, target: Option<NodeId>, at: Point) {
+    if crate::palette::spaces::context_menu(chrome, shell, target, at) {
+        return;
+    }
     let Some(tab) = target.and_then(|t| tab_at(chrome, t)) else {
         return;
     };
@@ -236,6 +236,9 @@ fn context_menu(chrome: &Rc<Chrome>, shell: &Shell, target: Option<NodeId>, at: 
 }
 
 fn menu_chosen(chrome: &Rc<Chrome>, shell: &Shell, menu: u32, chosen: u32) {
+    if crate::palette::spaces::menu_chosen(shell, menu, chosen) {
+        return;
+    }
     if menu == crate::forms::PICKER_MENU {
         crate::forms::picked(chosen);
         return;
@@ -327,6 +330,9 @@ fn key_event(chrome: &Rc<Chrome>, shell: &Shell, key: Key, mods: Mods, focused: 
             == chrome
                 .read(|_, st| st.card.is_open().then_some(st.card.field))
                 .flatten();
+    if in_card && crate::palette::key(shell, key, mods) {
+        return;
+    }
     if in_card && !mods.ctrl && !mods.alt {
         match key {
             Key::Down => return crate::palette::step(shell, 1),

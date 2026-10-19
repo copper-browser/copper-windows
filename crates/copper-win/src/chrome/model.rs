@@ -27,6 +27,10 @@ pub struct SpaceView {
     pub letter: String,
     pub color: Color,
     pub current: bool,
+    /// Its icon as stored: an emoji, or `sf:<symbol>` (`palette::symbols`).
+    pub icon: Option<String>,
+    /// How many loose tabs it holds.
+    pub count: usize,
 }
 
 /// Everything the column and the strip draw.
@@ -64,6 +68,8 @@ impl Model {
                 letter: s.letter(),
                 color: chip_color(s),
                 current: s.id == current,
+                icon: s.icon.clone(),
+                count: b.row(&s.id).len(),
             })
             .collect();
         let space = spaces
@@ -76,6 +82,8 @@ impl Model {
                 letter: "S".into(),
                 color: Color::grey(0.5),
                 current: true,
+                icon: None,
+                count: 0,
             });
         let tint = tint_of(b.current_space());
         drop(b);
