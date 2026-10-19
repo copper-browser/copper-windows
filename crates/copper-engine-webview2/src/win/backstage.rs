@@ -259,15 +259,21 @@ impl Inner {
             (f64::from(lh) * scale).round() as i32,
         );
         self.ensure_stage(w, h)?;
-        let stage = self.stage.borrow();
-        let stage = stage.as_ref().expect("made above");
-        stage.fit(w, h);
-        let held = self.held.borrow()[i].slot.clone();
-        let slot = match held {
-            Some(s) => s,
-            None => stage
-                .slot()
-                .map_err(|e| EngineError::Other(format!("backstage slot: {e}")))?,
+        // The stage is borrowed only for its own (DirectComposition) calls:
+        // attaching the page calls into WebView2, whose events may come back
+        // here.
+        let (window, device, slot) = {
+            let stage = self.stage.borrow();
+            let stage = stage.as_ref().expect("made above");
+            stage.fit(w, h);
+            let held = self.held.borrow()[i].slot.clone();
+            let slot = match held {
+                Some(s) => s,
+                None => stage
+                    .slot()
+                    .map_err(|e| EngineError::Other(format!("backstage slot: {e}")))?,
+            };
+            (stage.window.0, stage.device.clone(), slot)
         };
         self.held.borrow_mut()[i].slot = Some(slot.clone());
         let rect = RECT {
@@ -276,7 +282,7 @@ impl Inner {
             right: w,
             bottom: h,
         };
-        page.attach_stage(stage.window.0, &slot, rect, scale);
+        page.attach_stage(window, &device, &slot, rect, scale);
         page.refresh_backstaged();
         Ok(())
     }

@@ -26,6 +26,12 @@ const PAGE_SHIM: &str = include_str!("js/shim.js");
 const WORLD_SHIM: &str = include_str!("js/world-shim.js");
 /// `PageOptions::capture_console`'s script (page world, document start).
 pub(crate) const CONSOLE_JS: &str = include_str!("js/console.js");
+/// Script-dispatched input (`set_trusted_input(false)`): the same
+/// `input.js` WebKitGTK uses, so both engines' script path behave alike.
+pub(crate) const INPUT_JS: &str =
+    include_str!("../../../shared/copper-linux/crates/copper-engine-webkitgtk/src/input.js");
+/// The isolated world [`INPUT_JS`] runs in (its pointer state lives there).
+pub(crate) const INPUT_WORLD: &str = "copper-input";
 
 /// The internal handler `CONSOLE_JS` posts to; never reported as a
 /// `ScriptMessage` and never registrable by callers.

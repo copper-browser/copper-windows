@@ -12,10 +12,12 @@
 //! `capture` (snapshots, find, covers), `life` (suspend, sleep, history).
 
 mod capture;
+mod chooser;
 mod events;
 mod hosting;
 mod input;
 mod life;
+mod scheme;
 mod script;
 mod view;
 
@@ -122,6 +124,12 @@ pub(crate) struct PageInner {
     pub related: bool,
     /// Process-unique identity (`PageView::page_id`).
     pub id: copper_engine::PageId,
+    /// Custom-scheme serving on the current webview.
+    pub schemes: scheme::PageSchemes,
+    /// The file chooser the page has open, if any.
+    pub chooser: chooser::PageChooser,
+    /// `set_trusted_input(false)`: every input action from script.
+    pub script_input: Cell<bool>,
 }
 
 /// Next `PageId` (never 0, never reused within a run).
@@ -184,6 +192,9 @@ impl WebView2Page {
             id: copper_engine::PageId(
                 NEXT_PAGE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             ),
+            schemes: scheme::PageSchemes::default(),
+            chooser: chooser::PageChooser::default(),
+            script_input: Cell::new(false),
         });
         profile.add_page(&inner);
         profile.engine.scripts.register(&inner);
@@ -368,9 +379,14 @@ impl PageInner {
             }
         }
         self.host.apply(self, &wv);
+        // Schemes registered until now; later ones are added live
+        // (`scheme_added`), as the webview is now the page's.
+        self.add_scheme_filters(&wv);
+        self.intercept_file_choosers(&wv.view);
         *self.life.borrow_mut() = Life::Ready(wv.clone());
-        // A fresh webview has WebView2's defaults (dialogs on, no
-        // interception, no focus emulation).
+        self.visual_connected();
+        // A fresh webview has WebView2's defaults (dialogs on, no focus
+        // emulation).
         self.staged_settings.set(Some((false, false)));
         self.refresh_backstaged();
         if !self.queued_nav.replace(false) && !self.related {
@@ -398,10 +414,17 @@ impl PageInner {
     /// Let go of the current webview (sleep, browser death, drop).
     pub fn release_webview(&self, next: Life) -> Option<Wv> {
         self.generation.set(self.generation.get() + 1);
-        self.tokens.borrow_mut().clear();
-        self.frames.borrow_mut().clear();
+        // Taken out, then dropped: dropping handler tokens calls into
+        // WebView2, which must not happen under a borrow.
+        let tokens = std::mem::take(&mut *self.tokens.borrow_mut());
+        let frames = std::mem::take(&mut *self.frames.borrow_mut());
+        drop(tokens);
+        drop(frames);
         self.deny_pending_permissions();
         self.find.reset();
+        self.schemes.released();
+        // Its document goes with the webview.
+        self.close_file_chooser(false);
         let old = std::mem::replace(&mut *self.life.borrow_mut(), next);
         self.nav.borrow_mut().detach_native();
         match old {
@@ -411,7 +434,14 @@ impl PageInner {
     }
 
     pub fn deny_pending_permissions(&self) {
-        for (_, p) in self.permissions.borrow_mut().drain() {
+        // Taken out first: completing a deferral can raise events.
+        let pending: Vec<PendingPermission> = self
+            .permissions
+            .borrow_mut()
+            .drain()
+            .map(|(_, p)| p)
+            .collect();
+        for p in pending {
             unsafe {
                 let _ = p.args.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY);
                 let _ = p.deferral.Complete();

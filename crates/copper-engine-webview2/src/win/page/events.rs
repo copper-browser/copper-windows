@@ -17,7 +17,7 @@ use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::core::Interface;
 
 use super::hosting::{MODIFIED_CLICK_WINDOW, accelerator_key, focus_changed};
-use super::{Life, PageInner, PendingPermission, WebView2Page, script};
+use super::{Life, PageInner, PendingPermission, WebView2Page, scheme, script};
 use crate::convert::{WEB_ERROR_CANCELED, crash_reason, permission_kind, web_error_name};
 use crate::history::NativeHistory;
 use crate::hosting::{FocusExit, PageChange};
@@ -33,10 +33,20 @@ const PROGRESS_STARTED: f64 = 0.1;
 const PROGRESS_COMMITTED: f64 = 0.3;
 const PROGRESS_DOM_READY: f64 = 0.7;
 
-/// Register every handler of `page` on `wv`.
+/// Register every handler of `page` on `wv` (the old webview's handlers
+/// are removed first). The handlers live in a local `Tokens` while they are
+/// added, so no borrow is held across WebView2 calls; those registered
+/// before a failure are kept.
 pub(super) fn wire(page: &Rc<PageInner>, wv: &Wv) -> WinResult {
-    let mut t = page.tokens.borrow_mut();
-    t.clear();
+    let old = std::mem::take(&mut *page.tokens.borrow_mut());
+    drop(old);
+    let mut t = Tokens::default();
+    let r = wire_into(page, wv, &mut t);
+    *page.tokens.borrow_mut() = t;
+    r
+}
+
+fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
     let view = &wv.view;
     let w = Rc::downgrade(page);
 
@@ -66,8 +76,10 @@ pub(super) fn wire(page: &Rc<PageInner>, wv: &Wv) -> WinResult {
             if let (Some(p), Some(v)) = (pw.upgrade(), v) {
                 let url = get_string(|s| unsafe { v.Source(s) }).ok();
                 p.find.reset();
-                // Requests of the old document are void.
+                // Requests of the old document are void, and so is its
+                // file chooser.
                 p.deny_pending_permissions();
+                p.close_file_chooser(false);
                 p.set_progress(PROGRESS_COMMITTED);
                 p.emit(PageEvent::Load(LoadState::Committed { url }));
             }
@@ -424,21 +436,24 @@ pub(super) fn wire(page: &Rc<PageInner>, wv: &Wv) -> WinResult {
         WebResourceRequested,
         WebResourceRequestedEventHandler,
         move |v: Option<ICoreWebView2>, a: Option<ICoreWebView2WebResourceRequestedEventArgs>| {
-            match (pw.upgrade(), v, a) {
-                (Some(p), Some(v), Some(a)) => p.serve_html(&v, &a),
-                _ => Ok(()),
+            let (Some(p), Some(v), Some(a)) = (pw.upgrade(), v, a) else {
+                return Ok(());
+            };
+            let uri = scheme::request_uri(&a)?;
+            if !p.serve_html(&v, &a, &uri)? {
+                p.serve_scheme(&v, &a, &uri)?;
             }
+            Ok(())
         }
     )?;
     let pw = w.clone();
-    cdp::subscribe(view, "Page.fileChooserOpened", &mut t, move |_| {
-        // Only intercepted while backstaged (`refresh_backstaged`).
+    cdp::subscribe(view, "Page.fileChooserOpened", t, move |params| {
         if let Some(p) = pw.upgrade() {
-            p.profile.engine.backstage.blocked();
+            p.file_chooser_opened(&params);
         }
     })?;
     let pw = w.clone();
-    cdp::subscribe(view, "Runtime.bindingCalled", &mut t, move |params| {
+    cdp::subscribe(view, "Runtime.bindingCalled", t, move |params| {
         if let Some(p) = pw.upgrade() {
             script::route_binding(&p, &params);
         }
@@ -536,6 +551,7 @@ impl PageInner {
 
     fn nav_started(&self, url: Option<String>, redirected: bool) {
         self.status.borrow_mut().loading = true;
+        self.schemes.navigation(url.clone());
         if redirected {
             self.emit(PageEvent::Load(LoadState::Redirected { url }));
         } else {
@@ -555,6 +571,20 @@ impl PageInner {
             .unwrap_or(COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN);
         let url = self.status.borrow().url.clone();
         self.status.borrow_mut().loading = false;
+        // A custom-scheme handler refused the document: its text is the
+        // error, whatever WebView2 made of the unanswered request.
+        if let Some(error) = self.schemes.take_failure() {
+            self.nav.borrow_mut().cancel_pending();
+            self.clear_html_filter();
+            self.status.borrow_mut().progress = 1.0;
+            self.emit(PageEvent::Load(LoadState::Failed {
+                url: url.unwrap_or_default(),
+                error,
+                cancelled: false,
+            }));
+            self.refresh_history();
+            return;
+        }
         // An HTTP error page the server sent is a page, not a failed load.
         if ok || http >= 400 {
             self.set_progress(1.0);
@@ -651,6 +681,7 @@ impl PageInner {
             }
             COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED => {
                 self.status.borrow_mut().loading = false;
+                self.close_file_chooser(false);
                 let why = crash_reason(reason, self.terminating.replace(false));
                 self.emit(PageEvent::Crashed(why));
             }
@@ -824,7 +855,17 @@ impl PageInner {
                 // there would release the handler that is running.
                 copper_win_rt::spawn_local(async move {
                     if let Some(p) = pw.upgrade() {
-                        p.frames.borrow_mut().retain(|(f, _)| f != &gone);
+                        // Its handlers are removed (WebView2 calls) after
+                        // the borrow ends.
+                        let removed: Vec<_> = {
+                            let mut frames = p.frames.borrow_mut();
+                            let (keep, removed) = std::mem::take(&mut *frames)
+                                .into_iter()
+                                .partition(|(f, _)| f != &gone);
+                            *frames = keep;
+                            removed
+                        };
+                        drop(removed);
                     }
                 });
                 Ok(())
@@ -836,20 +877,19 @@ impl PageInner {
         self.frames.borrow_mut().push((frame, tokens));
     }
 
-    /// Answer the one request `load_html` registered a filter for.
+    /// Answer the one request `load_html` registered a filter for; `false`
+    /// if `uri` is not it.
     fn serve_html(
         &self,
         v: &ICoreWebView2,
         a: &ICoreWebView2WebResourceRequestedEventArgs,
-    ) -> WinResult {
-        let req = unsafe { a.Request()? };
-        let uri = get_string(|s| unsafe { req.Uri(s) })?;
+        uri: &str,
+    ) -> windows::core::Result<bool> {
         let html = match &*self.html.borrow() {
-            Some((url, html)) if same_document(url, &uri) => html.clone(),
-            _ => return Ok(()),
+            Some((url, html)) if same_document(url, uri) => html.clone(),
+            _ => return Ok(false),
         };
         self.clear_html_filter_on(v);
-        self.html.borrow_mut().take();
         let env = unsafe { v.cast::<ICoreWebView2_2>()?.Environment()? };
         let stream = unsafe { SHCreateMemStream(Some(html.as_bytes())) }
             .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_OUTOFMEMORY))?;
@@ -861,21 +901,27 @@ impl PageInner {
                 &hs("Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store"),
             )?
         };
-        unsafe { a.SetResponse(&resp) }
+        unsafe { a.SetResponse(&resp)? };
+        Ok(true)
     }
 
-    fn clear_html_filter(&self) {
-        if let Some(wv) = self.wv() {
-            self.clear_html_filter_on(&wv.view);
+    /// Drop pending `load_html` content (and its filter, if the webview
+    /// is there).
+    pub(super) fn clear_html_filter(&self) {
+        match self.wv() {
+            Some(wv) => self.clear_html_filter_on(&wv.view),
+            None => drop(self.html.borrow_mut().take()),
         }
-        self.html.borrow_mut().take();
     }
 
-    fn clear_html_filter_on(&self, v: &ICoreWebView2) {
-        if let Some((url, _)) = &*self.html.borrow() {
+    /// Take the `load_html` content off `v` (its filter, then the content).
+    /// The URL is taken out first: removing the filter calls into WebView2.
+    pub(super) fn clear_html_filter_on(&self, v: &ICoreWebView2) {
+        let served = self.html.borrow_mut().take();
+        if let Some((url, _)) = served {
             unsafe {
                 let _ = v.RemoveWebResourceRequestedFilter(
-                    &hs(url),
+                    &hs(&url),
                     COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
                 );
             }
@@ -885,7 +931,7 @@ impl PageInner {
 
 /// Whether request URI `b` is the document `a` (ignoring the fragment and
 /// URL normalisation).
-fn same_document(a: &str, b: &str) -> bool {
+pub(super) fn same_document(a: &str, b: &str) -> bool {
     let norm = |s: &str| {
         url::Url::parse(s).map(|mut u| {
             u.set_fragment(None);

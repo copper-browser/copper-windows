@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use windows::Win32::Foundation::{HWND, POINT, RECT};
-use windows::Win32::Graphics::DirectComposition::IDCompositionVisual;
+use windows::Win32::Graphics::DirectComposition::{
+    IDCompositionDesktopDevice, IDCompositionVisual,
+};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
@@ -23,7 +25,9 @@ use windows::Win32::UI::Input::Pointer::{
     GetPointerDeviceRects, GetPointerPenInfo, GetPointerTouchInfo, POINTER_INFO, POINTER_PEN_INFO,
     POINTER_TOUCH_INFO,
 };
-use windows::Win32::UI::WindowsAndMessaging::{HCURSOR, IDC_ARROW, LoadCursorW, PT_PEN, PT_TOUCH};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GA_ROOT, GetAncestor, HCURSOR, IDC_ARROW, LoadCursorW, PT_PEN, PT_TOUCH,
+};
 use windows::core::{IUnknown, Interface};
 
 use super::{PageInner, WebView2Page, capture};
@@ -40,9 +44,14 @@ struct Target {
     visual: IDCompositionVisual,
     /// The backstage's stage, not a shell window.
     stage: bool,
+    /// The stage's device, committed by the engine whenever it connects a
+    /// webview under `visual` (a shell window's device is the app's: see
+    /// [`WebView2Page::on_visual_connected`]).
+    stage_device: Option<IDCompositionDesktopDevice>,
 }
 
 type AccelHandler = Rc<dyn Fn(&AcceleratorKey) -> bool>;
+type ConnectedHandler = Rc<dyn Fn()>;
 type FocusExitHandler = Rc<dyn Fn(FocusExit)>;
 type CursorHandler = Rc<dyn Fn(HCURSOR)>;
 
@@ -56,6 +65,7 @@ pub(crate) struct Host {
     cursor_handlers: RefCell<Vec<CursorHandler>>,
     accelerator: RefCell<Option<AccelHandler>>,
     focus_exit: RefCell<Option<FocusExitHandler>>,
+    visual_connected: RefCell<Option<ConnectedHandler>>,
 }
 
 impl Host {
@@ -81,6 +91,31 @@ impl Host {
         self.scale.get().unwrap_or(1.0)
     }
 
+    /// The size the page is laid out at, in logical pixels (its bounds over
+    /// the rasterization scale); `(0, 0)` before it was ever given bounds.
+    /// A hidden or detached page keeps its last size.
+    pub fn logical_size(&self) -> (u32, u32) {
+        let Some(r) = self.bounds.get() else {
+            return (0, 0);
+        };
+        let s = self.scale();
+        let logical = |px: i32| (f64::from(px.max(0)) / s).round() as u32;
+        (logical(r.right - r.left), logical(r.bottom - r.top))
+    }
+
+    /// The top-level shell window the page is attached to (not the
+    /// backstage's stage).
+    pub fn window(&self) -> Option<HWND> {
+        let hwnd = self
+            .target
+            .borrow()
+            .as_ref()
+            .filter(|t| !t.stage)
+            .map(|t| t.hwnd)?;
+        let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+        Some(if root.is_invalid() { hwnd } else { root })
+    }
+
     /// Give a (new) webview the remembered hosting.
     pub fn apply(&self, page: &PageInner, wv: &Wv) {
         let target = self.target.borrow().clone();
@@ -89,6 +124,11 @@ impl Host {
                 Some(t) => {
                     let _ = wv.ctl.SetParentWindow(t.hwnd);
                     let _ = wv.comp.SetRootVisualTarget(&t.visual);
+                    // DirectComposition shows the new child once the
+                    // visual's device commits.
+                    if let Some(device) = &t.stage_device {
+                        let _ = device.Commit();
+                    }
                 }
                 None => {
                     let _ = wv.comp.SetRootVisualTarget(None::<&IUnknown>);
@@ -171,10 +211,12 @@ impl PageInner {
         }
     }
 
-    /// Host the page in the backstage's stage window.
+    /// Host the page in the backstage's stage window, under `visual` of
+    /// the stage's `device`.
     pub(crate) fn attach_stage(
         self: &Rc<Self>,
         hwnd: HWND,
+        device: &IDCompositionDesktopDevice,
         visual: &IDCompositionVisual,
         rect: RECT,
         scale: f64,
@@ -186,7 +228,22 @@ impl PageInner {
             hwnd,
             visual: visual.clone(),
             stage: true,
+            stage_device: Some(device.clone()),
         }));
+    }
+
+    /// A new webview was connected under the shell's slot visual on its
+    /// own (made after `attach`, or remade after sleeping or a crash):
+    /// tell the app, on a later turn, so it commits its device.
+    pub(super) fn visual_connected(&self) {
+        if !self.host.in_shell() {
+            return;
+        }
+        let Some(f) = self.host.visual_connected.borrow().clone() else {
+            return;
+        };
+        // Not from inside whatever the app is doing now.
+        copper_win_rt::spawn_local(async move { f() });
     }
 
     /// Take the page out of the stage (it becomes an ordinary hidden page).
@@ -225,6 +282,7 @@ impl WebView2Page {
             hwnd,
             visual: visual.clone(),
             stage: false,
+            stage_device: None,
         }));
         p.refresh_backstaged();
     }
@@ -248,6 +306,9 @@ impl WebView2Page {
                 let _ = wv.ctl.SetParentWindow(p.profile.engine.park.0);
             }
         }
+        // Out of its window: its file chooser goes (the page hears
+        // `cancel`).
+        p.close_file_chooser(true);
         if p.held.get() {
             p.profile.engine.backstage.take_back(p);
         }
@@ -438,6 +499,19 @@ impl WebView2Page {
     /// shell focuses its next (previous) control.
     pub fn on_focus_exit(&self, f: impl Fn(FocusExit) + 'static) {
         *self.inner.host.focus_exit.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// Called (on a later main-loop turn) after the page connected a new
+    /// webview's content under the slot visual given to [`attach`] by
+    /// itself: the webview is made lazily, so this happens after `attach`
+    /// returned — and again when a slept or crashed page gets a new one.
+    /// DirectComposition shows the change only once the visual's device
+    /// commits, and that device is the app's: commit it (or schedule a
+    /// frame) here, or the page stays blank until the app's next commit.
+    ///
+    /// [`attach`]: WebView2Page::attach
+    pub fn on_visual_connected(&self, f: impl Fn() + 'static) {
+        *self.inner.host.visual_connected.borrow_mut() = Some(Rc::new(f));
     }
 }
 

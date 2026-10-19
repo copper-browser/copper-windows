@@ -31,13 +31,38 @@ pub(crate) struct Fetcher {
 }
 
 impl Fetcher {
-    pub fn reset(&mut self) {
-        self.tokens.clear();
+    /// The fetcher's webview, if it is open.
+    pub fn view(&self) -> Option<ICoreWebView2> {
+        self.wv.as_ref().map(|wv| wv.view.clone())
+    }
+
+    /// Forget the fetcher's webview. What it hands back closes the webview
+    /// when dropped — after the caller's borrow of the fetcher ends, since
+    /// closing calls into WebView2.
+    #[must_use = "dropping it closes the webview; drop it outside the borrow"]
+    pub fn reset(&mut self) -> Retired {
+        self.creating = false;
+        self.generation += 1;
+        Retired {
+            tokens: std::mem::take(&mut self.tokens),
+            wv: self.wv.take(),
+        }
+    }
+}
+
+/// A fetcher webview being let go (see [`Fetcher::reset`]).
+pub(crate) struct Retired {
+    tokens: Tokens,
+    wv: Option<Wv>,
+}
+
+impl Drop for Retired {
+    fn drop(&mut self) {
+        // Handlers first, then the webview.
+        std::mem::take(&mut self.tokens).clear();
         if let Some(wv) = self.wv.take() {
             controller::close(&wv);
         }
-        self.creating = false;
-        self.generation += 1;
     }
 }
 
@@ -78,12 +103,14 @@ pub(crate) fn pump(profile: &Rc<ProfileInner>) {
                 let url = p.downloads.current.borrow().as_ref().map(|j| j.url.clone());
                 match made {
                     Ok((wv, tokens)) => {
-                        {
+                        let stale = {
                             let mut f = p.fetcher.borrow_mut();
                             f.creating = false;
                             f.wv = Some(wv.clone());
-                            f.tokens = tokens;
-                        }
+                            std::mem::replace(&mut f.tokens, tokens)
+                        };
+                        // Removing handlers calls out: not under the borrow.
+                        drop(stale);
                         if let Some(url) = url {
                             navigate(&p, &wv, &url);
                         }
@@ -233,10 +260,12 @@ fn schedule_idle_close(profile: &Rc<ProfileInner>) {
     copper_win_rt::spawn_local(async move {
         copper_win_rt::sleep(IDLE_CLOSE).await;
         if let Some(p) = me.upgrade() {
-            let mut f = p.fetcher.borrow_mut();
-            if f.generation == generation && p.downloads.current.borrow().is_none() {
-                f.reset();
-            }
+            let idle = p.downloads.current.borrow().is_none();
+            let retired = {
+                let mut f = p.fetcher.borrow_mut();
+                (f.generation == generation && idle).then(|| f.reset())
+            };
+            drop(retired);
         }
     });
 }

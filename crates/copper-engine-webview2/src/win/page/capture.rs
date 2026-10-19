@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use copper_engine::{
-    EngineError, FindOptions, Image, LocalFuture, Result, Snapshot, SnapshotRegion,
+    Bitmap, EngineError, FindOptions, Image, LocalFuture, Result, Snapshot, SnapshotRegion,
 };
 use copper_win_rt::{OneshotTx, oneshot};
 use serde_json::json;
@@ -113,6 +113,16 @@ pub(super) fn snapshot(
     })
 }
 
+/// `snapshot(Visible)`'s frame as raw pixels (`PageView::snapshot_bitmap`):
+/// the PNG is made in the browser process and decoded on a worker thread.
+pub(super) fn snapshot_bitmap(page: &Rc<PageInner>) -> LocalFuture<Result<Bitmap>> {
+    let visible = snapshot(page, SnapshotRegion::Visible);
+    Box::pin(async move {
+        let image = visible.await?;
+        crate::win::bitmap::decode_png(image.png).await
+    })
+}
+
 /// The page is being hidden: keep its last frame as the cover, then hide
 /// it (unless it was shown again meanwhile). Chromium keeps rendering for
 /// at most [`COVER_LIMIT`] longer.
@@ -175,7 +185,10 @@ pub(crate) struct Find {
 
 impl Find {
     pub fn reset(&self) {
-        self.tokens.borrow_mut().clear();
+        // Dropping the tokens removes handlers (a WebView2 call): not under
+        // the borrow.
+        let tokens = std::mem::take(&mut *self.tokens.borrow_mut());
+        drop(tokens);
         // Taken before Stop(): it can raise find events synchronously.
         let find = self.find.borrow_mut().take();
         if let Some(f) = find {
@@ -285,8 +298,12 @@ pub(super) fn find(
     })
 }
 
+// The find object is cloned out before each call: WebView2 can raise find
+// events (which reach `Find`) synchronously from inside them.
+
 pub(super) fn find_step(page: &PageInner, next: bool) {
-    if let Some(f) = page.find.find.borrow().as_ref() {
+    let find = page.find.find.borrow().clone();
+    if let Some(f) = find {
         unsafe {
             let _ = if next { f.FindNext() } else { f.FindPrevious() };
         }
@@ -294,7 +311,8 @@ pub(super) fn find_step(page: &PageInner, next: bool) {
 }
 
 pub(super) fn find_finish(page: &PageInner) {
-    if let Some(f) = page.find.find.borrow().as_ref() {
+    let find = page.find.find.borrow().clone();
+    if let Some(f) = find {
         unsafe {
             let _ = f.Stop();
         }

@@ -19,6 +19,7 @@ use super::backstage::WebView2Backstage;
 use super::env::{Env, EnvConfig};
 use super::page::{PageInner, WebView2Page};
 use super::profile::{ProfileInner, WebView2Profile};
+use super::schemes::Schemes;
 use super::window::{OwnedWindow, park_window};
 use super::{com, paths};
 use crate::filter::{FilterStore, WebView2ContentFilter};
@@ -72,14 +73,17 @@ impl EngineScripts {
         pages.push(Rc::downgrade(page));
     }
 
-    fn changed(&self) {
-        let pages: Vec<Rc<PageInner>> = self
-            .pages
+    /// Every live page of the engine.
+    pub fn live_pages(&self) -> Vec<Rc<PageInner>> {
+        self.pages
             .borrow()
             .iter()
             .filter_map(Weak::upgrade)
-            .collect();
-        for p in pages {
+            .collect()
+    }
+
+    fn changed(&self) {
+        for p in self.live_pages() {
             p.scripts_changed();
         }
     }
@@ -95,6 +99,8 @@ pub(crate) struct EngineInner {
     pub scripts: EngineScripts,
     pub builtin_error_page: Cell<bool>,
     pub backstage: WebView2Backstage,
+    /// Custom-scheme handlers (`Engine::register_scheme`).
+    pub schemes: Schemes,
 }
 
 impl EngineInner {
@@ -124,8 +130,11 @@ pub struct WebView2Engine {
 }
 
 impl WebView2Engine {
-    /// Start the engine: the browser process starts now, in the background.
-    /// Call on the UI thread after `copper_win_rt::init()`.
+    /// Start the engine: the browser process starts on the next loop turn
+    /// (or as soon as something needs it), in the background — so
+    /// `set_preferred_languages` and `register_scheme` called right after
+    /// this are part of it. Call on the UI thread after
+    /// `copper_win_rt::init()`.
     pub fn new(config: EngineConfig) -> Result<Self> {
         // WebView2 needs a single-threaded apartment on the UI thread. A
         // thread already in one (the app's `OleInitialize`) is fine.
@@ -139,10 +148,10 @@ impl WebView2Engine {
         let paths = config.paths.unwrap_or(default_paths);
         let mut extra: Vec<String> = std::env::var(ARGS_ENV).ok().into_iter().collect();
         extra.extend(config.extra_arguments);
-        let env = Env::start(EnvConfig {
+        let env = Env::new(EnvConfig {
             user_data_dir: config.user_data_dir.unwrap_or(default_udf),
             browser_folder: config.browser_folder,
-            arguments: crate::args::browser_arguments(&extra),
+            extra_arguments: extra,
         });
         let park = park_window().map_err(|e| com::other("host window", e))?;
         let filters = FilterStore::new(paths.content_filter_dir());
@@ -155,6 +164,7 @@ impl WebView2Engine {
             scripts: EngineScripts::default(),
             builtin_error_page: Cell::new(config.builtin_error_page),
             backstage: WebView2Backstage::new(),
+            schemes: Schemes::default(),
         });
         Ok(WebView2Engine { inner })
     }
@@ -194,14 +204,46 @@ impl WebView2Engine {
 }
 
 impl Engine for WebView2Engine {
-    // TODO(engine-shell): Accept-Language / navigator.languages and custom
-    // schemes (`copper://`), registered with the environment.
-    fn set_preferred_languages(&self, _languages: &[String]) {}
+    /// The environment's `Language` (the first entry: UI language and
+    /// first `Accept-Language` entry) and `--accept-lang` (the whole list:
+    /// `Accept-Language`, `navigator.languages`, the default `Intl`
+    /// locale). Both are fixed when the browser process starts: called
+    /// after the environment was made, the list applies from the next one
+    /// (after a browser crash, or the next launch), with a warning.
+    fn set_preferred_languages(&self, languages: &[String]) {
+        let list = crate::languages::normalize(languages);
+        let shown = list.join(",");
+        if !self.inner.env.set_languages(list) {
+            tracing::warn!(
+                "set_preferred_languages({shown}) after the WebView2 environment was made: \
+                 pages get these languages from the next browser process on"
+            );
+        }
+    }
 
-    fn register_scheme(&self, scheme: &str, _handler: copper_engine::SchemeHandler) -> Result<()> {
-        Err(EngineError::Other(format!(
-            "{scheme}: custom schemes are not wired yet"
-        )))
+    /// A secure custom scheme with an authority (`copper://canvas/1` has
+    /// origin `copper://canvas`), registered with the environment and
+    /// answered through every webview's `WebResourceRequested`. The
+    /// registration is part of the environment, so register before it is
+    /// made (right after `WebView2Engine::new`); a later scheme still gets
+    /// its handler and filters, with a warning, but WebView2 only routes
+    /// its requests from the next browser process on.
+    fn register_scheme(&self, scheme: &str, handler: copper_engine::SchemeHandler) -> Result<()> {
+        let scheme = crate::scheme::normalize(scheme).map_err(EngineError::InvalidArgument)?;
+        if !self.inner.schemes.insert(&scheme, handler) {
+            // A new handler for a known scheme: nothing else changes.
+            return Ok(());
+        }
+        if !self.inner.env.add_scheme(&scheme) {
+            tracing::warn!(
+                "register_scheme({scheme}) after the WebView2 environment was made: \
+                 {scheme}: URLs reach the handler from the next browser process on"
+            );
+        }
+        for page in self.inner.scripts.live_pages() {
+            page.scheme_added(&scheme);
+        }
+        Ok(())
     }
 
     type Profile = WebView2Profile;
