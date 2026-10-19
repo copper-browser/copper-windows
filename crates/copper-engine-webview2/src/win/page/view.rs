@@ -88,6 +88,54 @@ fn go(page: &Rc<PageInner>, delta: isize) {
 }
 
 impl PageView for WebView2Page {
+    type Weak = super::WebView2WeakPage;
+
+    fn page_id(&self) -> copper_engine::PageId {
+        self.inner.id
+    }
+
+    fn downgrade(&self) -> Self::Weak {
+        super::WebView2WeakPage {
+            inner: Rc::downgrade(&self.inner),
+        }
+    }
+
+    // TODO(engine-shell): the real view size, mapped state, raw snapshot,
+    // trusted-input switch and file chooser (copper-shell-core's needs).
+    fn view_size(&self) -> (u32, u32) {
+        (0, 0)
+    }
+
+    fn is_mapped(&self) -> bool {
+        false
+    }
+
+    fn snapshot_bitmap(&self) -> LocalFuture<Result<copper_engine::Bitmap>> {
+        Box::pin(async {
+            Err(copper_engine::EngineError::Snapshot(
+                "raw snapshots are not wired yet".into(),
+            ))
+        })
+    }
+
+    fn trusted_input(&self) -> copper_engine::TrustedInput {
+        copper_engine::TrustedInput {
+            pointer: true,
+            editing: true,
+            page_focus: true,
+        }
+    }
+
+    fn set_trusted_input(&self, _enabled: bool) {}
+
+    fn has_file_chooser(&self) -> bool {
+        false
+    }
+
+    fn cancel_file_chooser(&self) -> bool {
+        false
+    }
+
     type Filter = WebView2ContentFilter;
 
     fn load(&self, url: &str) {

@@ -120,13 +120,31 @@ pub(crate) struct PageInner {
     pub frames: RefCell<Vec<(ICoreWebView2Frame, Tokens)>>,
     /// Made by `new_related`: waits to become a popup's webview.
     pub related: bool,
+    /// Process-unique identity (`PageView::page_id`).
+    pub id: copper_engine::PageId,
 }
+
+/// Next `PageId` (never 0, never reused within a run).
+static NEXT_PAGE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// A WebView2 page. Cheap to clone; the webview closes when the last clone
 /// is dropped.
 #[derive(Clone)]
 pub struct WebView2Page {
     pub(crate) inner: Rc<PageInner>,
+}
+
+/// A [`WebView2Page`] that is not kept alive (`PageView::downgrade`).
+#[derive(Clone)]
+pub struct WebView2WeakPage {
+    pub(crate) inner: std::rc::Weak<PageInner>,
+}
+
+impl copper_engine::WeakPage for WebView2WeakPage {
+    type Page = WebView2Page;
+    fn upgrade(&self) -> Option<WebView2Page> {
+        self.inner.upgrade().map(|inner| WebView2Page { inner })
+    }
 }
 
 impl WebView2Page {
@@ -163,6 +181,9 @@ impl WebView2Page {
             html: RefCell::default(),
             frames: RefCell::default(),
             related,
+            id: copper_engine::PageId(
+                NEXT_PAGE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            ),
         });
         profile.add_page(&inner);
         profile.engine.scripts.register(&inner);

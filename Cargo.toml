@@ -28,6 +28,7 @@ copper-creds = { path = "shared/copper-linux/crates/copper-creds" }
 copper-import = { path = "shared/copper-linux/crates/copper-import" }
 copper-cloud = { path = "shared/copper-linux/crates/copper-cloud" }
 copper-mcp = { path = "shared/copper-linux/crates/copper-mcp" }
+copper-shell-core = { path = "shared/copper-linux/crates/copper-shell-core" }
 
 # Windows crates in this repo.
 copper-engine-webview2 = { path = "crates/copper-engine-webview2" }

@@ -194,6 +194,16 @@ impl WebView2Engine {
 }
 
 impl Engine for WebView2Engine {
+    // TODO(engine-shell): Accept-Language / navigator.languages and custom
+    // schemes (`copper://`), registered with the environment.
+    fn set_preferred_languages(&self, _languages: &[String]) {}
+
+    fn register_scheme(&self, scheme: &str, _handler: copper_engine::SchemeHandler) -> Result<()> {
+        Err(EngineError::Other(format!(
+            "{scheme}: custom schemes are not wired yet"
+        )))
+    }
+
     type Profile = WebView2Profile;
     type Filter = WebView2ContentFilter;
     type Page = WebView2Page;
