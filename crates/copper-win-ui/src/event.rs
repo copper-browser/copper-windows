@@ -12,6 +12,9 @@ pub enum Event {
     /// A pointer target was clicked, or a focused button was invoked from
     /// the keyboard (Enter, Space) or by UI Automation.
     Click(NodeId),
+    /// A middle click (press and release on the same pointer target): a
+    /// row's close, a link's new tab.
+    MiddleClick(NodeId),
     /// A secondary click or the context-menu key. `target` is the innermost
     /// pointer target under the point (or the focused node, from the
     /// keyboard); `at` is in window DIPs.

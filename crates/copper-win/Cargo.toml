@@ -18,8 +18,53 @@ copper-engine.workspace = true
 copper-pagejs.workspace = true
 copper-shield.workspace = true
 copper-cloud.workspace = true
+copper-creds.workspace = true
 copper-mcp.workspace = true
+copper-shell-core.workspace = true
 copper-setup = { path = "../copper-setup" }
+# The toolkit's platform-free half (keys, layout, the node tree) builds and
+# tests everywhere; its window lives behind `cfg(windows)`.
+copper-win-ui.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+# Favicons (decode) and the window's screenshot (encode); the same crate
+# copper-mcp already builds.
+png = "0.17"
+# Settings › Updates: one HTTP/1.1 exchange over TLS (`UpdatesApp::exchange`),
+# with the same rustls + ring + webpki-roots copper-cloud already links.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+
+[target.'cfg(windows)'.dependencies]
+copper-engine-webview2.workspace = true
+copper-win-rt.workspace = true
+windows-core.workspace = true
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Gdi",
+    "Win32_Networking_NetworkListManager",
+    "Win32_Security",
+    "Win32_Security_Authentication_Identity",
+    "Win32_Storage_Xps",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input_Pointer",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [build-dependencies]
 # Compiles the icon, manifest and version resource (llvm-rc when

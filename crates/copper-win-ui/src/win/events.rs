@@ -20,7 +20,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_IME_CHAR, WM_IME_COMPOSITION,
     WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KILLFOCUS,
     WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
     WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_PAINT, WM_POINTERDOWN,
     WM_POINTERENTER, WM_POINTERLEAVE, WM_POINTERUP, WM_POINTERUPDATE, WM_RBUTTONDOWN, WM_RBUTTONUP,
     WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER,
@@ -100,6 +100,12 @@ impl Ui {
                 }
                 self.tree.mark_visuals();
                 Some(r)
+            }
+            WM_MOVE => {
+                for (h, _) in self.slots.values() {
+                    h.window_moved();
+                }
+                None
             }
             WM_SIZE => {
                 self.sync_client_size();
@@ -509,6 +515,10 @@ impl Ui {
             self.to_slot(s, msg, wp, c);
             return;
         }
+        if msg == WM_MBUTTONDOWN {
+            self.middle = pick.target;
+            return;
+        }
         if msg != WM_LBUTTONDOWN && msg != WM_LBUTTONDBLCLK {
             return;
         }
@@ -618,9 +628,17 @@ impl Ui {
                 false
             }
             _ => {
-                if let Some(s) = self.tree.pick(p).target.filter(|&t| self.is_slot(t)) {
+                let target = self.tree.pick(p).target;
+                if let Some(s) = target.filter(|&t| self.is_slot(t)) {
                     self.to_slot(s, msg, wp, c);
                     return true;
+                }
+                if msg == WM_MBUTTONUP
+                    && let Some(t) = target
+                    && self.middle.take() == Some(t)
+                    && self.caption.which(t).is_none()
+                {
+                    self.events.push_back(Event::MiddleClick(t));
                 }
                 false
             }
