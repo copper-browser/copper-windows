@@ -13,7 +13,7 @@ use super::plate::{self, Hunt, Plate};
 use super::{Panel, when};
 use crate::chrome::glyph;
 use crate::platform::{Icon, Shell};
-use crate::sys::calendar::WinCalendar;
+use crate::sys::calendar::{self, WinCalendar};
 use copper_core::history::Trace;
 use copper_engine::{Engine, Profile, WebsiteDataKinds};
 use copper_shell_core::format::Calendar;
@@ -440,47 +440,12 @@ fn row(ui: &mut Ui, card: NodeId, t: &Trace, icon: Option<u32>, hits: &mut Vec<(
     );
     ui.tree.add(
         end,
-        Node::text(&clock(t.last.unix()), 11.5)
+        Node::text(&calendar::clock(t.last.unix()), 11.5)
             .ink(Token::Muted)
             .role(Role::None),
     );
     let forget = plate::quick(ui, end, "Remove", plate::RED, true);
     hits.push((forget, Hit::Forget(t.key.clone())));
-}
-
-/// The time of day in the user's short style (`When.clock`: `3:41 PM`,
-/// `15:41`).
-fn clock(unix: f64) -> String {
-    use windows::Win32::Foundation::SYSTEMTIME;
-    use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
-    use windows::core::PCWSTR;
-    let Some(t) = WinCalendar::civil(unix) else {
-        return String::new();
-    };
-    let time = SYSTEMTIME {
-        wYear: t.year.clamp(1601, 30827) as u16,
-        wMonth: t.month as u16,
-        wDay: t.day as u16,
-        wHour: t.hour as u16,
-        wMinute: t.minute as u16,
-        ..Default::default()
-    };
-    let mut buf = [0u16; 32];
-    // SAFETY: the user's locale, a valid time, a buffer of its length.
-    let n = unsafe {
-        GetTimeFormatEx(
-            PCWSTR::null(),
-            TIME_NOSECONDS,
-            Some(&time),
-            PCWSTR::null(),
-            Some(&mut buf),
-        )
-    };
-    if n > 1 {
-        String::from_utf16_lossy(&buf[..n as usize - 1])
-    } else {
-        format!("{:02}:{:02}", t.hour, t.minute)
-    }
 }
 
 /// Clear history (here and on Copper Cloud), every site's cookies and

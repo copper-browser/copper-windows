@@ -70,6 +70,42 @@ thread_local! {
     /// no look at the window.
     static ZONE: Cell<Option<([i32; 4], std::time::Instant)>> = const { Cell::new(None) };
     static NAMING: Cell<bool> = const { Cell::new(false) };
+    /// The space whose new profile is being named (New Profile…).
+    static NEW_PROFILE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// The profile menu for space `id` under `at` (`SpacePage.profile`, the
+/// `Picker(.menu)`): Shared, each profile in use, then New Profile….
+pub fn profile_menu(shell: &Shell, id: &str, at: Point) {
+    let (names, mine) = {
+        let b = shell.browser();
+        (b.profiles(), b.space(id).and_then(|s| s.profile.clone()))
+    };
+    let mut m = Menu::new()
+        .item(item::SHARED, "Shared")
+        .checked(mine.is_none());
+    for (i, n) in names.iter().enumerate() {
+        m = m
+            .item(i as u32 + 1, n)
+            .checked(mine.as_deref() == Some(n.as_str()));
+    }
+    m = m.separator().item(item::NEW_PROFILE, "New Profile\u{2026}");
+    PROFILES.with(|p| *p.borrow_mut() = names);
+    MENU.with(|m| *m.borrow_mut() = Some((id.to_string(), at)));
+    shell
+        .view()
+        .chrome()
+        .edit(move |ui, _| ui.show_menu(PROFILE_MENU, &m, at));
+}
+
+/// Whether space `id`'s new profile is being named on Settings › Spaces.
+pub fn naming_profile(id: &str) -> bool {
+    NEW_PROFILE.with(|n| n.borrow().as_deref() == Some(id))
+}
+
+/// Done naming a profile (named, or left).
+pub fn named_profile() {
+    NEW_PROFILE.with(|n| n.borrow_mut().take());
 }
 
 /// Note where the chips are now (client pixels), a little wider.
@@ -246,34 +282,25 @@ pub fn menu_chosen(shell: &Shell, menu: u32, chosen: u32) -> bool {
             }
             chrome.edit(move |ui, _| ui.show_menu(COLOUR_MENU, &m, at));
         }
-        (SPACE_MENU, item::PROFILE) => {
-            let (names, mine) = {
-                let b = shell.browser();
-                (b.profiles(), b.space(&id).and_then(|s| s.profile.clone()))
-            };
-            let mut m = Menu::new()
-                .item(item::SHARED, "Shared")
-                .checked(mine.is_none());
-            for (i, n) in names.iter().enumerate() {
-                m = m
-                    .item(i as u32 + 1, n)
-                    .checked(mine.as_deref() == Some(n.as_str()));
-            }
-            m = m.separator().item(item::NEW_PROFILE, "New Profile…");
-            PROFILES.with(|p| *p.borrow_mut() = names);
-            chrome.edit(move |ui, _| ui.show_menu(PROFILE_MENU, &m, at));
-        }
+        (SPACE_MENU, item::PROFILE) => profile_menu(shell, &id, at),
         (SPACE_MENU, item::DELETE) => ask_delete(shell, &id),
         (COLOUR_MENU, i) => {
             if let Some(c) = SpaceColour::ALL.get(i as usize) {
                 shell.set_space_colour(&id, *c);
             }
         }
-        (PROFILE_MENU, item::SHARED) => shell.set_space_profile(&id, None),
-        (PROFILE_MENU, item::NEW_PROFILE) => edit(shell, &id),
+        (PROFILE_MENU, item::SHARED) => {
+            NEW_PROFILE.with(|n| n.borrow_mut().take());
+            shell.set_space_profile(&id, None);
+        }
+        (PROFILE_MENU, item::NEW_PROFILE) => {
+            NEW_PROFILE.with(|n| *n.borrow_mut() = Some(id.clone()));
+            edit(shell, &id);
+        }
         (PROFILE_MENU, i) => {
             let name = PROFILES.with(|p| p.borrow().get(i as usize - 1).cloned());
             if let Some(n) = name {
+                NEW_PROFILE.with(|n| n.borrow_mut().take());
                 shell.set_space_profile(&id, Some(&n));
             }
         }

@@ -112,22 +112,28 @@ pub fn show(shell: &Shell) {
     shell.view().overlay_changed();
     // Which browsers there are to bring from is a look at the disk: off
     // the window's thread.
-    std::thread::spawn(|| {
-        let found = bring::installed();
-        let is_default = crate::sys::privacy::is_default_browser();
-        copper_win_rt::post(move || {
-            let Some(shell) = crate::platform::current() else {
-                return;
-            };
-            shell.view().chrome().edit(move |ui, st| {
-                if let Some(w) = st.welcome.as_mut() {
-                    w.sources = found;
-                    w.is_default = is_default;
-                    if w.page == 1 || w.page == 3 {
-                        w.refresh(ui);
-                    }
+    copper_win_rt::spawn_local(async {
+        let Some((found, is_default)) = crate::sys::work::off_thread(|| {
+            (
+                bring::installed(),
+                crate::sys::privacy::is_default_browser(),
+            )
+        })
+        .await
+        else {
+            return;
+        };
+        let Some(shell) = crate::platform::current() else {
+            return;
+        };
+        shell.view().chrome().edit(move |ui, st| {
+            if let Some(w) = st.welcome.as_mut() {
+                w.sources = found;
+                w.is_default = is_default;
+                if w.page == 1 || w.page == 3 {
+                    w.refresh(ui);
                 }
-            });
+            }
         });
     });
 }
@@ -950,26 +956,26 @@ fn bring_in(shell: &Shell) {
     }) else {
         return;
     };
-    std::thread::spawn(move || {
-        let found = bring::read(&source);
-        copper_win_rt::post(move || {
-            let Some(shell) = crate::platform::current() else {
-                return;
-            };
-            let taken = bring::take(found, &mut shell.bookmarks_mut());
-            let list = shell.bookmarks().roots().to_vec();
-            shell.saver().schedule(list);
-            let said = match taken {
-                1 => "1 bookmark".to_string(),
-                n => format!("{n} bookmarks"),
-            };
-            shell.view().chrome().edit(move |ui, st| {
-                if let Some(w) = st.welcome.as_mut() {
-                    w.bringing = false;
-                    w.brought = Some(said);
-                    w.refresh(ui);
-                }
-            });
+    copper_win_rt::spawn_local(async move {
+        let Some(found) = crate::sys::work::off_thread(move || bring::read(&source)).await else {
+            return;
+        };
+        let Some(shell) = crate::platform::current() else {
+            return;
+        };
+        let taken = bring::take(found, &mut shell.bookmarks_mut());
+        let list = shell.bookmarks().roots().to_vec();
+        shell.saver().schedule(list);
+        let said = match taken {
+            1 => "1 bookmark".to_string(),
+            n => format!("{n} bookmarks"),
+        };
+        shell.view().chrome().edit(move |ui, st| {
+            if let Some(w) = st.welcome.as_mut() {
+                w.bringing = false;
+                w.brought = Some(said);
+                w.refresh(ui);
+            }
         });
     });
 }
