@@ -102,6 +102,8 @@ pub const BINDINGS: &[(&str, &[Chord])] = &[
     ("new-tab", &[c(l('T'))]),
     ("new-private-tab", &[cs(l('N'))]),
     ("new-canvas", &[cs(l('E'))]),
+    // Before Bookmarks: the first binding of a chord wins (Mac ⌘⇧O).
+    ("personal-canvas", &[cs(l('O'))]),
     ("close-tab", &[c(l('W')), c(Key::F(4))]),
     ("reopen-tab", &[cs(l('T'))]),
     ("next-tab", &[c(Key::Tab), c(Key::PageDown)]),

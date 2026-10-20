@@ -614,9 +614,10 @@ pub fn perform(shell: &Shell, row: &Row, purpose: Purpose, private: bool, how: H
             }
         }
         Action::Reopen { url, .. } => reopen_ghost(shell, url),
-        // `copper://cloud/…` links open Settings › Cloud; the canvas's
-        // `Action::Go(url) if crate::canvas::go(..)` arm sits after this one.
+        // `copper://cloud/…` links open Settings › Cloud; `copper://canvas/…`
+        // opens in the canvas's own way.
         Action::Go(url) if crate::cloud::open_link(shell, url) => {}
+        Action::Go(url) if crate::canvas::go(shell, url, purpose == Purpose::Edit && !new_tab) => {}
         Action::Go(url) => match purpose {
             // `Ctrl+L` and `Ctrl+K` go in the tab you are on (`Browser.submit`).
             Purpose::Edit | Purpose::Palette if !new_tab && shell.active_id().is_some() => {

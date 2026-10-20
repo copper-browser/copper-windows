@@ -111,3 +111,15 @@ pub const LOCK: char = '\u{E72E}';
 pub const DIALPAD: char = '\u{E75F}';
 /// `sidebar.right`: the Agent sidebar (Segoe Fluent `DockRight`).
 pub const AGENT_SIDEBAR: char = '\u{E90D}';
+/// A person (Contact): the Personal canvas.
+pub const PERSON: char = '\u{E77B}';
+/// People: a shared canvas.
+pub const PEOPLE: char = '\u{E716}';
+/// Mail: an invitation.
+pub const MAIL: char = '\u{E715}';
+/// AddFriend: the invite pill.
+pub const PERSON_ADD: char = '\u{E8FA}';
+/// ChevronLeft: back to the list.
+pub const CHEVRON_LEFT: char = '\u{E76B}';
+/// OpenInNewWindow: open in a tab.
+pub const WINDOW: char = '\u{E8A7}';

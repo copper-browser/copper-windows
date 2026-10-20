@@ -31,7 +31,6 @@ mod actions;
 mod agents;
 #[cfg(windows)]
 mod app;
-#[cfg(windows)]
 mod canvas;
 #[cfg(windows)]
 mod chrome;
