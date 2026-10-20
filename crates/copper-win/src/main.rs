@@ -19,6 +19,7 @@
 // Elsewhere only the platform-free logic is built, for its tests.
 #![cfg_attr(not(windows), allow(dead_code))]
 
+mod addons;
 mod args;
 mod cli;
 mod keys;
