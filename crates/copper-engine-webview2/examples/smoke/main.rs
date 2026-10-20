@@ -4,7 +4,7 @@
 //! smoke [URL] [--backstage] [--snapshot OUT.png] [--data DIR] [--log FILE]
 //!       [--scheme] [--lang de-DE,fr] [--bitmap OUT.png] [--file-chooser]
 //!       [--input-check] [--profile-check] [--context-menu-check]
-//!       [--download-ask-check] [--nav-filter-check] [--sweep LIST]
+//!       [--download-ask-check] [--nav-filter-check] [--world-check] [--sweep LIST]
 //!       [--sweep-out DIR] [--profile ID] [--prewarm] [--hold MS] [--exit]
 //! ```
 //!
@@ -52,6 +52,8 @@
 //!   `Profile::download` — then Mac-style free names (`name 2.ext`).
 //! * `--nav-filter-check`: the navigation filter — refused `load`, link
 //!   click, script and redirect; after a sleep; removed.
+//! * `--world-check`: an isolated world's message handler hears every new
+//!   document (document start and end), same-site and cross-site.
 //! * `--sweep LIST`: a crash sweep — each site of `LIST` (a file of URLs,
 //!   or URLs separated by commas) loaded in the page, scrolled, its first
 //!   text field typed into and snapshotted into `--sweep-out DIR`
@@ -87,6 +89,8 @@ mod run;
 mod sweep;
 #[cfg(windows)]
 mod window;
+#[cfg(windows)]
+mod world_check;
 
 #[cfg(windows)]
 fn main() {

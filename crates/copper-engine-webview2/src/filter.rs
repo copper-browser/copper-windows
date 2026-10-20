@@ -205,8 +205,64 @@ impl FilterStore {
     }
 }
 
+/// What a profile has installed, as the engine last left it: filter id →
+/// (Chromium's extension id, the filter's version). Chromium keeps a
+/// profile's extensions across runs but tells only their id and name, so
+/// this record says which one is still the right build (kept at start
+/// instead of being removed and added again, seconds of a launch during
+/// which pages load unfiltered).
+pub(crate) type Installed = std::collections::BTreeMap<String, (String, u64)>;
+
+/// Read [`Installed`] from `path` (empty if it is missing or unreadable).
+pub(crate) fn read_installed(path: &Path) -> Installed {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Installed::new();
+    };
+    let Ok(map) =
+        serde_json::from_str::<std::collections::BTreeMap<String, (String, String)>>(&text)
+    else {
+        return Installed::new();
+    };
+    map.into_iter()
+        .filter_map(|(id, (ext, v))| Some((id, (ext, u64::from_str_radix(&v, 16).ok()?))))
+        .collect()
+}
+
+/// Write [`Installed`] to `path` (best effort: a lost record only costs a
+/// reinstall).
+pub(crate) fn write_installed(path: &Path, installed: &Installed) {
+    let map: std::collections::BTreeMap<&String, (&String, String)> = installed
+        .iter()
+        .map(|(id, (ext, v))| (id, (ext, format!("{v:x}"))))
+        .collect();
+    let Ok(text) = serde_json::to_string(&map) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn installed_record_round_trips() {
+        let dir = std::env::temp_dir().join(format!("cw3-installed-{}", crate::util::next_id()));
+        let path = dir.join("installed").join("default.json");
+        assert!(super::read_installed(&path).is_empty());
+        let mut rec = super::Installed::new();
+        rec.insert("shield".into(), ("abcdef".into(), u64::MAX - 7));
+        super::write_installed(&path, &rec);
+        assert_eq!(super::read_installed(&path), rec);
+        std::fs::write(&path, "not json").unwrap();
+        assert!(super::read_installed(&path).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     use super::*;
 
     #[test]

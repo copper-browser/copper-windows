@@ -23,6 +23,7 @@ use super::save_dialog::{AskOwner, SaveQueue};
 use super::schemes::Schemes;
 use super::window::{OwnedWindow, park_window};
 use super::{com, paths};
+use crate::appearance::{ColorScheme, Ground};
 use crate::filter::{FilterStore, WebView2ContentFilter};
 use crate::profile_home;
 
@@ -116,6 +117,13 @@ pub(crate) struct EngineInner {
     pub download_ask: Cell<Option<AskOwner>>,
     /// The Save As dialogs downloads ask with, one at a time.
     pub save_queue: SaveQueue,
+    /// Where an open Save As dialog leaves its mark (`crate::partials`).
+    pub asks_dir: PathBuf,
+    /// What every webview shows where its page has painted nothing
+    /// (`set_page_ground`).
+    pub ground: Cell<Ground>,
+    /// What pages are told about the colour scheme (`set_color_scheme`).
+    pub color_scheme: Cell<ColorScheme>,
 }
 
 impl EngineInner {
@@ -169,6 +177,8 @@ impl WebView2Engine {
             extra_arguments: extra,
         });
         let park = park_window().map_err(|e| com::other("host window", e))?;
+        let asks_dir = paths.cache_root.join("download-asks");
+        sweep_dead_asks(asks_dir.clone());
         let filters = FilterStore::new(paths.content_filter_dir());
         let inner = Rc::new(EngineInner {
             paths,
@@ -183,6 +193,9 @@ impl WebView2Engine {
             schemes: Schemes::default(),
             download_ask: Cell::new(None),
             save_queue: SaveQueue::default(),
+            asks_dir,
+            ground: Cell::new(Ground::WHITE),
+            color_scheme: Cell::new(ColorScheme::Auto),
         });
         Ok(WebView2Engine { inner })
     }
@@ -234,6 +247,50 @@ impl WebView2Engine {
     pub fn set_download_ask(&self, ask: bool, owner: HWND) {
         let owner = ask.then_some(AskOwner(owner.0 as isize));
         self.inner.download_ask.set(owner);
+    }
+
+    /// The colour every webview shows where its page has painted nothing:
+    /// before the first paint of a cold start or a new tab, on a blank or
+    /// failed page, around a page smaller than its slot. Give it the
+    /// window's ground, so the dark never flashes white. Applies at once to
+    /// every page and warm spare, and to every webview made later.
+    pub fn set_page_ground(&self, ground: Ground) {
+        if self.inner.ground.replace(ground) == ground {
+            return;
+        }
+        for p in self.inner.profiles() {
+            p.ground_changed(ground);
+        }
+    }
+
+    /// The colour scheme pages are told to use (`prefers-color-scheme`,
+    /// form controls, scroll bars): `Auto` follows Windows, `Light` and
+    /// `Dark` hold whatever Windows does — Copper's Look setting. Applies at
+    /// once to every profile (InPrivate ones too), and to profiles made
+    /// later.
+    pub fn set_color_scheme(&self, scheme: ColorScheme) {
+        if self.inner.color_scheme.replace(scheme) == scheme {
+            return;
+        }
+        for p in self.inner.profiles() {
+            p.color_scheme_changed(scheme);
+        }
+    }
+}
+
+/// Off the UI thread: remove the partial files of downloads whose Save As
+/// dialog was open when Copper last ended without closing it.
+fn sweep_dead_asks(dir: PathBuf) {
+    let now = std::time::SystemTime::now();
+    let spawned = std::thread::Builder::new()
+        .name("copper-download-sweep".into())
+        .spawn(move || {
+            for f in crate::partials::sweep(&dir, now) {
+                tracing::info!("removed a cut-off download's partial file {}", f.display());
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!("download sweep: {e}");
     }
 }
 

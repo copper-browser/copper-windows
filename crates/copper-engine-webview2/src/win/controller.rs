@@ -8,6 +8,7 @@ use windows::Win32::Foundation::{E_POINTER, HWND};
 use windows::core::Interface;
 
 use super::com::{hs, other};
+use crate::appearance::{ColorScheme, Ground};
 
 /// One webview: its composition controller, controller and core.
 #[derive(Clone)]
@@ -18,12 +19,13 @@ pub(crate) struct Wv {
 }
 
 /// Make a hidden composition controller in WebView2 profile `name` (`None`:
-/// WebView2's default profile).
+/// WebView2's default profile), showing `ground` until its page paints.
 pub(crate) async fn create(
     env: &ICoreWebView2Environment,
     parent: HWND,
     name: Option<&str>,
     private: bool,
+    ground: Ground,
 ) -> Result<Wv> {
     let env10: ICoreWebView2Environment10 = env.cast().map_err(|_| {
         EngineError::Other("the WebView2 Runtime is too old (needs profiles)".into())
@@ -64,7 +66,31 @@ pub(crate) async fn create(
             let _ = c3.SetShouldDetectMonitorScaleChanges(false);
         }
     }
+    set_ground(&ctl, ground);
     Ok(Wv { comp, ctl, view })
+}
+
+/// What the webview shows where its page has painted nothing (opaque).
+pub(crate) fn set_ground(ctl: &ICoreWebView2Controller, ground: Ground) {
+    if let Ok(c2) = ctl.cast::<ICoreWebView2Controller2>() {
+        let color = COREWEBVIEW2_COLOR {
+            A: 255,
+            R: ground.r,
+            G: ground.g,
+            B: ground.b,
+        };
+        if let Err(e) = unsafe { c2.SetDefaultBackgroundColor(color) } {
+            tracing::debug!("default background colour: {e}");
+        }
+    }
+}
+
+/// The colour scheme a profile's pages are told to use.
+pub(crate) fn set_color_scheme(profile: &ICoreWebView2Profile, scheme: ColorScheme) {
+    let value = COREWEBVIEW2_PREFERRED_COLOR_SCHEME(scheme.raw());
+    if let Err(e) = unsafe { profile.SetPreferredColorScheme(value) } {
+        tracing::debug!("preferred colour scheme: {e}");
+    }
 }
 
 /// Per-page settings (a spare is made before its page's options are known).

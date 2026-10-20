@@ -29,12 +29,15 @@ pub use context_menu::ContextMenuReply;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// How long script waits for a page's first document ([`PageInner::first_document`]).
+const FIRST_DOCUMENT_LIMIT: Duration = Duration::from_secs(15);
 
 use copper_engine::{
     EngineError, EventSink, NewWindowHandler, PageEvent, PageOptions, PermissionId, Result,
 };
-use copper_win_rt::oneshot;
+use copper_win_rt::{OneshotTx, oneshot};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_PERMISSION_STATE_DENY, ICoreWebView2_8, ICoreWebView2Deferral,
     ICoreWebView2PermissionRequestedEventArgs,
@@ -138,6 +141,14 @@ pub(crate) struct PageInner {
     pub chooser: chooser::PageChooser,
     /// `set_trusted_input(false)`: every input action from script.
     pub script_input: Cell<bool>,
+    /// The current webview's first document: a navigation was sent to it
+    /// (`doc_coming`), and it got as far as `DOMContentLoaded` or ended
+    /// (`doc_ready`). See [`PageInner::first_document`].
+    doc_coming: Cell<bool>,
+    doc_ready: Cell<bool>,
+    doc_waiters: RefCell<Vec<OneshotTx<()>>>,
+    /// The URL a failed load's knock is out for (`events::fail_after_knock`).
+    knocking: RefCell<Option<String>>,
     /// `set_context_menu_handler`: the app renders context menus.
     pub context_menu: RefCell<Option<ContextMenuHandler>>,
     /// `set_navigation_filter`.
@@ -209,6 +220,10 @@ impl WebView2Page {
             schemes: scheme::PageSchemes::default(),
             chooser: chooser::PageChooser::default(),
             script_input: Cell::new(false),
+            doc_coming: Cell::new(false),
+            doc_ready: Cell::new(false),
+            doc_waiters: RefCell::default(),
+            knocking: RefCell::default(),
             context_menu: RefCell::default(),
             nav_filter: RefCell::default(),
             refused: RefCell::default(),
@@ -300,6 +315,47 @@ impl PageInner {
         self.with_view(op);
     }
 
+    /// A navigation was sent to the current webview.
+    pub fn document_coming(&self) {
+        self.doc_coming.set(true);
+    }
+
+    /// The current webview's document is in place (`DOMContentLoaded`), or
+    /// its navigation ended.
+    pub fn document_ready(&self) {
+        if self.doc_ready.replace(true) {
+            return;
+        }
+        let waiters = std::mem::take(&mut *self.doc_waiters.borrow_mut());
+        for w in waiters {
+            w.send(());
+        }
+    }
+
+    /// Until the first navigation sent to the current webview has its
+    /// document (at once if none was sent, or it already has).
+    ///
+    /// Script run before that runs in the webview's initial `about:blank`,
+    /// whose `window` Chromium hands on to the document the navigation
+    /// makes (HTML's initial-about:blank reuse): what the script put on
+    /// `window` is there, but what it put on `document` (listeners) is
+    /// not. A script that installs itself once per page (guarded by a
+    /// `window` property, like the forms relay) then never installs on the
+    /// page at all. So script waits for the real document, as WebKit's
+    /// effectively does.
+    pub async fn first_document(self: &Rc<Self>) {
+        if self.doc_ready.get() || !self.doc_coming.get() {
+            return;
+        }
+        let (tx, rx) = oneshot::<()>();
+        self.doc_waiters.borrow_mut().push(tx);
+        if super::com::within(rx, FIRST_DOCUMENT_LIMIT).await.is_none() {
+            tracing::debug!("script ran before the page's first document was ready");
+            // Once: what comes later does not wait again.
+            self.document_ready();
+        }
+    }
+
     /// The webview, once it exists.
     pub async fn view(self: &Rc<Self>) -> Result<Wv> {
         if let Some(wv) = self.wv() {
@@ -367,6 +423,8 @@ impl PageInner {
             }
         };
         self.generation.set(self.generation.get() + 1);
+        self.doc_coming.set(false);
+        self.doc_ready.set(false);
         let builtin = self.profile.engine.builtin_error_page.get();
         controller::configure(&wv, &self.opts, builtin);
         if let Err(e) = events::wire(self, &wv) {
