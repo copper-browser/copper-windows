@@ -47,6 +47,7 @@ pub fn handle(chrome: &Rc<Chrome>, e: Event) {
         }
         Event::FieldCancel(id) if is_card_field(chrome, id) => crate::palette::close(&shell),
         Event::FieldChanged(id) | Event::FieldSubmit(id) | Event::FieldCancel(id) => {
+            crate::canvas::field_event(&shell, id, &e);
             crate::find::field_event(&shell, id, &e);
             crate::panels::field_event(&shell, id, &e);
         }
@@ -129,7 +130,7 @@ fn click(chrome: &Rc<Chrome>, shell: &Shell, id: NodeId) {
         Clicked::Strip(h) => strip_click(shell, h),
         Clicked::Stage(StageHit::StatusButton(tab)) => shell.reload(&tab),
         Clicked::Other(id) => {
-            if !crate::panels::click(shell, id) {
+            if !crate::panels::click(shell, id) && !crate::canvas::click(shell, id) {
                 crate::find::click(shell, id);
             }
         }
@@ -168,9 +169,7 @@ fn column_click(chrome: &Rc<Chrome>, shell: &Shell, h: ColumnHit) {
         ColumnHit::Bookmarks => {
             crate::commands::run(shell, "show-bookmarks");
         }
-        ColumnHit::Canvas => {
-            crate::commands::run(shell, "new-canvas");
-        }
+        ColumnHit::Canvas => crate::canvas::door::toggle(shell),
         ColumnHit::Space(id) => {
             shell.switch_space(&id);
         }
@@ -215,20 +214,26 @@ fn tab_at(chrome: &Chrome, id: NodeId) -> Option<TabId> {
 }
 
 fn context_menu(chrome: &Rc<Chrome>, shell: &Shell, target: Option<NodeId>, at: Point) {
+    if crate::canvas::context_menu(shell, target, at) {
+        return;
+    }
     let Some(tab) = target.and_then(|t| tab_at(chrome, t)) else {
         return;
     };
-    let facts = {
+    let (facts, canvas) = {
         let b = shell.browser();
         let Some(t) = b.tab(&tab) else { return };
-        TabFacts {
+        let canvas = crate::canvas::tab_menu_items(shell, t);
+        let facts = TabFacts {
             pinned: t.is_pinned(),
             blank: t.url.is_empty() || t.url.starts_with("about:blank"),
             saved: shell.tab_view(&tab).is_some_and(|v| v.saved),
             several: shell.visible_ids().len() > 1,
-        }
+        };
+        (facts, canvas)
     };
-    let menu = menus::tab_menu(facts);
+    let mut menu = menus::tab_menu(facts);
+    menu.items.splice(0..0, canvas);
     chrome.edit(move |ui, st| {
         st.menus.tab = Some(tab);
         ui.show_menu(menus::TAB_MENU, &menu, at);
@@ -238,6 +243,9 @@ fn context_menu(chrome: &Rc<Chrome>, shell: &Shell, target: Option<NodeId>, at: 
 fn menu_chosen(chrome: &Rc<Chrome>, shell: &Shell, menu: u32, chosen: u32) {
     if menu == crate::forms::PICKER_MENU {
         crate::forms::picked(chosen);
+        return;
+    }
+    if crate::canvas::menu_chosen(shell, menu, chosen) {
         return;
     }
     if menu != menus::TAB_MENU {

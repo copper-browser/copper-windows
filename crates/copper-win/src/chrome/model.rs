@@ -121,6 +121,9 @@ pub fn title_of(name: &str) -> String {
 /// The host the address shows at rest (`Side.swift`'s `SideAddress`): no
 /// `www.`; a page with no host (a file, `about:`) shows its address.
 pub fn shown_host(host: &str, url: &str) -> String {
+    if let Some(l) = crate::canvas::address_label(url) {
+        return l;
+    }
     let h = host.strip_prefix("www.").unwrap_or(host);
     if !h.is_empty() {
         return h.to_string();
