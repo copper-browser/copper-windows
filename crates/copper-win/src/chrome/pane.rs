@@ -6,9 +6,10 @@
 //! ```text
 //! pane ············ the slot: full stage height, `agent.paneWidth` wide
 //! ├─ body
-//! │  ├─ placeholder · Copper's own face: a head, then "No agent here yet"
-//! │  │                and the way to Settings › Addons
-//! │  └─ slot ······ the addon's page (made on first show, kept while hidden)
+//! │  ├─ placeholder · with nothing to show: a head, then "No agent here
+//! │  │                yet" and the way to Settings › Addons
+//! │  └─ slot ······ the page (made on first show, kept while hidden): the
+//! │                 cloud's addon, else Copper's own agent (`addons::builtin`)
 //! └─ grip ········· the leading 6 px: drag left to widen
 //! ```
 //!
@@ -248,13 +249,103 @@ pub fn view() -> Option<Rc<AddonView>> {
     pane().view.borrow().clone()
 }
 
-/// Which face shows: `"addon"`, `"placeholder"`.
+/// Which face shows: `"agent"` (Copper's own, the built-in addon),
+/// `"addon"` (the cloud's), `"placeholder"`.
 pub fn face() -> &'static str {
-    if view().is_some() {
-        "addon"
-    } else {
-        "placeholder"
+    match view() {
+        Some(v) if crate::addons::builtin::is(&v.addon()) => "agent",
+        Some(_) => "addon",
+        None => "placeholder",
     }
+}
+
+/// The slot's nodes as laid out now, one line each (the self-test's
+/// record of what the pane drew).
+pub fn layout_dump(shell: &Shell) -> String {
+    let Some(n) = pane().nodes.get() else {
+        return "no pane".into();
+    };
+    shell
+        .view()
+        .chrome()
+        .read(move |ui, _| {
+            let mut out = String::new();
+            let mut stack = vec![(n.pane, 0usize)];
+            while let Some((id, depth)) = stack.pop() {
+                let Some(node) = ui.tree.get(id) else {
+                    continue;
+                };
+                let r = ui.tree.window_rect(id);
+                let what = node
+                    .text_str()
+                    .map(|t| format!("{t:?}"))
+                    .unwrap_or_else(|| node.a11y.name.clone());
+                out.push_str(&format!(
+                    "{:indent$}{what} [{:.0},{:.0} {:.0}x{:.0}]{}{} opacity {:.2}\n",
+                    "",
+                    r.x,
+                    r.y,
+                    r.w,
+                    r.h,
+                    if node.style.hidden { " hidden" } else { "" },
+                    if ui.tree.is_shown(id) {
+                        ""
+                    } else {
+                        " not-shown"
+                    },
+                    node.transform.opacity,
+                    indent = depth * 2,
+                ));
+                for &c in ui.tree.children(id).iter().rev() {
+                    stack.push((c, depth + 1));
+                }
+            }
+            out
+        })
+        .unwrap_or_default()
+}
+
+/// One part of the window: what it is, its bottom edge, its height (DIPs).
+pub type Fit = (String, f32, f32);
+
+/// Whether the window's parts fit it (the self-test's check that a long
+/// tab list no longer makes the body taller than the window): the client
+/// height, and the bottom edges of the pane, the well it sits in, the
+/// shown page slots, the tab column and its list — every one of which
+/// must be inside the window.
+pub fn fit_report(shell: &Shell) -> Option<(f32, Vec<Fit>)> {
+    let n = pane().nodes.get()?;
+    shell.view().chrome().read(move |ui, _| {
+        let root = ui.tree.root()?;
+        let window = ui.tree.window_rect(root).h;
+        let mut out = Vec::new();
+        let mut push = |what: String, id: NodeId| {
+            let r = ui.tree.window_rect(id);
+            out.push((what, r.y + r.h, r.h));
+        };
+        if ui.tree.is_shown(n.pane) {
+            push("pane".into(), n.pane);
+            if let Some(well) = ui.tree.parent(n.pane) {
+                push("well".into(), well);
+            }
+        }
+        let mut found = Vec::new();
+        ui.tree.walk(|id, node| {
+            let named = matches!(node.a11y.name.as_str(), "Tabs" | "Open tabs");
+            if (named || node.is_slot()) && ui.tree.is_shown(id) {
+                let what = if named {
+                    node.a11y.name.clone()
+                } else {
+                    format!("slot {}", node.a11y.name)
+                };
+                found.push((what, id));
+            }
+        });
+        for (what, id) in found {
+            push(what, id);
+        }
+        Some((window, out))
+    })?
 }
 
 /// The shell is up: the kept width, and the grip's drag.
@@ -378,17 +469,18 @@ pub fn click(shell: &Shell, id: NodeId) -> bool {
     }
 }
 
-/// Bring the slot in line with the addon the core says it shows: nothing
-/// (placeholder), the same one (settings may have changed, or a new
-/// version: reload), or another addon (a new page). Before the first show
-/// nothing is made: the page is made from the state then.
+/// Bring the slot in line with what fills it (`builtin::slot_active`:
+/// the cloud's addon, else Copper's own agent): nothing (placeholder), the
+/// same one (settings may have changed, or a new version: reload), or
+/// another (a new page). Before the first show nothing is made: the page
+/// is made from the state then.
 pub fn sync(shell: &Shell) {
     let p = pane();
     let Some(n) = p.nodes.get() else { return };
     if !p.shown.get() && p.view.borrow().is_none() {
         return;
     }
-    let active = crate::addons::glue::active();
+    let active = crate::addons::builtin::slot_active();
     let current = p.view.borrow().clone();
     let chrome = shell.view().chrome().clone();
     match (active, current) {
@@ -544,6 +636,19 @@ pub fn grip_point(shell: &Shell) -> Option<(i32, i32)> {
             ((r.y + r.h / 2.0) * s).round() as i32,
         )
     })
+}
+
+/// One DIP wider for a moment, then back, nothing kept: the page in the
+/// slot draws afresh (the self-test's pictures, taken while no display
+/// is attached, otherwise catch an old frame of it).
+pub fn nudge(shell: &Shell, wider: bool) {
+    let p = pane();
+    let Some(n) = p.nodes.get() else { return };
+    let w = p.width.get() + if wider { 1.0 } else { 0.0 };
+    shell
+        .view()
+        .chrome()
+        .edit(move |ui, _| ui.tree.set_prop(n.pane, Prop::Width, w));
 }
 
 /// Settings or a test changed the width: apply `w` now and keep it.

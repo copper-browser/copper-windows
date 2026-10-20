@@ -2,7 +2,9 @@
 //! Mac's `Fork/Addons/AddonsSettings.swift`; Linux `addons/settings.rs`).
 //! Installed and staged addons — name, version, slot, source cloud — each
 //! with "Use in Agent sidebar" and "Remove"; "Check for addon updates";
-//! and, with no cloud linked, the way to link one.
+//! and, with no cloud linked, the way to link one. Copper's own agent (the
+//! built-in addon, `addons::builtin`) is never listed: it is what the slot
+//! shows when no addon here does.
 
 use crate::addons::glue;
 use crate::chrome::{glyph, pane};
@@ -82,7 +84,7 @@ impl Page for Addons {
                 Some(if a.enabled {
                     "Ctrl+E shows it, right of the page."
                 } else {
-                    "Off here: the Agent sidebar shows Copper's own page."
+                    "Off here: the Agent sidebar shows Copper's own agent."
                 }),
                 &format!("use:{}", a.id),
                 a.enabled,

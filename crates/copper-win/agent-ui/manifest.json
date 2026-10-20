@@ -1,0 +1,16 @@
+{
+  "schema": "copper-addon/1",
+  "id": "copper.agent",
+  "name": "Copper agent",
+  "version": "1.0.0",
+  "slot": "agent-sidebar",
+  "entry": "index.html",
+  "description": "Copper's own agent: ask about the page, or say what to do, and it reads, clicks, types and draws for you.",
+  "author": "Copper",
+  "bridge": 1,
+  "permissions": {
+    "hosts": [],
+    "capabilities": ["open-url", "page", "agent"]
+  },
+  "platforms": ["windows"]
+}

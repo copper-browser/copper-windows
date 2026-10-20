@@ -317,10 +317,17 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
             .name("Favourites"),
     );
 
-    // The space's rows, in one scroll.
+    // The space's rows, in one scroll. It shrinks to the room the column
+    // has: a scroll measures as tall as all its rows, and without
+    // shrinking a long list pushed the column (and the whole body under
+    // the strip — page, stage, Agent sidebar) taller than the window.
     let scroll = ui.tree.add(
         side_n,
-        Node::scroll().grow(1.0).name("Open tabs").role(Role::List),
+        Node::scroll()
+            .grow(1.0)
+            .shrink(1.0)
+            .name("Open tabs")
+            .role(Role::List),
     );
     // The pill is a layer of its own (it glides), beneath the rows' layer:
     // a layer composes over its parent's painted content, so inside the

@@ -4,15 +4,18 @@
 //! A slot is a region of the window whose content an addon may replace. v1
 //! has one, the **Agent sidebar** (`agent-sidebar`): the pane right of the
 //! page, toggled by Ctrl+E ([`crate::chrome::pane`]). With no addon it
-//! shows Copper's own placeholder; with one it shows the addon's page,
-//! served from its installed bundle as `copper-addon://<id>/` in a WebView2
-//! page of its own, speaking to Copper through `window.copper` (bridge v1).
+//! shows Copper's own agent — the built-in addon [`builtin`], compiled
+//! in — or, with that turned off, Copper's placeholder; with one it shows
+//! the addon's page, served from its installed bundle as
+//! `copper-addon://<id>/` in a WebView2 page of its own, speaking to Copper
+//! through `window.copper` (bridge v1).
 //!
 //! | Module | What | Mac |
 //! |---|---|---|
 //! | `chrome::pane` | the slot on screen: fade, width grip, placeholder | `AddonUI.swift` (`AgentSlot`) |
 //! | [`view`] | the addon's page: profile, scripts, navigation rules, events | `AddonHost.swift` |
 //! | [`scheme`] | `copper-addon://` from the installed bundle | `AddonHost.swift` (`AddonFiles`) |
+//! | [`builtin`] | Copper's own agent, the slot's default (`agent-ui/`) | `Fork/Agent/AgentPane.swift` |
 //! | [`policy`] | the pure rules (widths, addresses, payloads) | `AddonHost.swift` |
 //! | [`host`] | what the bridge asks of Copper (identity, tabs, close, sign-in) | `AddonBridge.swift` |
 //! | [`oauth`] | the sign-in tab for `copper.oauth.authorize` | `AddonBridge.swift` |
@@ -20,6 +23,7 @@
 //! | [`glue`] | the one door to `copper_core::addons` and `copper_cloud::addons` | — |
 //! | [`selftest`] | `COPPER_SELFTEST=addons`: the bridge self-test | `AddonBench.swift` |
 //! | [`selftest_cloud`] | `COPPER_SELFTEST=addons-cloud`: against a real cloud | `addons-cloud-e2e.sh` (Linux) |
+//! | [`selftest_agent`] | `COPPER_SELFTEST=agent-ui`: the built-in agent's pictures | `AgentPane` bench seeds |
 //!
 //! Settings › Addons is `settings/pages/addons.rs`. Everything
 //! platform-neutral (manifests, bundles, the on-disk store, the cloud sync,
@@ -32,6 +36,7 @@
 #[allow(dead_code)]
 #[path = "../agents/hands.rs"]
 mod agents_hands;
+pub mod builtin;
 pub mod policy;
 
 #[cfg(windows)]
@@ -44,6 +49,8 @@ pub mod oauth;
 pub mod scheme;
 #[cfg(windows)]
 pub mod selftest;
+#[cfg(windows)]
+pub mod selftest_agent;
 #[cfg(windows)]
 pub mod selftest_cloud;
 #[cfg(windows)]
@@ -83,6 +90,7 @@ mod win {
         super::view::watch_shell(shell);
         super::selftest::maybe_start(shell);
         super::selftest_cloud::maybe_start(shell);
+        super::selftest_agent::maybe_start(shell);
     }
 
     /// Ctrl+E: show the slot, or put it away.
