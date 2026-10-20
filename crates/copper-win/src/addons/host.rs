@@ -16,11 +16,12 @@
 //! | `page.current()` | the active tab's `{url, title}` (`null` for private tabs) |
 //! | `ui.close()` | hides the slot |
 //! | `oauth.authorize(…)` | [`super::oauth`] |
-//! | `agent.*` | unavailable: Windows v1 has no native agent |
+//! | `agent.*` | the window's agent ([`crate::agents::brain`]) |
 
 use super::glue::Active;
 use super::oauth::Outcome;
 use crate::platform::Shell;
+use copper_core::addons::bridge::{AgentCall, BridgeError, agent_unavailable_state};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -57,6 +58,27 @@ impl Host {
     /// `copper.ui.close()`.
     pub async fn close_slot(&self) {
         on_main(super::hide).await;
+    }
+
+    /// `copper.agent.state()`: the window's agent, read on the UI thread.
+    pub async fn agent_state(&self) -> Value {
+        on_main(|_| crate::agents::brain::state())
+            .await
+            .unwrap_or_else(agent_unavailable_state)
+    }
+
+    /// `copper.agent.setModel/send/stop/clear`, on the UI thread.
+    pub async fn agent_call(&self, call: AgentCall) -> Result<Value, BridgeError> {
+        let what = match &call {
+            AgentCall::SetModel(_) => "setModel",
+            AgentCall::Send(_) => "send",
+            AgentCall::Stop => "stop",
+            AgentCall::Clear => "clear",
+        };
+        tracing::debug!(addon = %self.addon_id, what, "addon asks the agent");
+        on_main(move |_| crate::agents::brain::call(call))
+            .await
+            .unwrap_or_else(|| Err(BridgeError::internal("the window has closed")))
     }
 
     /// `copper.oauth.authorize(…)`. The core has already checked the

@@ -5,6 +5,7 @@
 //! which tab ([`hands`], drawn by [`marks`]), and passwords for
 //! `browser_sign_in` / `browser_autofill`.
 
+pub mod brain;
 mod hands;
 pub mod marks;
 
@@ -157,6 +158,7 @@ fn let_go(shell: &Shell, tab: &TabId) {
 pub fn register(shell: &Shell) {
     let server = agents::start::<Win>(shell, Rc::new(App::default()));
     marks::install(shell);
+    brain::register(shell);
     let r = shell.view().commands();
     let s = server.clone();
     r.add(Command::new(

@@ -20,9 +20,7 @@ use super::host::Host;
 use super::oauth::Outcome;
 use crate::platform::{Shell, WinLoop};
 use copper_cloud::addons::{AddonSync, HttpFetcher, SyncStatus};
-use copper_core::addons::bridge::{
-    AgentCall, BridgeError, Fetcher, Identity, PageInfo, agent_unavailable_state,
-};
+use copper_core::addons::bridge::{AgentCall, BridgeError, Fetcher, Identity, PageInfo};
 use copper_core::addons::{
     ActiveAddon, AddonState, AddonStore, BRIDGE_JS, BridgeHost, Capability, Context, Platform,
     SlotId, handle_message,
@@ -455,14 +453,25 @@ impl BridgeHost for CoreHost {
         }
     }
 
-    async fn agent_state(&self) -> Value {
-        agent_unavailable_state()
+    /// Everything the default offers, and the window's own agent.
+    fn available(&self) -> Vec<Capability> {
+        vec![
+            Capability::Identity,
+            Capability::Storage,
+            Capability::Fetch,
+            Capability::Oauth,
+            Capability::OpenUrl,
+            Capability::Page,
+            Capability::Agent,
+        ]
     }
 
-    async fn agent_call(&self, _call: AgentCall) -> Result<Value, BridgeError> {
-        Err(BridgeError::unavailable(
-            "Copper for Windows has no native agent yet",
-        ))
+    async fn agent_state(&self) -> Value {
+        self.0.agent_state().await
+    }
+
+    async fn agent_call(&self, call: AgentCall) -> Result<Value, BridgeError> {
+        self.0.agent_call(call).await
     }
 }
 

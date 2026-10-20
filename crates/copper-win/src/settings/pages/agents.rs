@@ -6,12 +6,17 @@
 //!
 //! The port is shown, not typed: the settings form has no text field yet.
 //! "Use another port" moves the listener to the next free one.
+//!
+//! "The agent in the window" is the Ctrl+E agent's own `chat.json` (the
+//! Mac's `Agent.Config`): the page in front of every question and the
+//! tool-call rounds per question, which Copper Cloud may set instead.
 
 use super::on;
 use crate::chrome::glyph;
 use crate::platform::{Shell, Win};
 use crate::settings::Page;
 use crate::settings::form::Form;
+use copper_core::agent::ChatConfig;
 use copper_shell_core::{Question, ShellView};
 use std::cell::Cell;
 use std::time::Duration;
@@ -46,6 +51,69 @@ fn status_line(a: &Server, pinned: Option<u16>) -> String {
         (None, false, true) => "Starting…".into(),
         (None, false, false) => "Off — no agent can reach this browser.".into(),
     }
+}
+
+/// `chat.json`: the agent in the window's own settings (`Agent.Config`).
+fn chat_config(shell: &Shell) -> ChatConfig {
+    shell
+        .store()
+        .load::<ChatConfig>()
+        .map(|l| l.value)
+        .unwrap_or_default()
+}
+
+/// Change `chat.json` the way the Mac writes it (`version: 2`); the agent
+/// reads it again for every question, and the sidebar hears of it.
+fn edit_chat(shell: &Shell, f: impl FnOnce(&mut ChatConfig)) {
+    let mut c = chat_config(shell);
+    f(&mut c);
+    c.normalize();
+    if let Err(e) = shell.store().save(&c) {
+        tracing::warn!("chat.json: {e}");
+    }
+    crate::agents::brain::changed();
+}
+
+/// The agent in the window (Ctrl+E): the page in front of each question and
+/// its tool-call budget (Mac `AgentsPaneSection`).
+fn pane_section(f: &mut Form, shell: &Shell) {
+    let chat = chat_config(shell);
+    let sec = f.section("The agent in the window — Ctrl+E");
+    sec.switch(
+        "Page in front of every question",
+        Some(
+            "The current tab's address, title and the first 3000 characters of its text. Off, \
+             it still has the tools to look.",
+        ),
+        "page-context",
+        chat.page_context(),
+    )
+    .anchor("agents.context");
+    let cloud = copper_mcp::intelligence::read_files(shell.store())
+        .cloud
+        .and_then(|c| c.agent_max_turns());
+    let mine = chat.effective_max_turns();
+    let detail = match cloud {
+        Some(n) => format!(
+            "Set by your Copper Cloud to {n}. Yours ({mine}) is back when you sign out of it."
+        ),
+        None => format!(
+            "How many times the agent may use its tools on one question before it stops and \
+             asks you to continue. Default {}.",
+            ChatConfig::DEFAULT_MAX_TURNS
+        ),
+    };
+    sec.field(
+        "Tool-call rounds per question",
+        Some(&detail),
+        "turns",
+        &cloud.unwrap_or(mine).to_string(),
+        &ChatConfig::DEFAULT_MAX_TURNS.to_string(),
+    )
+    .on_submit("turns-done", Some(64.0))
+    .mono()
+    .disabled(cloud.is_some())
+    .anchor("agents.turns");
 }
 
 /// The first port after `from` nothing on this PC listens on.
@@ -144,6 +212,8 @@ impl Page for Agents {
             sec.note("Jev key", Some(line));
         }
 
+        pane_section(&mut f, shell);
+
         let sec = f.section("Connect a client");
         sec.button(
             "Claude Code, phi, Cursor",
@@ -202,6 +272,13 @@ impl Page for Agents {
             "enabled" => a.set_enabled(on(value)),
             "announces" => a.set_announces(on(value)),
             "jev" => a.set_jev(on(value)),
+            "page-context" => edit_chat(shell, |c| c.page_context = Some(on(value))),
+            "turns" => {
+                if let Ok(n) = value.trim().parse::<i64>() {
+                    edit_chat(shell, |c| c.max_turns = Some(n.clamp(1, 500)));
+                }
+            }
+            "turns-done" => crate::settings::changed(shell, "agents"),
             "port-next" => match next_free_port(a.configured_port()) {
                 Some(p) => {
                     a.set_port(p);

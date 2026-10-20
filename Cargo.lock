@@ -385,12 +385,14 @@ dependencies = [
  "copper-mcp",
  "copper-pagejs",
  "copper-shield",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
