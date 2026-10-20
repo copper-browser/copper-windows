@@ -177,22 +177,30 @@ fn measure_uncached(tree: &mut Tree, id: NodeId, room: Size, m: &mut dyn Measure
     if s.hidden {
         return Size::ZERO;
     }
+    // A fixed or filling size is held to the node's bounds before its
+    // children are measured in it: a filling column capped at 520 wraps
+    // its text at 520, not at whatever the parent had.
     let fixed_w = match s.width {
         Dim::Px(v) => Some(v),
         Dim::Fill if room.w.is_finite() => Some(room.w),
         _ => None,
-    };
+    }
+    .map(|w| clamp(w, s.min_w, s.max_w));
     let fixed_h = match s.height {
         Dim::Px(v) => Some(v),
         Dim::Fill if room.h.is_finite() => Some(room.h),
         _ => None,
-    };
+    }
+    .map(|h| clamp(h, s.min_h, s.max_h));
     if let (Some(w), Some(h)) = (fixed_w, fixed_h) {
         return Size::new(clamp(w, s.min_w, s.max_w), clamp(h, s.min_h, s.max_h));
     }
+    // A cap is room taken away: wrapped text under a `max_width` breaks
+    // at the cap, not at the parent's width (and then stands one line
+    // tall at the cap).
     let inner_room = Size::new(
-        fixed_w.unwrap_or(room.w) - s.padding.horizontal(),
-        fixed_h.unwrap_or(room.h) - s.padding.vertical(),
+        fixed_w.unwrap_or(room.w.min(s.max_w)) - s.padding.horizontal(),
+        fixed_h.unwrap_or(room.h.min(s.max_h)) - s.padding.vertical(),
     );
     let children: Vec<NodeId> = flow_children(tree, id);
     let content = if children.is_empty() {
@@ -565,5 +573,52 @@ mod tests {
         assert_eq!(frame(&t, side).w, 440.0);
         assert_eq!(frame(&t, stage).x, 440.0);
         assert_eq!(frame(&t, stage).w, 560.0);
+    }
+
+    /// Wraps at the room it is given: one 18-high line per `room.w`.
+    struct Wrapping;
+    impl Measure for Wrapping {
+        fn measure(&mut self, tree: &Tree, id: NodeId, room: Size) -> Size {
+            let n = tree
+                .get(id)
+                .and_then(|n| n.content_text())
+                .map_or(0, |t| t.chars().count());
+            let w = n as f32 * 8.0;
+            let lines = (w / room.w).ceil().max(1.0);
+            Size::new(w.min(room.w), lines * 18.0)
+        }
+    }
+
+    #[test]
+    fn a_capped_text_wraps_at_its_cap() {
+        let mut t = Tree::new();
+        let root = t.add_root(Node::column().align(Align::Center));
+        // 80 characters: 640 DIPs, so two lines at a 400 cap.
+        let text = t.add(root, Node::text(&"x".repeat(80), 14.0).max_width(400.0));
+        layout(
+            &mut t,
+            root,
+            Rect::new(0.0, 0.0, 1000.0, 500.0),
+            &mut Wrapping,
+        );
+        assert_eq!(frame(&t, text).w, 400.0);
+        assert_eq!(frame(&t, text).h, 36.0);
+    }
+
+    #[test]
+    fn a_capped_filling_column_wraps_its_text_at_the_cap() {
+        let mut t = Tree::new();
+        let root = t.add_root(Node::column().align(Align::Center));
+        let holder = t.add(root, Node::column().fill_width().max_width(400.0));
+        let text = t.add(holder, Node::text(&"x".repeat(80), 14.0).fill_width());
+        layout(
+            &mut t,
+            root,
+            Rect::new(0.0, 0.0, 1000.0, 500.0),
+            &mut Wrapping,
+        );
+        assert_eq!(frame(&t, holder).w, 400.0);
+        assert_eq!(frame(&t, text).h, 36.0);
+        assert_eq!(frame(&t, holder).h, 36.0);
     }
 }

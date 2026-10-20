@@ -26,18 +26,23 @@
 //! An edit never calls the shell; an event handler never holds the state
 //! across a shell call.
 
+pub mod bring;
 pub mod build;
 pub mod card;
 pub mod column;
 pub mod events;
 pub mod glyph;
 pub mod images;
+pub mod letter;
 pub mod menus;
 pub mod model;
+pub mod pagemenu;
+pub mod permit;
 pub mod sheet;
 pub mod stage;
 pub mod strip;
 pub mod toast;
+pub mod welcome;
 
 use crate::perf;
 use crate::platform::{Shell, WeakShell};
@@ -69,8 +74,15 @@ pub struct State {
     pub folded: bool,
     /// A page is full screen: the chrome steps away.
     pub immersed: bool,
+    /// F11: the window fills the monitor, its chrome kept (but no band for
+    /// caption buttons it no longer has).
+    pub full: bool,
     /// The find bar, once it has been wanted.
     pub find: Option<crate::find::Bar>,
+    /// The pin-letter pill, once it has been wanted.
+    pub letter: Option<letter::Bar>,
+    /// The first start's welcome, while it is up.
+    pub welcome: Option<welcome::Welcome>,
 }
 
 /// The window and everything drawn in it.

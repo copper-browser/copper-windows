@@ -556,6 +556,27 @@ pub fn first_strong_rtl(s: &str) -> bool {
     false
 }
 
+/// What a secure (password) field draws for each character of its text.
+pub const MASK: char = '\u{25CF}';
+
+/// `s` as a secure field draws it: one [`MASK`] per character.
+pub fn mask(s: &str) -> String {
+    std::iter::repeat_n(MASK, s.chars().count()).collect()
+}
+
+/// Byte offset `pos` of `s` as the same place in [`mask`]`(s)`.
+pub fn masked_byte(s: &str, pos: usize) -> usize {
+    let pos = pos.min(s.len());
+    s.char_indices().take_while(|(i, _)| *i < pos).count() * MASK.len_utf8()
+}
+
+/// Byte offset `pos` of [`mask`]`(s)` as the same place in `s` (rounded
+/// down to a character).
+pub fn unmasked_byte(s: &str, pos: usize) -> usize {
+    let n = pos / MASK.len_utf8();
+    s.char_indices().nth(n).map_or(s.len(), |(i, _)| i)
+}
+
 /// UTF-16 offset of byte offset `pos` in `s`.
 pub fn utf16_of(s: &str, pos: usize) -> usize {
     s[..pos.min(s.len())].encode_utf16().count()
@@ -584,6 +605,25 @@ mod tests {
         let mut e = TextEdit::new();
         e.set_text(s, false);
         e
+    }
+
+    #[test]
+    fn masks_one_dot_per_character() {
+        assert_eq!(mask("pä🙂"), "●●●");
+        assert_eq!(mask(""), "");
+        let s = "pä🙂x";
+        // p(1) ä(2) 🙂(4) x(1)
+        assert_eq!(masked_byte(s, 0), 0);
+        assert_eq!(masked_byte(s, 1), 3);
+        assert_eq!(masked_byte(s, 3), 6);
+        assert_eq!(masked_byte(s, 7), 9);
+        assert_eq!(masked_byte(s, s.len()), 12);
+        assert_eq!(unmasked_byte(s, 0), 0);
+        assert_eq!(unmasked_byte(s, 3), 1);
+        assert_eq!(unmasked_byte(s, 6), 3);
+        assert_eq!(unmasked_byte(s, 9), 7);
+        assert_eq!(unmasked_byte(s, 12), s.len());
+        assert_eq!(unmasked_byte(s, 99), s.len());
     }
 
     #[test]

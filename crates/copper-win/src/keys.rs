@@ -126,6 +126,7 @@ pub const BINDINGS: &[(&str, &[Chord])] = &[
         &[c(l('R')), k(Key::F(5)), k(Key::Other(VK_BROWSER_REFRESH))],
     ),
     ("hard-reload", &[cs(l('R')), s(Key::F(5)), c(Key::F(5))]),
+    ("pause-media", &[cs(l('M'))]),
     (
         "back",
         &[

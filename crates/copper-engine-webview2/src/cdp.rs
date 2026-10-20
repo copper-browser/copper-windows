@@ -124,7 +124,8 @@ pub(crate) fn main_frame_id(tree: &JsonValue) -> Option<String> {
 /// The reply to a `Fetch.requestPaused` (response stage) of a download the
 /// engine started: a successful response is continued with
 /// `Content-Disposition: attachment`, so the browser saves it instead of
-/// showing it; redirects and failures continue unchanged.
+/// showing it; redirects and failures continue unchanged. Chromium refuses
+/// new headers without the status code, so the original code goes too.
 pub(crate) fn force_download(paused: &JsonValue) -> Option<(&'static str, JsonValue)> {
     let id = paused.get("requestId")?.as_str()?;
     let status = paused.get("responseStatusCode").and_then(JsonValue::as_i64);
@@ -164,7 +165,7 @@ pub(crate) fn force_download(paused: &JsonValue) -> Option<(&'static str, JsonVa
             headers.push(json!({ "name": "Content-Disposition", "value": value }));
             Some((
                 "Fetch.continueResponse",
-                json!({ "requestId": id, "responseHeaders": headers }),
+                json!({ "requestId": id, "responseCode": code, "responseHeaders": headers }),
             ))
         }
         _ => Some(("Fetch.continueRequest", json!({ "requestId": id }))),
@@ -208,6 +209,7 @@ mod tests {
         });
         let (method, params) = force_download(&paused).unwrap();
         assert_eq!(method, "Fetch.continueResponse");
+        assert_eq!(params["responseCode"], 200);
         let headers = params["responseHeaders"].as_array().unwrap();
         assert_eq!(headers.len(), 2);
         assert_eq!(headers[1]["value"], "attachment; filename=\"a.pdf\"");

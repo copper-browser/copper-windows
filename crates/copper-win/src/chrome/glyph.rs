@@ -54,3 +54,15 @@ pub const GEAR: char = '\u{E713}';
 pub const COPY: char = '\u{E8C8}';
 /// `rectangle.on.rectangle`: a private tab's mark.
 pub const PRIVATE: char = '\u{E727}';
+/// `mic`: a site asking for the microphone.
+pub const MIC: char = '\u{E720}';
+/// `video`: a site asking for the camera.
+pub const VIDEO: char = '\u{E714}';
+/// `location`: a site asking where you are.
+pub const LOCATION: char = '\u{E707}';
+/// `bell`: a site asking to notify.
+pub const BELL: char = '\u{EA8F}';
+/// `eye.slash`: a private tab's mark in its row.
+pub const EYE_SLASH: char = '\u{ED1A}';
+/// `checkmark`: done (the default browser, on the welcome).
+pub const CHECK: char = '\u{E73E}';

@@ -90,6 +90,8 @@ pub struct Fonts {
     formats: HashMap<FormatKey, IDWriteTextFormat>,
     layouts: HashMap<(u32, NodeId), Entry>,
     placeholders: HashMap<(u32, NodeId), Placeholder>,
+    /// Fields' ghost completions, laid out like placeholders.
+    ghosts: HashMap<(u32, NodeId), Placeholder>,
     /// Which tree the node ids belong to (the window's, a menu's, a
     /// tooltip's): their ids overlap, their layouts must not.
     space: u32,
@@ -136,6 +138,7 @@ impl Fonts {
             formats: HashMap::new(),
             layouts: HashMap::new(),
             placeholders: HashMap::new(),
+            ghosts: HashMap::new(),
             space: 0,
             line_heights: HashMap::new(),
             scratch: Vec::with_capacity(256),
@@ -152,6 +155,7 @@ impl Fonts {
     pub fn forget_space(&mut self, space: u32) {
         self.layouts.retain(|k, _| k.0 != space);
         self.placeholders.retain(|k, _| k.0 != space);
+        self.ghosts.retain(|k, _| k.0 != space);
     }
 
     fn format(&mut self, key: FormatKey) -> Result<IDWriteTextFormat> {
@@ -296,7 +300,7 @@ impl Fonts {
         let fresh =
             matches!(self.layouts.get(&(self.space, id)), Some(e) if e.revision == f.revision);
         if !fresh {
-            let (display, caret, composition) = f.edit.display();
+            let (display, caret, composition) = f.shown();
             let rtl = first_strong_rtl(&display);
             let key = Self::key_of_field(f, rtl);
             let layout = self.make_layout(&display, key, max_w, max_h).ok()?;
@@ -356,8 +360,10 @@ impl Fonts {
         let Some(e) = self.layouts.get(&(self.space, id)) else {
             return f.edit.caret();
         };
-        let mut byte = byte_of_utf16(&e.display, pos16);
+        let shown = byte_of_utf16(&e.display, pos16);
+        let mut byte = f.display_byte(shown);
         if let Some(r) = &e.composition {
+            let r = f.display_byte(r.start)..f.display_byte(r.end);
             if byte >= r.end {
                 byte -= r.end - r.start;
             } else if byte > r.start {
@@ -468,6 +474,36 @@ impl Fonts {
             .retain(|k, _| k.0 != space || tree.contains(k.1));
         self.placeholders
             .retain(|k, _| k.0 != space || tree.contains(k.1));
+        self.ghosts
+            .retain(|k, _| k.0 != space || tree.contains(k.1));
+    }
+
+    /// A field's ghost completion, on one line of height `h`, never cut
+    /// (the field's clip ends it).
+    pub fn ghost_layout(&mut self, id: NodeId, f: &Field, h: f32) -> Option<IDWriteTextLayout> {
+        let key = FormatKey {
+            size: (f.size * 8.0).round() as u32,
+            weight: f.weight,
+            icon: false,
+            trim: None,
+            align: TextAlign::Leading,
+            rtl: false,
+        };
+        let fresh = matches!(self.ghosts.get(&(self.space, id)), Some(p) if p.key == key && p.text == f.ghost && p.max_h == h);
+        if !fresh {
+            let layout = self.make_layout(&f.ghost, key, 1.0e6, h).ok()?;
+            self.ghosts.insert(
+                (self.space, id),
+                Placeholder {
+                    text: f.ghost.clone(),
+                    key,
+                    layout,
+                    max_w: 1.0e6,
+                    max_h: h,
+                },
+            );
+        }
+        self.ghosts.get(&(self.space, id)).map(|p| p.layout.clone())
     }
 }
 

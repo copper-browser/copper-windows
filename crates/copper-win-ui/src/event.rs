@@ -33,6 +33,26 @@ pub enum Event {
     },
     /// Keyboard focus moved inside the chrome (`None`: to the page or out).
     Focus(Option<NodeId>),
+    /// The pointer target under the pointer changed (`None`: over nothing
+    /// of the chrome's, or out of the window).
+    Hover(Option<NodeId>),
+    /// A press on a draggable node moved past the drag threshold. `at` is
+    /// the pointer in window DIPs.
+    DragStart { source: NodeId, at: Point },
+    /// The drag moved; `target` is the innermost pointer target under it.
+    DragMove {
+        source: NodeId,
+        target: Option<NodeId>,
+        at: Point,
+    },
+    /// The button came up: dropped on `target`. No click follows.
+    Drop {
+        source: NodeId,
+        target: Option<NodeId>,
+        at: Point,
+    },
+    /// The drag ended without a drop (Escape, the window lost the mouse).
+    DragCancel { source: NodeId },
     /// A menu item was chosen.
     MenuChosen { menu: u32, item: u32 },
     /// A menu closed without a choice.
