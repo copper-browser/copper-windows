@@ -4,9 +4,10 @@
 //! forgets one; the foot counts the pages and offers to clear — history,
 //! sign-ins or the cache, each said in words nobody has to guess at.
 //!
-//! Every match is listed (the Mac has no cap). The first rows are drawn
-//! at once; the rest follow a chunk a turn, so a search with thousands of
-//! matches still answers within the frame.
+//! Every match is listed (the Mac has no cap). The first screenful is
+//! drawn at once, so the plate (or the answer to a key) is in the very next
+//! frame; the rest follow a chunk per frame, each after the last one is on
+//! screen, so a search with thousands of matches never holds a frame up.
 
 use super::plate::{self, Hunt, Plate};
 use super::{Panel, when};
@@ -22,9 +23,13 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-/// Rows drawn at once; the rest come [`CHUNK`] a turn.
-const FIRST: usize = 120;
-const CHUNK: usize = 400;
+/// Items (rows and day headings) drawn at once: a little more than the
+/// 420-high list shows. The rest come [`CHUNK`] a frame.
+const FIRST: usize = 16;
+const CHUNK: usize = 60;
+/// The longest a chunk waits for the frame before it (a window that is
+/// not drawing — minimised — still gets its list).
+const FRAME_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// What a click in the panel means.
 #[derive(Clone, Debug)]
@@ -175,8 +180,9 @@ impl Panel for History {
             .read(move |ui, _| ui.field_text(hunt.field).map(str::to_string))
             .flatten()
             .unwrap_or_default();
-        let mut traces = shell.history().search(&typed);
-        traces.sort_by(|a, b| b.last.0.total_cmp(&a.last.0));
+        let started = std::time::Instant::now();
+        // Newest first already (`History::search`).
+        let traces = shell.history().search(&typed);
         let total = traces.len();
         let empty = if typed.is_empty() {
             "Nothing yet."
@@ -215,13 +221,18 @@ impl Panel for History {
         let run = self.0.drawing.get() + 1;
         self.0.drawing.set(run);
         self.0.draw(shell, &items, 0, FIRST);
+        tracing::debug!(
+            target: "copper::perf",
+            "history refresh: {:.2} ms ({total} pages)",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
         if items.borrow().len() > FIRST {
             let weak = shell.downgrade();
             let me = Rc::downgrade(&self.0);
             copper_win_rt::spawn_local(async move {
                 let mut from = FIRST;
                 loop {
-                    copper_win_rt::sleep(std::time::Duration::ZERO).await;
+                    after_frame(&weak).await;
                     let Some(s) = weak.upgrade() else { return };
                     let Some(me) = me.upgrade() else { return };
                     if me.drawing.get() != run || from >= items.borrow().len() {
@@ -344,19 +355,43 @@ impl Inner {
     }
 }
 
+/// Once the window has drawn what is waiting (nothing left to lay out),
+/// or after [`FRAME_WAIT`].
+async fn after_frame(shell: &copper_shell_core::shell::WeakShell<crate::platform::Win>) {
+    let since = std::time::Instant::now();
+    loop {
+        copper_win_rt::sleep(std::time::Duration::from_millis(4)).await;
+        let Some(s) = shell.upgrade() else { return };
+        let waiting = s
+            .view()
+            .chrome()
+            .read(|ui, _| ui.tree.needs_layout())
+            .unwrap_or(true);
+        if !waiting || since.elapsed() >= FRAME_WAIT {
+            return;
+        }
+    }
+}
+
 /// The list in order: each day's heading, then its rows, newest first
-/// (`traces` is sorted already).
+/// (`traces` is sorted already). The local day is asked of Windows only
+/// near a day's start ([`when::DaySpan`]), not once per page.
 fn items(traces: Vec<Trace>) -> Vec<Item> {
     let now = copper_core::date::now_unix();
     let mut out = Vec::with_capacity(traces.len() + 8);
-    let mut day = None;
+    let mut span: Option<when::DaySpan> = None;
     for t in traces {
         let unix = t.last.unix();
-        let d = copper_shell_core::format::day_number::<WinCalendar>(unix);
-        if day != Some(d) {
-            day = Some(d);
+        if span.as_ref().is_some_and(|s| s.surely_holds(unix)) {
+            out.push(Item::Row(t, None));
+            continue;
+        }
+        let civil = WinCalendar::civil(unix);
+        let next = when::DaySpan::of(unix, civil.as_ref());
+        if span.as_ref().map(|s| s.day) != Some(next.day) {
             out.push(Item::Day(when::day::<WinCalendar>(unix, now)));
         }
+        span = Some(next);
         out.push(Item::Row(t, None));
     }
     out

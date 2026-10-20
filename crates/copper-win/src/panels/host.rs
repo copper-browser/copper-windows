@@ -182,6 +182,7 @@ pub fn show_from(shell: &Shell, id: &str, door: Option<Rect>) {
     }
     panels.hide(shell);
     shell.view().chrome().watch("panel open");
+    let started = std::time::Instant::now();
     let weak = shell.downgrade();
     let p = panel.clone();
     let title = panel.title();
@@ -216,10 +217,17 @@ pub fn show_from(shell: &Shell, id: &str, door: Option<Rect>) {
     // Drawn in the same frame as the plate when the edit ran at once;
     // else once the plate exists (the edit had to wait its turn).
     let built = panels.showing() == Some(panel.id());
+    let plate_ms = started.elapsed().as_secs_f64() * 1000.0;
     if built {
         shell.view().overlay_changed();
         panel.refresh(shell);
     }
+    tracing::debug!(
+        target: "copper::perf",
+        "panel {}: plate {plate_ms:.2} ms, drawn {:.2} ms (in its turn: {built})",
+        panel.id(),
+        started.elapsed().as_secs_f64() * 1000.0
+    );
     let weak = shell.downgrade();
     let ticks = panel.ticks();
     copper_win_rt::spawn_local(async move {

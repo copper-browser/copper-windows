@@ -395,9 +395,13 @@ impl Panel for Downloads {
                     files::open(&path);
                 }
             }
-            Hit::Cancel(row) => d.cancel(row),
+            Hit::Cancel(row) => {
+                tracing::debug!("downloads: cancel {row:?}");
+                d.cancel(row);
+            }
             Hit::Retry(row) => {
-                d.retry(shell, row);
+                let again = d.retry(shell, row);
+                tracing::debug!("downloads: retry {row:?} → {again}");
             }
             Hit::Reveal(path) => files::reveal(&path),
             Hit::Remove(row) => d.remove(row),

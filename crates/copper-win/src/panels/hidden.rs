@@ -12,6 +12,7 @@
 //! last one back — [`takes`] claims those two keys only then.
 
 use super::plate::{self, Plate};
+use super::redress::redress;
 use super::{Panel, Place};
 use crate::chrome::glyph;
 use crate::commands::Command;
@@ -48,10 +49,12 @@ pub fn register(shell: &Shell) {
             curtain::stop(s, &id);
         }
     }));
-    shell
-        .view()
-        .commands()
-        .add(Command::key("hide-undo", curtain::undo::<Win>));
+    shell.view().commands().add(Command::key("hide-undo", |s| {
+        let Some(site) = curtain::here(s) else { return };
+        let before = selectors(&site);
+        curtain::undo(s);
+        redress(s, &site, &before, None);
+    }));
     // One listener: the chrome reads the picker's state, the panel the list.
     curtain::on_change::<Win>(Rc::new(|s: &Shell| {
         s.view().sync(s);
@@ -80,6 +83,14 @@ pub fn takes(shell: &Shell, chord: Chord) -> Option<&'static str> {
     }
 }
 
+/// The selectors hidden on `site` now.
+fn selectors(site: &str) -> Vec<String> {
+    curtain::veils::<Win>(site)
+        .into_iter()
+        .map(|v| v.selector)
+        .collect()
+}
+
 #[derive(Clone, Debug)]
 enum Hit {
     Restore(String),
@@ -91,6 +102,8 @@ enum Hit {
 struct Nodes {
     list: Option<NodeId>,
     all: Option<NodeId>,
+    /// The plate's title: the site it is for.
+    title: Option<NodeId>,
     /// The window-wide layer round the plate: the pointer on it has left.
     scrim: Option<NodeId>,
 }
@@ -149,6 +162,7 @@ impl Panel for Hidden {
         self.nodes.set(Nodes {
             list: Some(list),
             all: Some(all),
+            title: p.title,
             scrim: Some(p.scrim),
         });
     }
@@ -157,23 +171,31 @@ impl Panel for Hidden {
         let Nodes {
             list: Some(list),
             all: Some(all),
+            title,
             ..
         } = self.nodes.get()
         else {
             return;
         };
         let site = curtain::here(shell);
-        let moved = *self.site.borrow() != site;
-        *self.site.borrow_mut() = site.clone();
+        let was = self.site.replace(site.clone());
         // Another tab or site in front: whatever was shown goes back.
-        if moved && self.peeking.borrow_mut().take().is_some() {
+        if was != site
+            && self.peeking.borrow_mut().take().is_some()
+            && let Some(was) = was
+        {
             curtain::unpeek(shell);
+            redress(shell, &was, &[], None);
         }
+        let heading = self.title();
         let veils: Vec<Veil> = site
             .as_deref()
             .map(curtain::veils::<Win>)
             .unwrap_or_default();
         let made = shell.view().chrome().read(move |ui, _| {
+            if let Some(title) = title {
+                ui.tree.set_text(title, &heading);
+            }
             ui.tree.clear_children(list);
             ui.tree.set_hidden(all, veils.is_empty());
             let mut rows = Vec::new();
@@ -255,13 +277,16 @@ impl Panel for Hidden {
                 if let Some(site) = site {
                     *self.peeking.borrow_mut() = None;
                     curtain::restore(shell, &site, &selector);
+                    redress(shell, &site, &[selector], None);
                 }
             }
             Hit::Pick => curtain::toggle(shell),
             Hit::RestoreAll => {
                 if let Some(site) = site {
                     *self.peeking.borrow_mut() = None;
+                    let before = selectors(&site);
                     curtain::restore_all(shell, &site);
+                    redress(shell, &site, &before, None);
                     shell.view().panels().hide(shell);
                 }
             }
@@ -276,6 +301,12 @@ impl Panel for Hidden {
     /// Follow the pointer over the rows: peek at the one rested on; leaving
     /// the whole plate puts the page back (between rows it stays).
     fn tick(&self, shell: &Shell) {
+        // The tab or site in front moved under the open panel: retitle it
+        // and list that site's things instead.
+        if curtain::here(shell) != *self.site.borrow() {
+            self.refresh(shell);
+            return;
+        }
         let rows: Vec<(NodeId, String)> = self.rows.borrow().clone();
         let scrim = self.nodes.get().scrim;
         let Some(over) = shell.view().chrome().read(move |ui, _| {
@@ -298,14 +329,24 @@ impl Panel for Hidden {
         *self.peeking.borrow_mut() = over.clone();
         let site = self.site.borrow().clone();
         match (over, site) {
-            (Some(selector), Some(site)) => curtain::peek(shell, &site, &selector),
-            _ => curtain::unpeek(shell),
+            (Some(selector), Some(site)) => {
+                curtain::peek(shell, &site, &selector);
+                redress(shell, &site, &[], Some(&selector));
+            }
+            (None, Some(site)) => {
+                curtain::unpeek(shell);
+                redress(shell, &site, &[], None);
+            }
+            (_, None) => curtain::unpeek(shell),
         }
     }
 
     fn closing(&self, shell: &Shell) {
         if self.peeking.borrow_mut().take().is_some() {
             curtain::unpeek(shell);
+            if let Some(site) = self.site.borrow().clone() {
+                redress(shell, &site, &[], None);
+            }
         }
     }
 

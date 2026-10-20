@@ -26,6 +26,9 @@ pub struct Plate {
     /// The foot's row; show it with [`Plate::show_foot`].
     pub foot: NodeId,
     foot_box: NodeId,
+    /// The title's text (a popover has none): a panel whose subject moves
+    /// while it is open (Hidden, with the site in front) retitles it.
+    pub title: Option<NodeId>,
 }
 
 impl Plate {
@@ -129,7 +132,7 @@ pub fn build_at(ui: &mut Ui, parent: NodeId, title: &str, width: f32, spot: Spot
             .gap(10.0)
             .align(Align::Center),
     );
-    ui.tree.add(
+    let title = ui.tree.add(
         head,
         Node::text(title, TITLE)
             .weight(Weight::Semibold)
@@ -170,6 +173,7 @@ pub fn build_at(ui: &mut Ui, parent: NodeId, title: &str, width: f32, spot: Spot
         body,
         foot,
         foot_box,
+        title: Some(title),
     }
 }
 
@@ -248,6 +252,7 @@ pub fn popover(
         body,
         foot,
         foot_box,
+        title: None,
     }
 }
 
