@@ -43,7 +43,10 @@ pub fn build(ui: &mut Ui) -> State {
         Node::column().absolute(Abs::FILL).fill(Token::ColumnGround),
     );
     let strip = strip::build(ui, frame);
-    let body = ui.tree.add(frame, Node::row().grow(1.0));
+    // Shrinks to the window: its children may measure taller than it
+    // (the column's long tab list), and the page, stage and Agent sidebar
+    // take its height.
+    let body = ui.tree.add(frame, Node::row().grow(1.0).shrink(1.0));
     let column = column::build(ui, body);
     let page = ui.tree.add(body, Node::column().grow(1.0));
     let band = ui.tree.add(

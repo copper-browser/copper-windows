@@ -20,6 +20,8 @@
 //!   (`developer_extras` turns WebView2's DevTools and its "Inspect" off).
 //! * **Events.** `visibility`, `theme`, `settings`, and `page` (with the
 //!   `page` capability).
+//! * **Copper's own agent** ([`super::builtin`]) runs in this same view,
+//!   from the binary, with one more message handler of its own.
 
 use super::glue::{self, Active};
 use super::host;
@@ -186,6 +188,10 @@ impl AddonView {
         shim.world = World::Page;
         self.page.add_user_script(&shim);
         self.page.add_message_handler(LINKS, &World::Page);
+        // The built-in agent's own door; answered only while the page
+        // shows it (`builtin::handle`).
+        self.page
+            .add_message_handler(super::builtin::HANDLER, &World::Page);
         let mut links = UserScript::new(LINK_JS);
         links.injection_time = InjectionTime::DocumentStart;
         links.frames = Frames::TopOnly;
@@ -216,6 +222,28 @@ impl AddonView {
         if let Some(s) = shell.upgrade() {
             open_tab(&s, url);
         }
+    }
+
+    /// A message on the built-in agent's own door: only from its page,
+    /// while the slot shows it.
+    fn builtin(self: &Rc<Self>, shell: &crate::platform::WeakShell, body: &Value) {
+        let ok = !self.retired.get()
+            && super::builtin::is(&self.addon.borrow())
+            && self.page.url().is_some_and(|u| super::builtin::in_slot(&u));
+        if !ok {
+            tracing::warn!("built-in message refused: the slot doesn't show Copper's agent");
+            return;
+        }
+        let Some(s) = shell.upgrade() else { return };
+        let weak = Rc::downgrade(self);
+        super::builtin::handle(&s, body, move |js| {
+            if let Some(v) = weak.upgrade()
+                && !v.retired.get()
+                && super::builtin::is(&v.addon.borrow())
+            {
+                v.run(&js);
+            }
+        });
     }
 
     /// The window's shortcuts work from inside the pane too (Ctrl+E puts
@@ -278,6 +306,9 @@ impl AddonView {
                     }
                     PageEvent::ScriptMessage { name, body } if name == LINKS => {
                         view.link(&shell_weak, body);
+                    }
+                    PageEvent::ScriptMessage { name, body } if name == super::builtin::HANDLER => {
+                        view.builtin(&shell_weak, &body);
                     }
                     // `window.open` (WebView2 opened nothing: the page has
                     // no new-window handler). Only a Ctrl- or middle-click
@@ -364,8 +395,9 @@ impl AddonView {
         if self.retired.get() {
             return;
         }
-        // CONTRACT §5.1: only from the slot's own page, showing its addon.
-        let active = glue::active();
+        // CONTRACT §5.1: only from the slot's own page, showing its addon
+        // (the cloud's, or Copper's own agent).
+        let active = super::builtin::slot_active();
         let ok = active
             .as_ref()
             .is_some_and(|a| a.id == self.addon_id() && a.sha256 == self.addon.borrow().sha256)

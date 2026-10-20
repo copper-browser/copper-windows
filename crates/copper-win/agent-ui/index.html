@@ -1,0 +1,71 @@
+<!doctype html>
+<!--
+  Copper's own agent, the Agent sidebar's built-in face (Mac: the native
+  AgentPane). Served from the binary as copper-addon://copper.agent/ and
+  talking to Copper only through window.copper (bridge v1). Styles in
+  app.css, behaviour in app.js; markdown.js and icons.js are its helpers;
+  demo.js is the scripted conversation for development builds.
+-->
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent</title>
+<link rel="stylesheet" href="app.css">
+<script src="icons.js" defer></script>
+<script src="markdown.js" defer></script>
+<script src="demo.js" defer></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<div class="pane" id="pane">
+  <header class="head">
+    <h1 class="head-title">Agent</h1>
+    <div class="model" id="model" hidden>
+      <button type="button" class="model-pill" id="model-pill" aria-haspopup="menu" aria-expanded="false">
+        <span class="model-name" id="model-name"></span><span class="model-chevron" data-icon="chevronDown"></span>
+      </button>
+    </div>
+    <span class="grow"></span>
+    <div class="doors">
+      <button type="button" class="door" id="new-chat" data-icon="newChat" title="New chat" aria-label="New chat"></button>
+      <button type="button" class="door" id="close" data-icon="xmark" title="Close (Ctrl+E)" aria-label="Close (Ctrl+E)"></button>
+    </div>
+  </header>
+  <div class="body" id="body">
+    <section class="empty" id="empty" hidden>
+      <div class="empty-room"></div>
+      <div class="empty-center">
+        <div class="sparkle" data-icon="sparkles" aria-hidden="true"></div>
+        <h2 class="empty-title" id="empty-title"></h2>
+        <p class="empty-text" id="empty-text"></p>
+        <div class="empty-actions" id="setup" hidden>
+          <button type="button" class="pill filled" id="setup-key">Use an API key</button>
+        </div>
+      </div>
+      <div class="empty-room"></div>
+      <div class="suggestions" id="suggestions" role="list"></div>
+    </section>
+    <div class="scroller" id="scroller" hidden>
+      <div class="transcript" id="transcript" role="log" aria-live="polite" aria-relevant="additions"></div>
+    </div>
+    <button type="button" class="jump" id="jump" hidden tabindex="-1">
+      <span data-icon="arrowDown"></span><span>Jump to latest</span>
+    </button>
+  </div>
+  <div class="composer" id="composer">
+    <textarea id="input" rows="1" spellcheck="true" aria-label="Message"></textarea>
+    <div class="composer-row">
+      <button type="button" class="chip" id="chip" hidden>
+        <span class="chip-icon" id="chip-icon"></span><span class="chip-text" id="chip-text"></span>
+      </button>
+      <span class="grow"></span>
+      <button type="button" class="jev" id="jev" data-icon="terminal" title="Hand this goal to Jev (/jev)" aria-label="Hand this goal to Jev" aria-pressed="false"></button>
+      <button type="button" class="send" id="send" data-icon="arrowUp" title="Send (Return)" aria-label="Send"></button>
+    </div>
+  </div>
+  <div class="menu" id="menu" role="menu" hidden></div>
+</div>
+</body>
+</html>

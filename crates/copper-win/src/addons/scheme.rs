@@ -7,7 +7,8 @@
 //! WebView2 asks on the UI thread and wants the answer there and then
 //! (`Engine::register_scheme`), so a bundle is read ahead, off the UI
 //! thread, as soon as its page is made ([`preload`]); a file not read yet
-//! (a developer folder that changed) is read when it is asked for.
+//! (a developer folder that changed) is read when it is asked for. The
+//! built-in agent's files are in the binary ([`super::builtin::serve`]).
 
 use super::glue::Active;
 use super::policy;
@@ -78,6 +79,18 @@ fn answer(req: &SchemeRequest) -> copper_engine::SchemeResponse {
         return Err("not the addon's page".into());
     }
     let active = view.addon();
+    if super::builtin::is(&active) {
+        // Copper's own agent: compiled in, nothing to read.
+        let served = super::builtin::serve(&req.uri);
+        tracing::debug!(uri = %req.uri, status = served.status, "copper-addon: built-in");
+        if served.status != 200 {
+            return Err(format!("{} Not found", served.status));
+        }
+        return Ok(SchemeBody {
+            data: served.body,
+            mime: policy::bare_mime(served.mime).to_string(),
+        });
+    }
     let key = key_of(&active);
     let cached = CACHE.with(|c| {
         let c = c.borrow();
@@ -106,6 +119,10 @@ fn answer(req: &SchemeRequest) -> copper_engine::SchemeResponse {
 
 /// Read `active`'s bundle ahead, off the UI thread.
 pub fn preload(active: &Active) {
+    if super::builtin::is(active) {
+        // Compiled in: served straight from the binary.
+        return;
+    }
     if active.dev {
         // A developer folder changes under us: always read it fresh.
         return;
