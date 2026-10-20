@@ -30,8 +30,6 @@ mod door;
 #[cfg(windows)]
 pub mod downloads;
 #[cfg(windows)]
-mod files;
-#[cfg(windows)]
 pub mod hidden;
 #[cfg(windows)]
 pub mod history;
@@ -39,8 +37,6 @@ pub mod history;
 mod host;
 #[cfg(windows)]
 pub mod plate;
-#[cfg(windows)]
-pub mod redress;
 
 // What they work out, platform-free (and tested on any host).
 mod ring;
@@ -50,24 +46,3 @@ mod when;
 
 #[cfg(windows)]
 pub use host::*;
-
-/// Run `f` on a thread of its own and wait (without blocking the UI) for
-/// what it returns.
-#[cfg(windows)]
-pub(crate) async fn off_thread<T: Send + 'static>(
-    f: impl FnOnce() -> T + Send + 'static,
-) -> Option<T> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(f());
-    });
-    loop {
-        match rx.try_recv() {
-            Ok(v) => return Some(v),
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                copper_win_rt::sleep(std::time::Duration::from_millis(20)).await;
-            }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => return None,
-        }
-    }
-}

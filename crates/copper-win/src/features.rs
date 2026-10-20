@@ -96,9 +96,6 @@ pub fn page_created(shell: &Shell, id: &TabId, page: &WebView2Page) {
             match ev {
                 PageEvent::ScriptMessage { name, body } if name == curtain::HANDLER => {
                     curtain::message(&shell, &tab, &body);
-                    // WebView2's user sheets reach new documents only:
-                    // the page on screen is told itself.
-                    crate::panels::redress::picked(&shell, &tab);
                 }
                 PageEvent::Load(LoadState::Committed { .. }) => {
                     curtain::navigated(&shell, &tab);

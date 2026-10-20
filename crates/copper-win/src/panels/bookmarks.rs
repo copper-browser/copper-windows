@@ -126,7 +126,8 @@ fn bring_in(shell: &Shell, browser: Browser) {
     let name = browser.name.clone();
     let weak = shell.downgrade();
     copper_win_rt::spawn_local(async move {
-        let Some(read) = super::off_thread(move || copper_import::bookmarks::read(&dirs)).await
+        let Some(read) =
+            crate::sys::work::off_thread(move || copper_import::bookmarks::read(&dirs)).await
         else {
             return;
         };

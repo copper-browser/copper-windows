@@ -24,6 +24,7 @@ mod intelligence;
 mod labs;
 mod passwords;
 mod privacy;
+mod space_page;
 mod spaces;
 mod tabs;
 mod updates;

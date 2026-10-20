@@ -5,6 +5,10 @@
 
 use std::path::Path;
 use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Graphics::Dwm::{
+    DWM_WINDOW_CORNER_PREFERENCE, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE,
+    DWMWCP_DONOTROUND, DWMWCP_ROUND, DwmSetWindowAttribute,
+};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
@@ -16,6 +20,35 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW, SetWindowPlacement,
     SetWindowPos, ShowWindow, WINDOWPLACEMENT, WPF_ASYNCWINDOWPLACEMENT, WS_CAPTION, WS_THICKFRAME,
 };
+
+/// Windows 11's 1-DIP window border and round corners: off while the
+/// window covers the monitor (a light hairline round a black frame),
+/// back after.
+fn bare_edges(hwnd: HWND, bare: bool) {
+    // DWMWA_COLOR_NONE / DWMWA_COLOR_DEFAULT.
+    let colour: u32 = if bare { 0xFFFF_FFFE } else { 0xFFFF_FFFF };
+    let corner = if bare {
+        DWMWCP_DONOTROUND
+    } else {
+        DWMWCP_ROUND
+    };
+    // SAFETY: plain attribute writes with correctly sized values; failures
+    // (Windows 10) are harmless.
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            (&colour as *const u32).cast(),
+            size_of::<u32>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            (&corner as *const DWM_WINDOW_CORNER_PREFERENCE).cast(),
+            size_of::<i32>() as u32,
+        );
+    }
+}
 
 /// The window as it was before going full screen.
 #[derive(Clone, Copy)]
@@ -44,6 +77,7 @@ pub fn enter_fullscreen(hwnd: HWND) -> Option<Saved> {
         }
         let bare = style & !((WS_CAPTION.0 | WS_THICKFRAME.0) as isize);
         SetWindowLongPtrW(hwnd, GWL_STYLE, bare);
+        bare_edges(hwnd, true);
         let r = info.rcMonitor;
         let _ = SetWindowPos(
             hwnd,
@@ -63,6 +97,7 @@ pub fn leave_fullscreen(hwnd: HWND, saved: Saved) {
     // SAFETY: as above; the placement is the one Windows gave us.
     unsafe {
         SetWindowLongPtrW(hwnd, GWL_STYLE, saved.style);
+        bare_edges(hwnd, false);
         let _ = SetWindowPlacement(hwnd, &saved.placement);
         let _ = SetWindowPos(
             hwnd,

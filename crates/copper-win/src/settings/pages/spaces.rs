@@ -1,10 +1,9 @@
 //! Spaces (`Fork/SpacePage.swift`): which space, and how it looks — its
-//! icon, its colour, its profile, its place in the row — and deleting it.
+//! name, icon, colour and profile, its place in the row — and deleting it.
 //!
-//! Drawn with the plain form for now: the Mac's page has a picker of
-//! chips, a name field, an icon grid and a live preview, which want the
-//! panel's own-body hook. Until then a space is picked, marked, coloured,
-//! given a profile, moved and deleted from here, and renamed nowhere.
+//! The page draws itself ([`super::space_page`]): chips to pick a space,
+//! a name field, icon tiles and colour wells. The form below is what
+//! Settings' search indexes the page by.
 
 use crate::chrome::glyph;
 use crate::palette::{spaces, symbols};
@@ -12,6 +11,8 @@ use crate::platform::Shell;
 use crate::settings::Page;
 use crate::settings::form::Form;
 use copper_shell_core::spaces::colour::SpaceColour;
+use copper_win_ui::win::Ui;
+use copper_win_ui::{Event, NodeId};
 
 /// Spaces: Settings › Spaces.
 pub(super) struct Spaces;
@@ -197,5 +198,21 @@ impl Page for Spaces {
             "delete" => spaces::ask_delete(shell, &id),
             _ => {}
         }
+    }
+
+    fn body(&self, shell: &Shell) -> Option<Box<dyn FnOnce(&mut Ui, NodeId)>> {
+        super::space_page::body(shell)
+    }
+
+    fn click(&self, shell: &Shell, id: NodeId) -> bool {
+        super::space_page::click(shell, id)
+    }
+
+    fn field(&self, shell: &Shell, id: NodeId, e: &Event) -> bool {
+        super::space_page::field(shell, id, e)
+    }
+
+    fn left(&self) {
+        super::space_page::left();
     }
 }

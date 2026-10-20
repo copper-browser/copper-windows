@@ -9,6 +9,7 @@
 //! is the plain field over the page, as in the column (`Browser.edit`).
 
 use super::build::{door, mark, tip};
+use super::doors;
 use super::glyph;
 use super::images::Images;
 use super::model::{Model, Nav};
@@ -59,6 +60,10 @@ struct Drawn {
 /// The strip's nodes.
 pub struct Strip {
     pub strip: NodeId,
+    /// The downloads door (the Downloads panel draws what it shows).
+    pub downloads: doors::DownloadsDoor,
+    /// The bookmarks door (the Bookmarks list hangs from it).
+    pub bookmarks: NodeId,
     run: NodeId,
     back: NodeId,
     forward: NodeId,
@@ -111,8 +116,8 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Strip {
         glyph::PLUS,
         metrics::PLUS_WIDTH,
         DOOR_GLYPH,
-        "New tab",
-        &tip("New tab", "new-tab"),
+        "New Tab",
+        &tip("New Tab", "new-tab"),
     );
     targets.insert(plus, Hit::NewTab);
     ui.tree.add(strip, Node::new().grow(1.0).min_width(24.0));
@@ -153,11 +158,16 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Strip {
     targets.insert(back, Hit::Back);
     targets.insert(forward, Hit::Forward);
     targets.insert(reload, Hit::Reload);
+    // The panels' doors, after the helm (`TabBar.swift` 107–122).
+    let downloads = doors::strip_downloads(ui, strip);
+    let bookmarks = doors::bookmarks(ui, strip);
     // The caption buttons' corner.
     ui.tree
         .add(strip, Node::new().width(Caption::width()).shrink(0.0));
     Strip {
         strip,
+        downloads,
+        bookmarks,
         run,
         back,
         forward,

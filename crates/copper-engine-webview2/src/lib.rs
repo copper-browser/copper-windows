@@ -21,6 +21,7 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 pub(crate) mod accept;
+pub(crate) mod appearance;
 pub(crate) mod args;
 pub(crate) mod cdp;
 pub(crate) mod context_menu;
@@ -33,6 +34,7 @@ pub(crate) mod input_plan;
 pub(crate) mod keys;
 pub(crate) mod languages;
 pub(crate) mod navigation;
+pub(crate) mod partials;
 pub(crate) mod profile_home;
 pub(crate) mod scheme;
 pub(crate) mod scripts;
@@ -41,6 +43,7 @@ pub(crate) mod util;
 #[cfg(windows)]
 mod win;
 
+pub use appearance::{ColorScheme, Ground};
 pub use context_menu::{ContextItemKind, ContextKind, ContextMenuItem, ContextMenuRequest};
 pub use filter::WebView2ContentFilter;
 pub use history::HistoryEntry;

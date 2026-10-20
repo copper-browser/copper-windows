@@ -4,8 +4,10 @@
 // messages leave through a CDP binding (`Runtime.addBinding` with
 // `executionContextName` = the world's name): calling the binding raises
 // `Runtime.bindingCalled` with the string payload `{"__copper":name,"body":…}`.
-// The binding is looked up at call time because Chromium may install it
-// after document-created scripts have run. `__COPPER_NAMES__` is the JSON
+// The binding is looked up at call time: V8 puts it into a new document's
+// world only when the engine asks (by execution context id, at commit and
+// `DOMContentLoaded`), which can be after document-created scripts ran, so
+// messages wait in order until it is there. `__COPPER_NAMES__` is the JSON
 // array of names registered for this world; `__COPPER_BINDING__` the
 // binding's name. The world is private to Copper, so the name setter is a
 // plain global here.
@@ -17,15 +19,39 @@
   const stringify = JSON.stringify;
   const names = new Set(__COPPER_NAMES__);
   const cache = new Map();
+  const later = setTimeout;
+  const held = [];
+  let waiting = false;
+  const flush = () => {
+    const send = globalThis[BINDING];
+    if (typeof send !== 'function') return false;
+    while (held.length) send(held.shift());
+    return true;
+  };
+  // Up to ~30 s, backing off; then what is held goes.
+  const wait = (tries) => {
+    later(() => {
+      if (flush()) waiting = false;
+      else if (tries < 150) wait(tries + 1);
+      else {
+        held.length = 0;
+        waiting = false;
+      }
+    }, Math.min(10 + tries * 10, 250));
+  };
   const handler = (name) => {
     let h = cache.get(name);
     if (!h) {
       h = Object.freeze({
         postMessage(body) {
-          const send = globalThis[BINDING];
-          if (typeof send !== 'function') return;
           const s = body === undefined ? undefined : stringify(body);
-          send(stringify({ __copper: name, body: s === undefined ? null : JSON.parse(s) }));
+          if (held.length < 1000) {
+            held.push(stringify({ __copper: name, body: s === undefined ? null : JSON.parse(s) }));
+          }
+          if (!flush() && !waiting) {
+            waiting = true;
+            wait(0);
+          }
         },
       });
       cache.set(name, h);

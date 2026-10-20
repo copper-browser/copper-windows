@@ -13,10 +13,11 @@
 //! drawn; the rows are built again only when what is listed changes.
 
 use super::plate::{self, Plate};
-use super::{Panel, Place, files, when};
+use super::{Panel, Place, when};
 use crate::chrome::glyph;
 use crate::commands::Command;
 use crate::platform::{Icon, Shell};
+use crate::sys::files;
 use copper_core::downloads::{DownloadId, DownloadState, Keep, LiveDownload};
 use copper_shell_core::format;
 use copper_win_ui::win::Ui;

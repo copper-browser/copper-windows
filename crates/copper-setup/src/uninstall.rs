@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::cli::UninstallOptions;
-use crate::files::is_inside;
+use crate::files::{is_inside, only_warmed_up};
 use crate::install::{desktop_shortcut, install_dir, start_menu_shortcut};
 use crate::log::log;
 use crate::registration::APP_NAME;
@@ -94,6 +94,12 @@ pub fn run(
             data_dir().and_then(|d| remove_dir_patiently(&d)),
             "delete browsing data",
         );
+    } else if let Ok(d) = data_dir()
+        && only_warmed_up(&d)
+    {
+        // Never opened: what is there is the installer's warm-up, not the
+        // user's data.
+        note(remove_dir_patiently(&d), "remove the warm-up's data");
     }
 
     report(0.80);

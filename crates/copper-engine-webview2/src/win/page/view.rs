@@ -26,6 +26,7 @@ const HTML_BASE: &str = "https://copper.invalid/";
 
 /// Navigate the webview; a URL WebView2 refuses fails the load at once.
 pub(super) fn navigate(page: &Rc<PageInner>, wv: &Wv, url: &str) {
+    page.document_coming();
     if let Err(e) = unsafe { wv.view.Navigate(&hs(url)) } {
         page.nav.borrow_mut().cancel_pending();
         page.emit(PageEvent::Load(LoadState::Failed {
@@ -57,6 +58,7 @@ fn navigate_html(page: &Rc<PageInner>, wv: &Wv, html: String, url: String) {
         tracing::warn!("load_html: {e}");
         // NavigateToString takes at most 2 MB of UTF-16.
         if html.len() < 1_000_000 {
+            page.document_coming();
             let _ = unsafe { wv.view.NavigateToString(&hs(&html)) };
         }
         return;

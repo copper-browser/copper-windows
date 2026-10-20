@@ -17,7 +17,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use copper_engine::{
-    EngineError, JsonValue, LocalFuture, PageEvent, Result, UserScript, UserStyleSheet, World,
+    EngineError, Frames, JsonValue, LocalFuture, PageEvent, Result, UserScript, UserStyleSheet,
+    World,
 };
 use copper_win_rt::oneshot;
 use serde_json::json;
@@ -32,8 +33,8 @@ use super::PageInner;
 use crate::cdp as build;
 use crate::scripts::{
     CONSOLE_HANDLER, CONSOLE_JS, Chain, Registered, binding_name, console_message,
-    decode_binding_payload, decode_web_message, page_chain, page_names_update, style_sheet_source,
-    user_script_source, world_chain, world_names_update, world_shim,
+    decode_binding_payload, decode_web_message, page_chain, page_names_update, style_sheet_removal,
+    style_sheet_source, user_script_source, world_chain, world_names_update, world_shim,
 };
 use crate::win::cdp;
 use crate::win::com::{get_bool, get_string, hs, within};
@@ -59,10 +60,10 @@ impl Entry {
         }
     }
 
-    fn source(&self) -> String {
+    fn source(&self, id: u64) -> String {
         match self {
             Entry::Script(s) => user_script_source(s),
-            Entry::Sheet(s) => style_sheet_source(s),
+            Entry::Sheet(s) => style_sheet_source(s, id),
         }
     }
 }
@@ -81,6 +82,9 @@ pub(crate) struct Scripts {
     /// The webview generation a sync is running for (0: none).
     running: Cell<u64>,
     dirty: Cell<bool>,
+    /// [`bind_documents`] is running / was asked again meanwhile.
+    binding: Cell<bool>,
+    rebind: Cell<bool>,
 }
 
 impl Scripts {
@@ -139,8 +143,8 @@ fn desired(page: &PageInner) -> BTreeMap<WorldKey, Vec<String>> {
             .or_default()
             .push(user_script_source(s));
     }
-    for (_, e) in page.scripts.entries.borrow().iter() {
-        per_world.entry(e.world()).or_default().push(e.source());
+    for (id, e) in page.scripts.entries.borrow().iter() {
+        per_world.entry(e.world()).or_default().push(e.source(*id));
     }
     for (w, names) in page.scripts.handlers.borrow().iter() {
         if !names.is_empty() {
@@ -298,6 +302,74 @@ async fn unregister(wv: &Wv, world: &WorldKey, id: &str) {
     }
 }
 
+/// Most frames a [`bind_documents`] pass binds (main frame first).
+const BIND_FRAMES: usize = 24;
+
+/// Put each isolated world's binding into the documents there are now.
+///
+/// V8 adds a `Runtime.addBinding` (by context name) to contexts made later
+/// only while the Runtime domain is enabled, which Copper never does (a page
+/// can notice it). So a new document's world would have its shim but no
+/// way out: each new document (main frame or child) gets the binding by
+/// execution context id, which needs no removal (no gap in which messages
+/// are dropped) and does nothing where it is already there. The shim holds
+/// messages until it can send them.
+pub(super) fn bind_documents(page: &Rc<PageInner>) {
+    if page.scripts.bindings.borrow().is_empty() {
+        return;
+    }
+    if page.scripts.binding.replace(true) {
+        page.scripts.rebind.set(true);
+        return;
+    }
+    let me = Rc::downgrade(page);
+    copper_win_rt::spawn_local(async move {
+        loop {
+            let (wv, worlds) = {
+                let Some(p) = me.upgrade() else { return };
+                p.scripts.rebind.set(false);
+                let worlds: Vec<String> = p.scripts.bindings.borrow().iter().cloned().collect();
+                match p.wv() {
+                    Some(wv) if !worlds.is_empty() => (wv, worlds),
+                    _ => {
+                        p.scripts.binding.set(false);
+                        return;
+                    }
+                }
+            };
+            bind_in_frames(&wv, &worlds).await;
+            let Some(p) = me.upgrade() else { return };
+            if !p.scripts.rebind.get() {
+                p.scripts.binding.set(false);
+                return;
+            }
+        }
+    });
+}
+
+async fn bind_in_frames(wv: &Wv, worlds: &[String]) {
+    let Ok(tree) = cdp::call(&wv.view, "Page.getFrameTree", json!({})).await else {
+        return;
+    };
+    let mut frames = Vec::new();
+    build::frame_ids(&tree, &mut frames, BIND_FRAMES);
+    for frame in &frames {
+        for w in worlds {
+            let params = json!({ "frameId": frame, "worldName": w, "grantUniveralAccess": false });
+            let Ok(r) = cdp::call(&wv.view, "Page.createIsolatedWorld", params).await else {
+                continue;
+            };
+            let Some(context) = r.get("executionContextId").and_then(JsonValue::as_i64) else {
+                continue;
+            };
+            let params = json!({ "name": binding_name(w), "executionContextId": context });
+            if let Err(e) = cdp::call(&wv.view, "Runtime.addBinding", params).await {
+                tracing::debug!("world {w}: binding into frame {frame}: {e}");
+            }
+        }
+    }
+}
+
 /// One CDP binding per isolated world that has handlers.
 async fn sync_bindings(page: &PageInner, wv: &Wv) {
     let want: BTreeSet<String> = page
@@ -309,14 +381,20 @@ async fn sync_bindings(page: &PageInner, wv: &Wv) {
         .filter_map(|(w, _)| w.clone())
         .collect();
     let have = page.scripts.bindings.borrow().clone();
+    let mut added = Vec::new();
     for w in want.difference(&have) {
         let params = json!({ "name": binding_name(w), "executionContextName": w });
         match cdp::call(&wv.view, "Runtime.addBinding", params).await {
             Ok(_) => {
                 page.scripts.bindings.borrow_mut().insert(w.clone());
+                added.push(w.clone());
             }
             Err(e) => tracing::warn!("world {w}: binding: {e}"),
         }
+    }
+    // The documents there already (made before the binding was) get it too.
+    if !added.is_empty() {
+        bind_in_frames(wv, &added).await;
     }
     for w in have.difference(&want) {
         let params = json!({ "name": binding_name(w) });
@@ -419,7 +497,15 @@ pub(super) fn route_web_message(page: &PageInner, json: &str) {
         }
         return;
     }
-    if page.scripts.allows(&None, &msg.name) {
+    let allowed = page.scripts.allows(&None, &msg.name);
+    // Never the body: sign-in messages carry passwords.
+    tracing::trace!(
+        name = %msg.name,
+        allowed,
+        kind = msg.body.get("kind").and_then(|k| k.as_str()).unwrap_or(""),
+        "page message"
+    );
+    if allowed {
         page.emit(PageEvent::ScriptMessage {
             name: msg.name,
             body: msg.body,
@@ -450,22 +536,83 @@ pub(super) fn route_binding(page: &PageInner, params: &JsonValue) {
 
 pub(super) fn add_entry(page: &Rc<PageInner>, entry: Entry) -> u64 {
     let id = crate::util::next_id();
+    // A style sheet reaches the open documents too, as WebKit's do (a
+    // script does not: it runs as documents are made).
+    let live = match &entry {
+        Entry::Sheet(s) => Some((
+            s.world.name().map(str::to_owned),
+            s.frames == Frames::All,
+            style_sheet_source(s, id),
+        )),
+        Entry::Script(_) => None,
+    };
     page.scripts.entries.borrow_mut().push((id, entry));
     page.scripts_changed();
+    if let Some((world, all_frames, js)) = live {
+        run_in_open_documents(page, world, all_frames, js);
+    }
     id
 }
 
 pub(super) fn remove_entry(page: &Rc<PageInner>, id: u64) -> bool {
     let removed = {
         let mut e = page.scripts.entries.borrow_mut();
-        let before = e.len();
-        e.retain(|(i, _)| *i != id);
-        e.len() != before
+        let at = e.iter().position(|(i, _)| *i == id);
+        at.map(|at| e.remove(at).1)
     };
-    if removed {
-        page.scripts_changed();
+    let Some(entry) = removed else {
+        return false;
+    };
+    page.scripts_changed();
+    if let Entry::Sheet(s) = entry {
+        let world = s.world.name().map(str::to_owned);
+        run_in_open_documents(
+            page,
+            world,
+            s.frames == Frames::All,
+            style_sheet_removal(id),
+        );
     }
-    removed
+    true
+}
+
+/// Run `js` in the documents open now: the main frame's, and (`all_frames`,
+/// page world only) its child frames'. Nothing when the page has no webview:
+/// its next one starts from the registrations. Errors are only logged (a
+/// document going away mid-call).
+fn run_in_open_documents(page: &Rc<PageInner>, world: WorldKey, all_frames: bool, js: String) {
+    let Some(wv) = page.wv() else { return };
+    match world {
+        None => {
+            unsafe {
+                let _ = wv.view.ExecuteScript(&hs(&js), None);
+            }
+            if all_frames {
+                // Collected first: calling into WebView2 can raise frame
+                // events that change `frames`.
+                let frames: Vec<ICoreWebView2Frame2> = page
+                    .frames
+                    .borrow()
+                    .iter()
+                    .filter_map(|h| h.frame.cast::<ICoreWebView2Frame2>().ok())
+                    .collect();
+                for f in frames {
+                    unsafe {
+                        let _ = f.ExecuteScript(&hs(&js), None);
+                    }
+                }
+            }
+        }
+        Some(name) => {
+            let me = Rc::downgrade(page);
+            copper_win_rt::spawn_local(async move {
+                let Some(p) = me.upgrade() else { return };
+                if let Err(e) = evaluate_in(&p, &wv, &js, Some(&name), false, EVAL_LIMIT).await {
+                    tracing::debug!("world {name}: live style sheet: {e}");
+                }
+            });
+        }
+    }
 }
 
 // -- evaluation ------------------------------------------------------------------
@@ -508,6 +655,8 @@ pub(super) fn eval(
 ) -> LocalFuture<Result<JsonValue>> {
     let page = page.clone();
     Box::pin(async move {
+        page.view().await?;
+        page.first_document().await;
         let wv = page.view().await?;
         match world.name() {
             Some(name) => evaluate_in(&page, &wv, &js, Some(name), false, EVAL_LIMIT).await,
@@ -523,6 +672,8 @@ pub(super) fn evaluate_async(
 ) -> LocalFuture<Result<JsonValue>> {
     let page = page.clone();
     Box::pin(async move {
+        page.view().await?;
+        page.first_document().await;
         let wv = page.view().await?;
         evaluate_in(&page, &wv, &expression, world.name(), true, ASYNC_LIMIT).await
     })
