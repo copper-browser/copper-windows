@@ -98,7 +98,10 @@ pub fn build(ui: &mut Ui) -> State {
         side: true,
         folded: false,
         immersed: false,
+        full: false,
         find: None,
+        letter: None,
+        welcome: None,
     }
 }
 

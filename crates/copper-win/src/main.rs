@@ -49,9 +49,7 @@ mod forms;
 mod frame;
 #[cfg(windows)]
 mod instance;
-#[cfg(windows)]
 mod palette;
-#[cfg(windows)]
 mod panels;
 mod picture;
 #[cfg(windows)]

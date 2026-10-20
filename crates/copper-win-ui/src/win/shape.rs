@@ -17,13 +17,16 @@ use std::f32::consts::PI;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_BEZIER_SEGMENT,
     D2D1_COLOR_F, D2D1_COMPOSITE_MODE_SOURCE_OVER, D2D1_FIGURE_BEGIN_FILLED,
-    D2D1_FIGURE_END_CLOSED, D2D1_PIXEL_FORMAT,
+    D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    CLSID_D2D1Shadow, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_SMALL, D2D1_BITMAP_OPTIONS_TARGET,
-    D2D1_BITMAP_PROPERTIES1, D2D1_INTERPOLATION_MODE_LINEAR, D2D1_PROPERTY_TYPE_FLOAT,
-    D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION, D2D1_SWEEP_DIRECTION_CLOCKWISE, ID2D1Bitmap1,
-    ID2D1Factory1, ID2D1Geometry, ID2D1Image, ID2D1PathGeometry1, ID2D1SolidColorBrush,
+    CLSID_D2D1Shadow, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
+    D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_CAP_STYLE_ROUND,
+    D2D1_DASH_STYLE_SOLID, D2D1_INTERPOLATION_MODE_LINEAR, D2D1_LINE_JOIN_ROUND,
+    D2D1_PROPERTY_TYPE_FLOAT, D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION,
+    D2D1_STROKE_STYLE_PROPERTIES1, D2D1_STROKE_TRANSFORM_TYPE_NORMAL,
+    D2D1_SWEEP_DIRECTION_CLOCKWISE, ID2D1Bitmap1, ID2D1Factory1, ID2D1Geometry, ID2D1Image,
+    ID2D1PathGeometry1, ID2D1SolidColorBrush, ID2D1StrokeStyle,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::core::{Interface, Result};
@@ -65,6 +68,9 @@ pub struct Baked {
 pub struct Shapes {
     paths: HashMap<PathKey, ID2D1Geometry>,
     shadows: HashMap<ShadowKey, Baked>,
+    /// Open rings: diameter, stroke width, trim.
+    arcs: HashMap<(u32, u32, u32), ID2D1Geometry>,
+    caps: Option<ID2D1StrokeStyle>,
     black: Option<ID2D1SolidColorBrush>,
     generation: u32,
 }
@@ -84,9 +90,50 @@ impl Shapes {
         Shapes {
             paths: HashMap::new(),
             shadows: HashMap::new(),
+            arcs: HashMap::new(),
+            caps: None,
             black: None,
             generation: u32::MAX,
         }
+    }
+
+    /// The open ring of a `d`-wide circle stroked `width` thick: from the
+    /// top, clockwise, `trim` of the way round (to be stroked with
+    /// [`Shapes::round_caps`]).
+    pub fn arc(&mut self, gfx: &Gfx, d: f32, width: f32, trim: f32) -> Option<ID2D1Geometry> {
+        self.check(gfx);
+        let key = (q(d), q(width), (trim.clamp(0.0, 1.0) * 1000.0) as u32);
+        if let Some(g) = self.arcs.get(&key) {
+            return Some(g.clone());
+        }
+        if self.arcs.len() > CAP {
+            self.arcs.clear();
+        }
+        let g = ring_path(&gfx.d2d_factory, d, width, trim.clamp(0.001, 0.999)).ok()?;
+        let g: ID2D1Geometry = g.cast().ok()?;
+        self.arcs.insert(key, g.clone());
+        Some(g)
+    }
+
+    /// A stroke with round ends.
+    pub fn round_caps(&mut self, gfx: &Gfx) -> Option<ID2D1StrokeStyle> {
+        self.check(gfx);
+        if self.caps.is_none() {
+            let props = D2D1_STROKE_STYLE_PROPERTIES1 {
+                startCap: D2D1_CAP_STYLE_ROUND,
+                endCap: D2D1_CAP_STYLE_ROUND,
+                dashCap: D2D1_CAP_STYLE_ROUND,
+                lineJoin: D2D1_LINE_JOIN_ROUND,
+                miterLimit: 10.0,
+                dashStyle: D2D1_DASH_STYLE_SOLID,
+                dashOffset: 0.0,
+                transformType: D2D1_STROKE_TRANSFORM_TYPE_NORMAL,
+            };
+            // SAFETY: creating a stroke style on our factory.
+            let style = unsafe { gfx.d2d_factory.CreateStrokeStyle(&props, None) }.ok()?;
+            self.caps = style.cast().ok();
+        }
+        self.caps.clone()
     }
 
     /// Forget device-bound entries after the devices were rebuilt.
@@ -95,6 +142,8 @@ impl Shapes {
             self.generation = gfx.generation;
             self.paths.clear();
             self.shadows.clear();
+            self.arcs.clear();
+            self.caps = None;
             self.black = None;
         }
     }
@@ -273,6 +322,37 @@ pub fn corner(w: f32, h: f32, r: f32) -> Corner {
 
 fn v(x: f32, y: f32) -> Vector2 {
     Vector2 { X: x, Y: y }
+}
+
+/// The open arc of [`Shapes::arc`], at the origin.
+fn ring_path(f: &ID2D1Factory1, d: f32, width: f32, trim: f32) -> Result<ID2D1PathGeometry1> {
+    let c = d / 2.0;
+    let r = (c - width / 2.0).max(0.5);
+    // From the top (-90°), clockwise on screen (y grows downward).
+    let end = -PI / 2.0 + trim * 2.0 * PI;
+    // SAFETY: a path geometry built through its sink and closed.
+    unsafe {
+        let g = f.CreatePathGeometry()?;
+        let s = g.Open()?;
+        s.BeginFigure(v(c, c - r), D2D1_FIGURE_BEGIN_HOLLOW);
+        s.AddArc(&D2D1_ARC_SEGMENT {
+            point: v(c + r * end.cos(), c + r * end.sin()),
+            size: D2D_SIZE_F {
+                width: r,
+                height: r,
+            },
+            rotationAngle: 0.0,
+            sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+            arcSize: if trim > 0.5 {
+                D2D1_ARC_SIZE_LARGE
+            } else {
+                D2D1_ARC_SIZE_SMALL
+            },
+        });
+        s.EndFigure(D2D1_FIGURE_END_OPEN);
+        s.Close()?;
+        Ok(g)
+    }
 }
 
 /// Build the path of a continuous rectangle at the origin.

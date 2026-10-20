@@ -7,6 +7,8 @@ use crate::commands::Command;
 use crate::platform::Shell;
 use copper_core::browser::TabId;
 use copper_core::settings::{Look, TabsPosition};
+use copper_engine::{PageView, World};
+use copper_shell_core::OpenTab;
 use copper_shell_core::palette::complete::Purpose;
 
 fn with_active(s: &Shell, f: impl FnOnce(&Shell, &TabId)) {
@@ -27,6 +29,44 @@ fn several_spaces(s: &Shell) -> bool {
     s.browser().spaces().count() > 1
 }
 
+/// `Ctrl+Shift+N` (`Browser.swift` `newShyTab`): a private tab at once,
+/// blank, its address ready for typing, and a word on what it is.
+fn new_private_tab(s: &Shell) {
+    // Already on a blank private tab: just the address again.
+    let blank_private = s.active_is_private()
+        && s.browser()
+            .active()
+            .is_some_and(|t| t.url.is_empty() || t.url.starts_with("about:blank"));
+    if blank_private {
+        crate::palette::open(s, Purpose::Edit, true);
+        return;
+    }
+    s.open(
+        "about:blank",
+        OpenTab {
+            title: "New Tab".into(),
+            foreground: true,
+            private: true,
+            ..OpenTab::default()
+        },
+    );
+    s.toast("A tab that keeps nothing");
+    crate::palette::open(s, Purpose::Edit, true);
+}
+
+/// `Ctrl+Shift+M` (`Browser.swift` `pauseMedia`): whatever is making
+/// noise in this tab stops. (The page's own frames and any it can reach;
+/// WKWebView's `pauseAllMediaPlayback` also reaches other sites' frames.)
+fn pause_media(s: &Shell) {
+    let Some(page) = s.active_page() else { return };
+    const PAUSE: &str = "(() => { const all = (d) => { for (const m of d.querySelectorAll('video, audio')) { try { m.pause(); } catch (_) {} } for (const f of d.querySelectorAll('iframe')) { try { if (f.contentDocument) all(f.contentDocument); } catch (_) {} } }; all(document); })()";
+    let done = page.eval(PAUSE, &World::isolated("copper-media"));
+    copper_win_rt::spawn_local(async move {
+        let _ = done.await;
+    });
+    s.toast("Paused");
+}
+
 /// Register the core commands.
 pub fn register(shell: &Shell) {
     let r = shell.view().commands();
@@ -35,9 +75,12 @@ pub fn register(shell: &Shell) {
         Command::new("new-tab", "New Tab", glyph::PLUS, |s| {
             crate::palette::open(s, Purpose::Launch, false)
         }),
-        Command::new("new-private-tab", "New Private Tab", glyph::PRIVATE, |s| {
-            crate::palette::open(s, Purpose::Launch, true)
-        }),
+        Command::new(
+            "new-private-tab",
+            "New Private Tab",
+            glyph::PRIVATE,
+            new_private_tab,
+        ),
         Command::new("close-tab", "Close Tab", glyph::CLOSE, |s| s.close_active()).when(has_tab),
         Command::new("reopen-tab", "Reopen Closed Tab", glyph::HISTORY, |s| {
             s.reopen();
@@ -71,6 +114,7 @@ pub fn register(shell: &Shell) {
         Command::key("escape", |s| s.view().escape(s)),
         // The page.
         Command::key("reload", |s| s.reload_active()),
+        Command::new("pause-media", "Pause Media", glyph::AUDIO, pause_media).when(has_page),
         Command::new("hard-reload", "Reload Without Cache", glyph::RELOAD, |s| {
             s.hard_reload_active()
         })
@@ -97,16 +141,7 @@ pub fn register(shell: &Shell) {
             s.cycle_space(false)
         })
         .when(several_spaces),
-        Command::new("new-space", "New Space", glyph::PLUS, |s| {
-            let name = copper_shell_core::spaces::fresh_name(s.browser().spaces());
-            let id = s.add_space(&name);
-            s.switch_space(&id);
-        }),
-        Command::new("delete-space", "Delete Space…", glyph::CLOSE, |s| {
-            let id = s.browser().current_space_id().to_string();
-            crate::chrome::events::ask_delete_space(s, &id);
-        })
-        .when(several_spaces),
+        // New Space and Delete Space are the palette's (`palette::register`).
         // The window.
         Command::new(
             "toggle-layout",
@@ -149,6 +184,21 @@ pub fn register(shell: &Shell) {
             crate::settings::open(s, "general")
         }),
         Command::new("quit", "Quit Copper", glyph::CLOSE, crate::app::quit),
+        // What sites were allowed (Settings › Permissions on the Mac).
+        Command::new(
+            "forget-capture",
+            "Forget Camera and Microphone Choices",
+            glyph::VIDEO,
+            crate::chrome::permit::forget_capture,
+        )
+        .when(|s| crate::chrome::permit::has_choices(s, crate::chrome::permit::CAPTURE)),
+        Command::new(
+            "forget-permits",
+            "Forget Location and Notification Choices",
+            glyph::LOCATION,
+            crate::chrome::permit::forget_others,
+        )
+        .when(|s| crate::chrome::permit::has_choices(s, crate::chrome::permit::PERMIT)),
     ];
     for c in cmds {
         r.add(c);
