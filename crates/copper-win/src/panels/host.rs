@@ -61,7 +61,6 @@ pub trait Panel: 'static {
         false
     }
     /// A key the focused node did not use; `true` if it was the panel's.
-    #[allow(dead_code)] // shared with Settings, whose key routing calls it
     fn key(&self, _shell: &Shell, _key: Key, _mods: Mods, _focused: Option<NodeId>) -> bool {
         false
     }
@@ -330,7 +329,6 @@ pub fn field_event(shell: &Shell, id: NodeId, e: &Event) {
 
 /// A key the chrome's focused node did not use: the panel on show's, if
 /// it wants it.
-#[allow(dead_code)] // shared with Settings, whose key routing calls it
 pub fn key(shell: &Shell, key: Key, mods: Mods, focused: Option<NodeId>) -> bool {
     match shell.view().panels().current() {
         Some((panel, _)) => panel.key(shell, key, mods, focused),
