@@ -101,6 +101,10 @@ thread_local! {
     static RETRIES: RefCell<HashMap<PageId, u8>> = RefCell::new(HashMap::new());
     /// Tabs whose web join link is being taken.
     static JOINING: RefCell<HashSet<TabId>> = RefCell::new(HashSet::new());
+    /// Tabs told to give way to another tab on the same canvas, until they
+    /// are served again: no tab gives way to one that is itself going (two
+    /// tabs asking for one canvas together would otherwise both go).
+    static LEAVING: RefCell<HashSet<TabId>> = RefCell::new(HashSet::new());
 }
 
 /// The Canvas mark as the tab's icon: a rounded square with a scribble.
@@ -175,7 +179,15 @@ fn serve(shell: &Shell, tab: &TabId, uri: &str) -> scheme::Answer {
     }
     // The same canvas already in another tab: that one comes forward.
     let private = shell.browser().tab(tab).is_some_and(|t| t.private);
-    if !private && let Some(other) = other_tab(shell, &id, tab) {
+    let leaving = LEAVING.with(|l| {
+        let mut l = l.borrow_mut();
+        l.remove(tab);
+        // Closed tabs are not coming back.
+        l.retain(|t| shell.browser().tab(t).is_some());
+        l.clone()
+    });
+    if !private && let Some(other) = other_tab(shell, &id, tab, &leaving) {
+        LEAVING.with(|l| l.borrow_mut().insert(tab.clone()));
         let s = shell.clone();
         let t = tab.clone();
         copper_win_rt::spawn_local(async move { give_way(&s, &t, &other) });
@@ -195,12 +207,18 @@ fn serve(shell: &Shell, tab: &TabId, uri: &str) -> scheme::Answer {
     Ok((page_html().to_vec(), "text/html"))
 }
 
-/// Another tab, not private, on canvas `id`.
-fn other_tab(shell: &Shell, id: &str, not: &TabId) -> Option<TabId> {
+/// Another tab, not private and not itself giving way (`leaving`), on
+/// canvas `id`.
+fn other_tab(shell: &Shell, id: &str, not: &TabId, leaving: &HashSet<TabId>) -> Option<TabId> {
     let b = shell.browser();
     let mut hits: Vec<TabId> = b
         .all_tabs()
-        .filter(|t| &t.id != not && !t.private && core::id_from_url(&t.url).as_deref() == Some(id))
+        .filter(|t| {
+            &t.id != not
+                && !t.private
+                && !leaving.contains(&t.id)
+                && core::id_from_url(&t.url).as_deref() == Some(id)
+        })
         .map(|t| t.id.clone())
         .collect();
     hits.sort_by(|x, y| x.0.cmp(&y.0));

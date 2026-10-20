@@ -197,6 +197,14 @@ impl WebView2Engine {
             ground: Cell::new(Ground::WHITE),
             color_scheme: Cell::new(ColorScheme::Auto),
         });
+        let weak = Rc::downgrade(&inner);
+        inner.env.on_lost(Rc::new(move || {
+            if let Some(engine) = weak.upgrade() {
+                for p in engine.profiles() {
+                    p.reset();
+                }
+            }
+        }));
         Ok(WebView2Engine { inner })
     }
 

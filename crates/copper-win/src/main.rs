@@ -23,6 +23,7 @@ mod addons;
 mod args;
 mod cli;
 mod keys;
+mod logs;
 mod perf;
 
 #[cfg(windows)]

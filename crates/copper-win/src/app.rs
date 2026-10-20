@@ -34,6 +34,15 @@ pub const PREWARM: &str = "--prewarm";
 /// still took ~6 s to paint, kept up 30 s ~1 s (measured on the lab PC).
 const PREWARM_STAY: Duration = Duration::from_secs(30);
 
+/// The custom schemes the browser registers before its first page, in its
+/// order: the canvas's (copper-shell-core `canvas::scheme`) and the addons'
+/// (`addons::scheme::install`).
+const PREWARM_SCHEMES: [&str; 2] = ["copper", copper_core::addons::scheme::SCHEME];
+
+/// What the warm-up asks the cookie store about: any web address makes
+/// Chromium open the store (nothing is sent anywhere).
+const PREWARM_COOKIE_URL: &str = "https://example.com/";
+
 /// Run the browser; the process's exit code.
 pub fn run(args: Vec<String>) -> i32 {
     if args.iter().any(|a| a == PREWARM) {
@@ -109,14 +118,17 @@ pub fn run(args: Vec<String>) -> i32 {
 /// is in place: make the WebView2 environment and the main profile's first
 /// webview exactly as the browser will (the same folders, languages and
 /// `copper://` scheme, so a browser started meanwhile shares its browser
-/// process), load a blank page, keep the browser process up for
-/// [`PREWARM_STAY`] and leave — no window, no single-instance claim, no
-/// `copper.log` (its own goes to `logs\prewarm.log`). The user's first
-/// start then finds the user data folder made and set up, and the
-/// runtime's files in memory.
+/// process), load a blank page, ask the profile for a cookie (so Chromium
+/// makes the profile's cookie store now — on a new user data folder that
+/// took ~10 s on the lab PC, and the first page the user opens waits for
+/// it), keep the browser process up for [`PREWARM_STAY`] and leave — no
+/// window, no single-instance claim, no `copper.log` (its own goes to
+/// `logs\prewarm.log`). The user's first start then finds the user data
+/// folder made and set up, and the runtime's files in memory.
 fn prewarm() -> i32 {
-    use copper_engine::{Engine, PageOptions, PageView, ProfileId};
+    use copper_engine::{Engine, PageOptions, PageView, Profile, ProfileId};
     use copper_shell_core::Platform;
+    use std::cell::Cell;
     init_prewarm_log(&logs_dir());
     if copper_win_rt::init().is_err() || WebView2Engine::runtime_version().is_none() {
         // Nothing to warm: the browser explains a missing runtime itself.
@@ -129,20 +141,42 @@ fn prewarm() -> i32 {
         &loaded.settings,
     ));
     engine.set_preferred_languages(&crate::platform::Win::preferred_languages());
-    let scheme = engine.register_scheme(
-        "copper",
-        Box::new(|_| Err("not served while warming up".into())),
-    );
+    // Every scheme the browser registers, in its order (the canvas's, then
+    // the addons'): WebView2 shares one browser process only between
+    // environments made with the same options, and a browser started while
+    // this one still runs gets no webview at all otherwise
+    // (ERROR_INVALID_STATE, 0x8007139F, until the warm-up ends).
+    let mut scheme = Ok(());
+    for name in PREWARM_SCHEMES {
+        let r = engine.register_scheme(
+            name,
+            Box::new(|_| Err("not served while warming up".into())),
+        );
+        scheme = scheme.and(r);
+    }
     let started = std::time::Instant::now();
-    let page = ProfileId::new("default")
+    let Some(profile) = ProfileId::new("default")
         .ok()
         .and_then(|id| engine.profile(&id, false).ok())
-        .map(|profile| engine.new_page(&profile, PageOptions::default()));
-    let Some(page) = page else {
+    else {
         return 1;
     };
+    let page = engine.new_page(&profile, PageOptions::default());
     let mut events = page.events();
     page.load("about:blank");
+    // The cookie store, asked for alongside the page (it does not need one).
+    let cookies_ms: Rc<Cell<Option<f64>>> = Rc::default();
+    let asked = profile.cookies(PREWARM_COOKIE_URL);
+    let noted = cookies_ms.clone();
+    copper_win_rt::spawn_local(async move {
+        let outcome = match asked.await {
+            Ok(_) => "ready".to_owned(),
+            Err(e) => format!("failed ({e})"),
+        };
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        noted.set(Some(ms));
+        tracing::info!(target: "copper::prewarm", "cookie store {outcome} in {ms:.0} ms");
+    });
     copper_win_rt::spawn_local(async move {
         use copper_engine::{LoadState, PageEvent};
         let mut ready_ms = None;
@@ -170,10 +204,15 @@ fn prewarm() -> i32 {
                 );
             }
             if started.elapsed() > PREWARM_STAY {
+                let cookies = if cookies_ms.get().is_some() {
+                    ""
+                } else {
+                    ", the cookie store never answered"
+                };
                 break match ready_ms {
-                    Some(_) => "done".to_owned(),
+                    Some(_) => format!("done{cookies}"),
                     None => format!(
-                        "done, the page never loaded (url {:?}, loading {}, progress {:.2})",
+                        "done, the page never loaded (url {:?}, loading {}, progress {:.2}){cookies}",
                         page.url(),
                         page.is_loading(),
                         page.progress()
@@ -190,6 +229,7 @@ fn prewarm() -> i32 {
         copper_win_rt::quit(0);
     });
     let code = copper_win_rt::run();
+    drop(profile);
     drop(engine);
     end(code)
 }
@@ -273,6 +313,11 @@ fn handed(shell: &Shell, open: &[String]) {
 }
 
 /// Open the command line's addresses, the first in front.
+///
+/// As on the Mac (`Browser.arrive` → `open`): a page gets a tab of its own
+/// even if the restored session has it open already, but a canvas that
+/// already has a tab is that tab (`CanvasTabs.already`), brought forward —
+/// never a second tab that would have to give way.
 fn open_all(shell: &Shell, open: &[String]) {
     for (i, address) in open.iter().enumerate() {
         if crate::cloud::open_link(shell, address) {
@@ -280,6 +325,12 @@ fn open_all(shell: &Shell, open: &[String]) {
         }
         let url = args::command_line_url(address).or_else(|| shell.destination(address));
         if let Some(url) = url {
+            if let Some(tab) = canvas_tab(shell, &url) {
+                if i == 0 {
+                    shell.select(&tab);
+                }
+                continue;
+            }
             shell.open(
                 &url,
                 OpenTab {
@@ -289,6 +340,12 @@ fn open_all(shell: &Shell, open: &[String]) {
             );
         }
     }
+}
+
+/// The tab already showing the canvas `url` is for, if it is one.
+fn canvas_tab(shell: &Shell, url: &str) -> Option<copper_core::browser::TabId> {
+    let id = copper_shell_core::canvas::id_from_url(url)?;
+    copper_shell_core::canvas::tab_showing::<crate::platform::Win>(shell, &id)
 }
 
 /// Quit: remember the window's place, save the session, history and
@@ -331,13 +388,10 @@ fn init_logging(logs: &std::path::Path) {
             "warn,copper=info,copper::perf=info,copper_shell_core=info,copper_engine_webview2=info",
         )
     });
-    let _ = std::fs::create_dir_all(logs);
     // Only the window that won the claim gets here (a launch that hands its
     // address over has returned already). The last run's log is kept beside
     // the new one, so a crash is still readable after the restart.
-    let log = logs.join("copper.log");
-    let _ = std::fs::rename(&log, logs.join("copper.previous.log"));
-    let file = std::fs::File::create(&log);
+    let file = crate::logs::fresh(logs);
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(false);
