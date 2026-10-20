@@ -169,7 +169,10 @@ impl ProfileInner {
             Err(e) if env.ended() => {
                 // The browser process ended normally and the environment
                 // did not start another: a new environment does.
-                tracing::info!("profile {}: no webview after the browser process ended ({e})", self.id);
+                tracing::info!(
+                    "profile {}: no webview after the browser process ended ({e})",
+                    self.id
+                );
                 env.renew();
                 make(env.get().await?).await?
             }
