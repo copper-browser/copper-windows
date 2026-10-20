@@ -159,13 +159,13 @@ pub const BINDINGS: &[(&str, &[Chord])] = &[
     ),
     ("zoom-reset", &[c(Key::Digit(0)), c(Key::Other(VK_NUMPAD0))]),
     ("inspector", &[cs(l('I')), k(Key::F(12))]),
-    ("bookmark-page", &[c(l('D'))]),
+    ("bookmark-page", &[cs(l('B'))]),
     ("hide-anything", &[cs(l('H'))]),
     ("reader", &[ca(l('R'))]),
     // Panels.
-    ("show-history", &[c(l('Y'))]),
-    ("show-bookmarks", &[cs(l('O'))]),
-    ("show-downloads", &[cs(l('Y'))]),
+    ("show-history", &[c(l('H'))]),
+    ("show-downloads", &[cs(l('J'))]),
+    ("show-hidden", &[cs(l('U'))]),
     // Spaces.
     ("next-space", &[ca(Key::Right)]),
     ("previous-space", &[ca(Key::Left)]),
@@ -315,9 +315,20 @@ mod tests {
         assert_eq!(t(Key::Right, false, false, true), Some("forward"));
         assert_eq!(t(Key::Letter('F'), true, false, false), Some("find"));
         assert_eq!(
-            t(Key::Letter('D'), true, false, false),
+            t(Key::Letter('B'), true, true, false),
             Some("bookmark-page")
         );
+        assert_eq!(
+            t(Key::Letter('H'), true, false, false),
+            Some("show-history")
+        );
+        assert_eq!(
+            t(Key::Letter('J'), true, true, false),
+            Some("show-downloads")
+        );
+        assert_eq!(t(Key::Letter('U'), true, true, false), Some("show-hidden"));
+        // Ctrl+Y is Redo in Windows text fields and pages.
+        assert_eq!(t(Key::Letter('Y'), true, false, false), None);
         assert_eq!(
             t(Key::Other(VK_OEM_COMMA), true, false, false),
             Some("settings")

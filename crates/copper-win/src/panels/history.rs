@@ -1,24 +1,30 @@
 //! History (`Recall.swift` `HistoryPanel`), the worked example of a panel:
 //! search everywhere you have been, grouped by day, newest first; a click
-//! goes there, Remove (on hover) forgets one; the foot counts the pages
-//! and offers to clear — history, sign-ins or the cache, each said in
-//! words nobody has to guess at.
+//! goes there in the selected tab, Remove (on hover, in the time's place)
+//! forgets one; the foot counts the pages and offers to clear — history,
+//! sign-ins or the cache, each said in words nobody has to guess at.
+//!
+//! Every match is listed (the Mac has no cap). The first rows are drawn
+//! at once; the rest follow a chunk a turn, so a search with thousands of
+//! matches still answers within the frame.
 
-use super::Panel;
-use super::plate::{self, Plate};
+use super::plate::{self, Hunt, Plate};
+use super::{Panel, when};
 use crate::chrome::glyph;
-use crate::platform::Shell;
+use crate::platform::{Icon, Shell};
 use crate::sys::calendar::WinCalendar;
 use copper_core::history::Trace;
 use copper_engine::{Engine, Profile, WebsiteDataKinds};
-use copper_shell_core::format;
+use copper_shell_core::format::Calendar;
 use copper_win_ui::win::Ui;
-use copper_win_ui::{Align, Event, Insets, Node, NodeId, Role, Token, Trim};
+use copper_win_ui::{Align, Event, Insets, Justify, Node, NodeId, Role, Token, Trim};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 
-/// At most this many rows are drawn (a search narrows the rest).
-const SHOWN: usize = 300;
+/// Rows drawn at once; the rest come [`CHUNK`] a turn.
+const FIRST: usize = 120;
+const CHUNK: usize = 400;
 
 /// What a click in the panel means.
 #[derive(Clone, Debug)]
@@ -26,6 +32,7 @@ enum Hit {
     Go(String),
     Forget(String),
     Clear,
+    ClearSearch,
     Sweep(Sweep),
     Back,
 }
@@ -37,21 +44,34 @@ enum Sweep {
     Cache,
 }
 
-#[derive(Default)]
+/// One thing in the list, in order.
+enum Item {
+    Day(String),
+    Row(Trace, Option<Icon>),
+}
+
+#[derive(Default, Clone, Copy)]
 struct Nodes {
-    field: Option<NodeId>,
+    hunt: Option<Hunt>,
     list: Option<NodeId>,
     sweeps: Option<NodeId>,
+    tally: Option<NodeId>,
     count: Option<NodeId>,
-    plate: Option<Plate>,
 }
 
 /// The History panel.
 #[derive(Default)]
-pub struct History {
-    nodes: RefCell<Nodes>,
+pub struct History(Rc<Inner>);
+
+#[derive(Default)]
+struct Inner {
+    nodes: Cell<Nodes>,
     hits: RefCell<HashMap<NodeId, Hit>>,
     clearing: Cell<bool>,
+    /// Bumped by every refresh: a chunk of an older one is dropped.
+    drawing: Cell<u64>,
+    /// The day card rows are going into.
+    card: Cell<Option<NodeId>>,
 }
 
 impl Panel for History {
@@ -72,15 +92,32 @@ impl Panel for History {
     }
 
     fn build(&self, ui: &mut Ui, p: &Plate) {
-        let field = plate::hunt(ui, p.body, "Search everywhere you have been");
+        let hunt = plate::search(ui, p.body, "Search everywhere you have been");
         let list = ui.tree.add(
             p.body,
-            Node::scroll().max_height(420.0).gap(14.0).shrink(1.0),
+            Node::scroll()
+                .max_height(420.0)
+                .gap(14.0)
+                .padding(Insets::new(0.0, 0.0, 0.0, 2.0))
+                .shrink(1.0),
         );
-        let sweeps = ui.tree.add(p.body, Node::column().gap(10.0).hidden(true));
-        let card = plate::card(ui, sweeps);
-        let mut hits = self.hits.borrow_mut();
+        let mut hits = self.0.hits.borrow_mut();
         hits.clear();
+        hits.insert(hunt.clear, Hit::ClearSearch);
+        // The foot: the count and Clear…, or — clearing — the three sweeps
+        // in its place (`Recall.swift` `sweeps`).
+        let tally = ui
+            .tree
+            .add(p.foot, Node::row().grow(1.0).align(Align::Center));
+        let count = ui
+            .tree
+            .add(tally, Node::text("", 12.0).ink(Token::Muted).grow(1.0));
+        let clear = plate::pill(ui, tally, "Clear…");
+        hits.insert(clear, Hit::Clear);
+        let sweeps = ui
+            .tree
+            .add(p.foot, Node::column().gap(10.0).grow(1.0).hidden(true));
+        let card = plate::card(ui, sweeps);
         for (i, (title, detail, button, sweep)) in [
             (
                 "History",
@@ -111,60 +148,48 @@ impl Panel for History {
             let b = plate::pill(ui, control, button);
             hits.insert(b, Hit::Sweep(sweep));
         }
-        let back_row = ui
-            .tree
-            .add(sweeps, Node::row().justify(copper_win_ui::Justify::End));
+        let back_row = ui.tree.add(sweeps, Node::row().justify(Justify::End));
         let back = plate::pill(ui, back_row, "Back");
         hits.insert(back, Hit::Back);
-        let count = ui
-            .tree
-            .add(p.foot, Node::text("", 12.0).ink(Token::Muted).grow(1.0));
-        let clear = plate::pill(ui, p.foot, "Clear…");
-        hits.insert(clear, Hit::Clear);
         p.show_foot(ui, true);
-        ui.focus(Some(field));
-        self.clearing.set(false);
-        *self.nodes.borrow_mut() = Nodes {
-            field: Some(field),
+        ui.focus(Some(hunt.field));
+        self.0.clearing.set(false);
+        self.0.nodes.set(Nodes {
+            hunt: Some(hunt),
             list: Some(list),
             sweeps: Some(sweeps),
+            tally: Some(tally),
             count: Some(count),
-            plate: Some(*p),
-        };
+        });
     }
 
     fn refresh(&self, shell: &Shell) {
-        let Some(field) = self.nodes.borrow().field else {
+        let n = self.0.nodes.get();
+        let (Some(hunt), Some(list), Some(sweeps), Some(tally), Some(count)) =
+            (n.hunt, n.list, n.sweeps, n.tally, n.count)
+        else {
             return;
         };
         let chrome = shell.view().chrome().clone();
         let typed = chrome
-            .read(move |ui, _| ui.field_text(field).map(str::to_string))
+            .read(move |ui, _| ui.field_text(hunt.field).map(str::to_string))
             .flatten()
             .unwrap_or_default();
-        let traces = shell.history().search(&typed);
-        let days = group(&traces);
+        let mut traces = shell.history().search(&typed);
+        traces.sort_by(|a, b| b.last.0.total_cmp(&a.last.0));
         let total = traces.len();
         let empty = if typed.is_empty() {
             "Nothing yet."
         } else {
             "Nothing matches."
         };
-        let (list, count, sweeps, plate) = {
-            let n = self.nodes.borrow();
-            (n.list, n.count, n.sweeps, n.plate)
-        };
-        let (Some(list), Some(count), Some(sweeps), Some(plate)) = (list, count, sweeps, plate)
-        else {
-            return;
-        };
-        let clearing = self.clearing.get();
-        let mut made: Vec<(NodeId, Hit)> = Vec::new();
-        let rows = chrome.read(move |ui, _| {
+        let items = Rc::new(RefCell::new(items(traces)));
+        let clearing = self.0.clearing.get();
+        let drawn = chrome.read(move |ui, _| {
+            hunt.typed(ui, &typed);
             ui.tree.clear_children(list);
-            ui.tree.set_hidden(list, clearing);
+            ui.tree.set_hidden(tally, clearing);
             ui.tree.set_hidden(sweeps, !clearing);
-            plate.show_foot(ui, !clearing);
             ui.tree.set_text(
                 count,
                 &match total {
@@ -172,69 +197,78 @@ impl Panel for History {
                     n => format!("{n} pages"),
                 },
             );
-            if days.is_empty() {
+            if total == 0 {
                 let card = plate::card(ui, list);
                 plate::nothing(ui, card, empty);
-                return made;
             }
-            for (day, rows) in days {
-                let group = ui.tree.add(list, Node::column().gap(6.0));
-                plate::caption(ui, group, &day);
-                let card = plate::card(ui, group);
-                for (i, t) in rows.iter().enumerate() {
-                    if i > 0 {
-                        plate::rule(ui, card);
-                    }
-                    row(ui, card, t, &mut made);
-                }
-            }
-            made
         });
-        if let Some(made) = rows {
-            let mut h = self.hits.borrow_mut();
-            h.retain(|_, v| !matches!(v, Hit::Go(_) | Hit::Forget(_)));
-            h.extend(made);
+        if drawn.is_none() {
+            // The window was busy: once more, next turn.
+            super::refresh_soon(shell, "history");
+            return;
+        }
+        self.0
+            .hits
+            .borrow_mut()
+            .retain(|_, v| !matches!(v, Hit::Go(_) | Hit::Forget(_)));
+        self.0.card.set(None);
+        let run = self.0.drawing.get() + 1;
+        self.0.drawing.set(run);
+        self.0.draw(shell, &items, 0, FIRST);
+        if items.borrow().len() > FIRST {
+            let weak = shell.downgrade();
+            let me = Rc::downgrade(&self.0);
+            copper_win_rt::spawn_local(async move {
+                let mut from = FIRST;
+                loop {
+                    copper_win_rt::sleep(std::time::Duration::ZERO).await;
+                    let Some(s) = weak.upgrade() else { return };
+                    let Some(me) = me.upgrade() else { return };
+                    if me.drawing.get() != run || from >= items.borrow().len() {
+                        return;
+                    }
+                    me.draw(&s, &items, from, from + CHUNK);
+                    from += CHUNK;
+                }
+            });
         }
     }
 
     fn click(&self, shell: &Shell, id: NodeId) -> bool {
-        let Some(hit) = self.hits.borrow().get(&id).cloned() else {
+        let Some(hit) = self.0.hits.borrow().get(&id).cloned() else {
             return false;
         };
         match hit {
             Hit::Go(url) => {
                 shell.view().panels().hide(shell);
-                match shell.active_id() {
-                    Some(tab) => shell.navigate(&tab, &url),
-                    None => {
-                        shell.open(
-                            &url,
-                            copper_shell_core::OpenTab {
-                                foreground: true,
-                                ..Default::default()
-                            },
-                        );
-                    }
-                }
+                super::visit(shell, &url, false);
             }
             Hit::Forget(key) => {
-                let forgot = shell.history_mut().forget(&key);
-                if forgot {
+                if shell.history_mut().forget(&key) {
                     shell.history_changed();
+                    copper_shell_core::cloud::history_forgot(&key);
+                }
+                self.refresh(shell);
+            }
+            Hit::ClearSearch => {
+                if let Some(h) = self.0.nodes.get().hunt {
+                    shell.view().chrome().read(move |ui, _| h.clear(ui));
                 }
                 self.refresh(shell);
             }
             Hit::Clear => {
-                self.clearing.set(true);
+                self.0.clearing.set(true);
                 self.refresh(shell);
             }
             Hit::Back => {
-                self.clearing.set(false);
+                self.0.clearing.set(false);
                 self.refresh(shell);
             }
             Hit::Sweep(s) => {
                 sweep(shell, s);
-                self.clearing.set(false);
+                if let Sweep::History = s {
+                    self.0.clearing.set(false);
+                }
                 self.refresh(shell);
             }
         }
@@ -242,7 +276,7 @@ impl Panel for History {
     }
 
     fn field(&self, shell: &Shell, id: NodeId, e: &Event) -> bool {
-        if self.nodes.borrow().field != Some(id) {
+        if self.0.nodes.get().hunt.map(|h| h.field) != Some(id) {
             return false;
         }
         match e {
@@ -256,32 +290,82 @@ impl Panel for History {
     }
 
     fn closed(&self) {
-        *self.nodes.borrow_mut() = Nodes::default();
-        self.hits.borrow_mut().clear();
+        self.0.nodes.set(Nodes::default());
+        self.0.hits.borrow_mut().clear();
+        self.0.drawing.set(self.0.drawing.get() + 1);
+        self.0.card.set(None);
     }
 }
 
-/// The traces by day, newest day first (`When.day`), at most [`SHOWN`].
-fn group(traces: &[Trace]) -> Vec<(String, Vec<Trace>)> {
-    let mut sorted: Vec<&Trace> = traces.iter().collect();
-    sorted.sort_by(|a, b| b.last.0.total_cmp(&a.last.0));
-    let mut out: Vec<(i64, String, Vec<Trace>)> = Vec::new();
-    for t in sorted.into_iter().take(SHOWN) {
-        let unix = t.last.unix();
-        let d = format::day_number::<WinCalendar>(unix);
-        match out.last_mut() {
-            Some((day, _, rows)) if *day == d => rows.push(t.clone()),
-            _ => out.push((d, format::day::<WinCalendar>(unix), vec![t.clone()])),
+impl Inner {
+    /// Draw `items[from..to]` (each row's icon looked up just before).
+    fn draw(&self, shell: &Shell, items: &Rc<RefCell<Vec<Item>>>, from: usize, to: usize) {
+        let Some(list) = self.nodes.get().list else {
+            return;
+        };
+        {
+            let mut all = items.borrow_mut();
+            let end = to.min(all.len());
+            for item in &mut all[from.min(end)..end] {
+                if let Item::Row(t, icon) = item {
+                    *icon = shell.cached_icon(&t.url);
+                }
+            }
+        }
+        let items = items.clone();
+        let mut card = self.card.get();
+        let made = shell.view().chrome().read(move |ui, st| {
+            let mut made: Vec<(NodeId, Hit)> = Vec::new();
+            let all = items.borrow();
+            let end = to.min(all.len());
+            for item in &all[from.min(end)..end] {
+                match item {
+                    Item::Day(name) => {
+                        let group = ui.tree.add(list, Node::column().gap(6.0));
+                        plate::heading(ui, group, name);
+                        card = Some(plate::card(ui, group));
+                    }
+                    Item::Row(t, icon) => {
+                        let Some(c) = card else { continue };
+                        if !ui.tree.children(c).is_empty() {
+                            plate::rule(ui, c);
+                        }
+                        let icon = icon.as_ref().map(|i| st.images.id(ui, i));
+                        row(ui, c, t, icon, &mut made);
+                    }
+                }
+            }
+            (made, card)
+        });
+        if let Some((made, card)) = made {
+            self.card.set(card);
+            self.hits.borrow_mut().extend(made);
         }
     }
-    out.into_iter()
-        .map(|(_, name, rows)| (name, rows))
-        .collect()
 }
 
-/// One line: a letter mark, the title over the address, and the time —
+/// The list in order: each day's heading, then its rows, newest first
+/// (`traces` is sorted already).
+fn items(traces: Vec<Trace>) -> Vec<Item> {
+    let now = copper_core::date::now_unix();
+    let mut out = Vec::with_capacity(traces.len() + 8);
+    let mut day = None;
+    for t in traces {
+        let unix = t.last.unix();
+        let d = copper_shell_core::format::day_number::<WinCalendar>(unix);
+        if day != Some(d) {
+            day = Some(d);
+            out.push(Item::Day(when::day::<WinCalendar>(unix, now)));
+        }
+        out.push(Item::Row(t, None));
+    }
+    out
+}
+
+/// One line: the site's mark, the title over the address, and the time —
 /// or, under the pointer, Remove.
-fn row(ui: &mut Ui, card: NodeId, t: &Trace, hits: &mut Vec<(NodeId, Hit)>) {
+fn row(ui: &mut Ui, card: NodeId, t: &Trace, icon: Option<u32>, hits: &mut Vec<(NodeId, Hit)>) {
+    let title = if t.title.is_empty() { &t.key } else { &t.title };
     let r = ui.tree.add(
         card,
         Node::row()
@@ -289,35 +373,16 @@ fn row(ui: &mut Ui, card: NodeId, t: &Trace, hits: &mut Vec<(NodeId, Hit)>) {
             .gap(12.0)
             .align(Align::Center)
             .hover_fill(Token::Hover)
-            .button(if t.title.is_empty() { &t.key } else { &t.title }),
+            .button(title),
     );
     hits.push((r, Hit::Go(t.url.clone())));
-    let letter = t
-        .key
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "•".into());
-    let mark = ui.tree.add(
-        r,
-        Node::stack()
-            .size(16.0, 16.0)
-            .radius(4.0)
-            .fill(Token::Wash)
-            .align(Align::Center)
-            .justify(copper_win_ui::Justify::Center)
-            .role(Role::None),
-    );
-    ui.tree.add(
-        mark,
-        Node::text(&letter, 9.0).ink(Token::Muted).role(Role::None),
-    );
+    plate::mark(ui, r, icon, &plate::letter(&t.key), 16.0);
     let words = ui
         .tree
         .add(r, Node::column().gap(2.0).grow(1.0).shrink(1.0));
     ui.tree.add(
         words,
-        Node::text(if t.title.is_empty() { &t.key } else { &t.title }, 13.0)
+        Node::text(title, 13.0)
             .ink(Token::Ink)
             .trim(Trim::End)
             .role(Role::None),
@@ -329,66 +394,97 @@ fn row(ui: &mut Ui, card: NodeId, t: &Trace, hits: &mut Vec<(NodeId, Hit)>) {
             .trim(Trim::Middle)
             .role(Role::None),
     );
-    let end = ui
-        .tree
-        .add(r, Node::stack().shrink(0.0).align(Align::Center));
+    // The time, and over it (opaque, shown with the row's hover) Remove.
+    let end = ui.tree.add(
+        r,
+        Node::stack()
+            .shrink(0.0)
+            .min_width(8.0)
+            .align(Align::Center)
+            .justify(Justify::End),
+    );
     ui.tree.add(
         end,
-        Node::text(&format::clock::<WinCalendar>(t.last.unix()), 11.5)
+        Node::text(&clock(t.last.unix()), 11.5)
             .ink(Token::Muted)
             .role(Role::None),
     );
-    let forget = ui.tree.add(
-        end,
-        Node::row()
-            .height(22.0)
-            .padding(Insets::hv(8.0, 0.0))
-            .radius(11.0)
-            .fill(Token::Ground)
-            .align(Align::Center)
-            .reveal()
-            .button("Remove"),
-    );
-    ui.tree.add(
-        forget,
-        Node::text("Remove", 11.5)
-            .ink(copper_win_ui::Swatch::Fixed(copper_win_ui::Color::rgba(
-                0.85, 0.2, 0.2, 0.75,
-            )))
-            .role(Role::None),
-    );
+    let forget = plate::quick(ui, end, "Remove", plate::RED, true);
     hits.push((forget, Hit::Forget(t.key.clone())));
 }
 
-/// Clear history, every site's cookies and storage, or the cache.
-fn sweep(shell: &Shell, s: Sweep) {
-    if let Sweep::History = s {
-        shell.history_mut().clear();
-        shell.history_changed();
-        shell.toast("History cleared");
-        return;
+/// The time of day in the user's short style (`When.clock`: `3:41 PM`,
+/// `15:41`).
+fn clock(unix: f64) -> String {
+    use windows::Win32::Foundation::SYSTEMTIME;
+    use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
+    use windows::core::PCWSTR;
+    let Some(t) = WinCalendar::civil(unix) else {
+        return String::new();
+    };
+    let time = SYSTEMTIME {
+        wYear: t.year.clamp(1601, 30827) as u16,
+        wMonth: t.month as u16,
+        wDay: t.day as u16,
+        wHour: t.hour as u16,
+        wMinute: t.minute as u16,
+        ..Default::default()
+    };
+    let mut buf = [0u16; 32];
+    // SAFETY: the user's locale, a valid time, a buffer of its length.
+    let n = unsafe {
+        GetTimeFormatEx(
+            PCWSTR::null(),
+            TIME_NOSECONDS,
+            Some(&time),
+            PCWSTR::null(),
+            Some(&mut buf),
+        )
+    };
+    if n > 1 {
+        String::from_utf16_lossy(&buf[..n as usize - 1])
+    } else {
+        format!("{:02}:{:02}", t.hour, t.minute)
     }
-    let kinds = match s {
-        Sweep::Sites => WebsiteDataKinds::ALL,
-        _ => WebsiteDataKinds::CACHES,
+}
+
+/// Clear history (here and on Copper Cloud), every site's cookies and
+/// storage, or the cache — each in every profile's jar.
+fn sweep(shell: &Shell, s: Sweep) {
+    let (kinds, said) = match s {
+        Sweep::History => {
+            shell.history_mut().clear();
+            shell.history_changed();
+            copper_shell_core::cloud::history_cleared();
+            shell.toast("History cleared");
+            return;
+        }
+        Sweep::Sites => (WebsiteDataKinds::ALL, "Signed out of everything"),
+        Sweep::Cache => (
+            WebsiteDataKinds::CACHES | WebsiteDataKinds::OFFLINE_APP_CACHE,
+            "Cache cleared",
+        ),
     };
     let mut names: Vec<Option<String>> = vec![None];
     names.extend(shell.browser().profiles().into_iter().map(Some));
     let engine = shell.engine().clone();
     let weak = shell.downgrade();
     copper_win_rt::spawn_local(async move {
+        let mut failed = false;
         for name in names {
             let id = copper_shell_core::shell::pages::profile_id(name.as_deref());
             if let Ok(p) = engine.profile(&id, false)
                 && let Err(e) = p.clear_website_data(None, kinds).await
             {
                 tracing::warn!("clearing {}: {e}", id.as_str());
+                failed = true;
             }
         }
         if let Some(s) = weak.upgrade() {
-            s.toast(match kinds {
-                WebsiteDataKinds::ALL => "Signed out of every site",
-                _ => "Cache cleared",
+            s.toast(if failed {
+                "Some of it couldn’t be cleared"
+            } else {
+                said
             });
         }
     });

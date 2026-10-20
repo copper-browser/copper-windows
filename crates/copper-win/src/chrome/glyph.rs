@@ -54,3 +54,25 @@ pub const GEAR: char = '\u{E713}';
 pub const COPY: char = '\u{E8C8}';
 /// `rectangle.on.rectangle`: a private tab's mark.
 pub const PRIVATE: char = '\u{E727}';
+/// `arrow.down.circle` / `arrow.down`: the download door, Downloads.
+pub const DOWNLOAD: char = '\u{E896}';
+/// `checkmark`: the download door's pulse when the last one lands.
+pub const CHECK: char = '\u{E73E}';
+/// `exclamationmark`: a download failed.
+pub const WARNING: char = '\u{E8C9}';
+/// `chevron.right`: a bookmark folder (turned down while open).
+pub const CHEVRON: char = '\u{E76C}';
+/// `chevron.down`: an open bookmark folder.
+pub const CHEVRON_DOWN: char = '\u{E70D}';
+/// `folder.fill`: a bookmark folder's mark.
+pub const FOLDER_FILL: char = '\u{E8D5}';
+/// `folder`: the downloads folder.
+pub const FOLDER: char = '\u{E8B7}';
+/// `xmark.circle.fill`: clear a search field.
+pub const CLEAR_FIELD: char = '\u{EB90}';
+/// `doc`: a file with no icon of its own.
+pub const DOC: char = '\u{E8A5}';
+/// `FavoriteList`: the strip's bookmarks door.
+pub const BOOKMARK: char = '\u{E728}';
+/// `arrow.down`: a download arriving (inside its ring).
+pub const ARROW_DOWN: char = '\u{E74B}';
