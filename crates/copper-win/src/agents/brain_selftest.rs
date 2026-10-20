@@ -165,7 +165,8 @@ async fn settle(shell: &Shell, limit: Duration) {
 
 /// The bridge's way in, when the slot's addon may use the agent.
 async fn bridge(shell: &Shell) -> Option<copper_engine_webview2::WebView2Page> {
-    let addon = crate::addons::glue::active()?;
+    // What the slot shows: the cloud's addon, else Copper's own agent page.
+    let addon = crate::addons::builtin::slot_active()?;
     if !crate::addons::glue::granted(&addon, Capability::Agent) {
         return None;
     }

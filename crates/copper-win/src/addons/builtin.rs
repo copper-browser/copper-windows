@@ -249,10 +249,9 @@ mod win {
         if let Err(e) = shell.store().save(&c) {
             tracing::warn!(error = %e, "chat.json: pageContext not saved");
         }
-        // HOOK(engine merge): the agent's state follows chat.json within a
-        // second on its own; once `crate::agents::brain` is in the tree,
-        // uncomment to tell it at once:
-        // crate::agents::brain::changed();
+        // The agent re-reads chat.json at every send; tell it now so the
+        // page's chip and `state().pageContext` agree at once.
+        crate::agents::brain::changed();
     }
 
     /// One message on the built-in's own door; `reply` runs JS back in the
