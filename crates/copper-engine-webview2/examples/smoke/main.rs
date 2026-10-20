@@ -3,7 +3,9 @@
 //! ```text
 //! smoke [URL] [--backstage] [--snapshot OUT.png] [--data DIR] [--log FILE]
 //!       [--scheme] [--lang de-DE,fr] [--bitmap OUT.png] [--file-chooser]
-//!       [--input-check] [--profile-check] [--hold MS] [--exit]
+//!       [--input-check] [--profile-check] [--context-menu-check]
+//!       [--download-ask-check] [--nav-filter-check] [--sweep LIST]
+//!       [--sweep-out DIR] [--profile ID] [--prewarm] [--hold MS] [--exit]
 //! ```
 //!
 //! Opens a plain Win32 window composed with DirectComposition, attaches one
@@ -41,6 +43,23 @@
 //!   (`set_trusted_input(false)`: script input) and on again.
 //! * `--profile-check`: the profile's cookie jar (set, read through the
 //!   API and the page, list, delete) after the warm-spare page closed.
+//! * `--context-menu-check`: app-rendered context menus — link, image,
+//!   selection and field requests (CDP and real right clicks), Shift+F10,
+//!   the Menu key, a reply running `selectAll`, a dropped reply, no handler.
+//!   Uses real input: the window must be able to come to the front.
+//! * `--download-ask-check`: Save As before a download writes — Save with
+//!   the suggested name, Save to a typed path, Cancel, the close box on a
+//!   `Profile::download` — then Mac-style free names (`name 2.ext`).
+//! * `--nav-filter-check`: the navigation filter — refused `load`, link
+//!   click, script and redirect; after a sleep; removed.
+//! * `--sweep LIST`: a crash sweep — each site of `LIST` (a file of URLs,
+//!   or URLs separated by commas) loaded in the page, scrolled, its first
+//!   text field typed into and snapshotted into `--sweep-out DIR`
+//!   (`%TEMP%\copper-sweep`); one `SWEEP PASS|FAIL` line per site.
+//! * `--profile ID`: the profile the page uses (`smoke`); timing runs
+//!   compare first-run costs across WebView2 profile names.
+//! * `--prewarm`: no page; set the profile up and wait for its cookie store
+//!   (an installer's warm-up of a fresh user data folder), then exit.
 //! * `--hold MS`: keep a visual moment (a chooser open, the final page) on
 //!   screen this long, for screenshots.
 //!
@@ -51,11 +70,21 @@
 #[cfg(windows)]
 mod checks;
 #[cfg(windows)]
+mod download_check;
+#[cfg(windows)]
 mod log;
+#[cfg(windows)]
+mod menu_check;
+#[cfg(windows)]
+mod nav_check;
+#[cfg(windows)]
+mod os;
 #[cfg(windows)]
 mod png;
 #[cfg(windows)]
 mod run;
+#[cfg(windows)]
+mod sweep;
 #[cfg(windows)]
 mod window;
 

@@ -381,7 +381,7 @@ fn handlers_changed(page: &Rc<PageInner>, world: WorldKey) {
                     .frames
                     .borrow()
                     .iter()
-                    .filter_map(|(f, _)| f.cast::<ICoreWebView2Frame2>().ok())
+                    .filter_map(|h| h.frame.cast::<ICoreWebView2Frame2>().ok())
                     .collect();
                 for f2 in frames {
                     unsafe {

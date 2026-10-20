@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use copper_engine::{
     Backstage, Engine, EnginePaths, EventStream, JsonMap, JsonValue, LoadState, PageEvent,
-    PageOptions, PageView, ProfileId, SnapshotRegion, World,
+    PageOptions, PageView, Profile, ProfileId, SnapshotRegion, World,
 };
 use copper_engine_webview2::{EngineConfig, WebView2Engine, WebView2Page, WebView2Profile};
 use windows::Win32::UI::HiDpi::{
@@ -19,10 +19,14 @@ use windows::Win32::UI::HiDpi::{
 
 use crate::checks;
 use crate::log::Log;
+use crate::sweep;
 use crate::window::Window;
+use crate::{download_check, menu_check, nav_check};
 
 /// How long a run with checks may take before it gives up.
 const RUN_LIMIT: Duration = Duration::from_secs(240);
+/// Extra run time per `--sweep` site.
+const SWEEP_SITE_LIMIT: Duration = Duration::from_secs(45);
 /// Paint time between the load finishing and a snapshot.
 pub const SETTLE: Duration = Duration::from_millis(500);
 /// How long the backstage frame check may take.
@@ -37,13 +41,18 @@ const TWO_FRAMES: &str = "return await new Promise(r => \
 
 const USAGE: &str = "usage: smoke [URL] [--backstage] [--snapshot OUT.png] [--data DIR] \
     [--log FILE] [--scheme] [--lang de-DE,fr] [--bitmap OUT.png] [--file-chooser] \
-    [--input-check] [--profile-check] [--hold MS] [--exit]";
+    [--input-check] [--profile-check] [--context-menu-check] [--download-ask-check] \
+    [--nav-filter-check] [--sweep LIST] [--sweep-out DIR] [--profile ID] [--prewarm] [--hold MS] [--exit]";
 
 pub struct Args {
     pub url: Option<String>,
     pub backstage: bool,
     pub snapshot: Option<PathBuf>,
     pub data: Option<PathBuf>,
+    /// The profile the page uses (`smoke` by default).
+    pub profile: String,
+    /// Only warm the profile up (no page), as an installer would.
+    pub prewarm: bool,
     pub log: Option<PathBuf>,
     pub scheme: bool,
     pub lang: Option<Vec<String>>,
@@ -51,6 +60,11 @@ pub struct Args {
     pub file_chooser: bool,
     pub input_check: bool,
     pub profile_check: bool,
+    pub context_menu_check: bool,
+    pub download_ask_check: bool,
+    pub nav_filter_check: bool,
+    pub sweep: Option<Vec<String>>,
+    pub sweep_out: Option<PathBuf>,
     pub hold: Duration,
     pub exit: bool,
 }
@@ -66,6 +80,16 @@ impl Args {
             || self.file_chooser
             || self.input_check
             || self.profile_check
+            || self.context_menu_check
+            || self.download_ask_check
+            || self.nav_filter_check
+            || self.sweep.is_some()
+    }
+
+    /// How long the whole run may take: a sweep gets time per site.
+    fn limit(&self) -> Duration {
+        let sites = self.sweep.as_ref().map_or(0, Vec::len) as u32;
+        RUN_LIMIT + SWEEP_SITE_LIMIT * sites
     }
 
     fn first_url(&self) -> String {
@@ -88,6 +112,8 @@ fn parse_args() -> Result<Args, String> {
         backstage: false,
         snapshot: None,
         data: None,
+        profile: "smoke".into(),
+        prewarm: false,
         log: None,
         scheme: false,
         lang: None,
@@ -95,6 +121,11 @@ fn parse_args() -> Result<Args, String> {
         file_chooser: false,
         input_check: false,
         profile_check: false,
+        context_menu_check: false,
+        download_ask_check: false,
+        nav_filter_check: false,
+        sweep: None,
+        sweep_out: None,
         hold: Duration::ZERO,
         exit: false,
     };
@@ -112,11 +143,18 @@ fn parse_args() -> Result<Args, String> {
             "--file-chooser" => args.file_chooser = true,
             "--input-check" => args.input_check = true,
             "--profile-check" => args.profile_check = true,
+            "--context-menu-check" => args.context_menu_check = true,
+            "--download-ask-check" => args.download_ask_check = true,
+            "--nav-filter-check" => args.nav_filter_check = true,
             "--exit" => args.exit = true,
             "--snapshot" => args.snapshot = Some(next(&a, &mut i)?.into()),
             "--data" => args.data = Some(next(&a, &mut i)?.into()),
+            "--profile" => args.profile = next(&a, &mut i)?,
+            "--prewarm" => args.prewarm = true,
             "--log" => args.log = Some(next(&a, &mut i)?.into()),
             "--bitmap" => args.bitmap = Some(next(&a, &mut i)?.into()),
+            "--sweep" => args.sweep = Some(sweep::sites(&next(&a, &mut i)?)?),
+            "--sweep-out" => args.sweep_out = Some(next(&a, &mut i)?.into()),
             "--lang" => {
                 let list = next(&a, &mut i)?;
                 args.lang = Some(
@@ -265,8 +303,17 @@ fn start(args: Args, log: &Rc<Log>) -> Result<(), String> {
         checks::register_scheme(&engine, log)?;
     }
     let window = Rc::new(Window::create("Copper smoke").map_err(|e| format!("window: {e}"))?);
-    let id = ProfileId::new("smoke").map_err(|e| e.to_string())?;
+    let id = ProfileId::new(&args.profile).map_err(|e| e.to_string())?;
     let profile = engine.profile(&id, false).map_err(|e| e.to_string())?;
+    if args.prewarm {
+        let log = log.clone();
+        copper_win_rt::spawn_local(async move {
+            let code = prewarm(&profile, &log).await;
+            drop(engine);
+            finish(&window, code);
+        });
+        return Ok(());
+    }
     let page = engine.new_page(&profile, PageOptions::default());
     if args.backstage {
         engine
@@ -293,7 +340,8 @@ fn start(args: Args, log: &Rc<Log>) -> Result<(), String> {
         if args.exits() {
             let window = ctx.window.clone();
             let log = ctx.log.clone();
-            match within(run(ctx, args), RUN_LIMIT).await {
+            let limit = args.limit();
+            match within(run(ctx, args), limit).await {
                 Some(code) => finish(&window, code),
                 None => {
                     log.at("timed out");
@@ -309,6 +357,30 @@ fn start(args: Args, log: &Rc<Log>) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+/// `--prewarm`: what an installer's warm-up run would do on a fresh user
+/// data folder — set the profile up and wait for its cookie store (what the
+/// first request of a fresh install waits for), with no page.
+async fn prewarm(profile: &WebView2Profile, log: &Log) -> i32 {
+    let t = Instant::now();
+    match within(profile.cookies("https://example.com/"), RUN_LIMIT).await {
+        Some(Ok(_)) => {
+            log.at(&format!(
+                "prewarm: cookie store ready after {:.0} ms",
+                t.elapsed().as_secs_f64() * 1000.0
+            ));
+            0
+        }
+        Some(Err(e)) => {
+            log.at(&format!("prewarm: {e}"));
+            1
+        }
+        None => {
+            log.at("prewarm: timed out");
+            2
+        }
+    }
 }
 
 /// The run; the exit status (0: everything passed).
@@ -367,6 +439,19 @@ async fn run(mut ctx: Ctx, args: Args) -> i32 {
     }
     if args.file_chooser {
         ok &= checks::file_chooser(&mut ctx).await;
+    }
+    if args.context_menu_check {
+        ok &= menu_check::context_menu(&mut ctx).await;
+    }
+    if args.download_ask_check {
+        ok &= download_check::download_ask(&mut ctx).await;
+    }
+    if args.nav_filter_check {
+        ok &= nav_check::nav_filter(&mut ctx).await;
+    }
+    if let Some(sites) = &args.sweep {
+        let out = args.sweep_out.clone().unwrap_or_else(sweep::default_out);
+        ok &= sweep::sweep(&mut ctx, sites, &out).await;
     }
     if let Some(path) = &args.snapshot {
         ok &= snapshot(&ctx, path).await;
