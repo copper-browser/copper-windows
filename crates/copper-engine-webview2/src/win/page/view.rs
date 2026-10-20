@@ -183,6 +183,14 @@ impl PageView for WebView2Page {
     }
 
     fn reload(&self, bypass_cache: bool) {
+        if self.inner.wv().is_none() {
+            // No webview (asleep, its browser process gone, or still being
+            // made): the next one loads the current entry afresh. A queued
+            // `Reload` would reload that webview's first document,
+            // about:blank, instead.
+            self.inner.wake();
+            return;
+        }
         self.inner.navigate_with(move |_, wv| {
             if bypass_cache {
                 let view = wv.view.clone();

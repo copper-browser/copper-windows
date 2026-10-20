@@ -27,10 +27,10 @@ use crate::convert::{
 const WEB_ERROR_ABORTED: i32 = 9;
 /// How long a failed load's knock may take ([`PageInner::fail_after_knock`]).
 /// Windows answers a refused connection only after retrying it (about 2 s
-/// even on the loopback).
-const KNOCK_LIMIT: std::time::Duration = std::time::Duration::from_millis(2600);
+/// even on the loopback; more on a slow or busy machine).
+const KNOCK_LIMIT: std::time::Duration = std::time::Duration::from_secs(4);
 use crate::history::NativeHistory;
-use crate::hosting::{FocusExit, PageChange};
+use crate::hosting::{FocusExit, KeyEventKind, PageChange};
 use crate::util::{Either, png_size, race};
 use crate::win::com::{Tokens, get, get_bool, get_string, hs, read_stream};
 use crate::win::controller::{self, Wv};
@@ -501,9 +501,27 @@ fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
         move |_, a: Option<ICoreWebView2AcceleratorKeyPressedEventArgs>| {
             if let (Some(p), Some(a)) = (pw.upgrade(), a)
                 && let Ok(key) = accelerator_key(&a)
-                && p.host.accelerator(&key)
             {
-                unsafe { a.SetHandled(true)? };
+                let handled = p.host.accelerator(&key);
+                if matches!(
+                    key.kind,
+                    KeyEventKind::KeyDown | KeyEventKind::SystemKeyDown
+                ) {
+                    // Which keys reach Copper while a page has the
+                    // keyboard (the chrome's own keys log as commands).
+                    tracing::debug!(
+                        target: "copper::keys",
+                        vk = key.virtual_key,
+                        ctrl = key.ctrl,
+                        shift = key.shift,
+                        alt = key.alt,
+                        handled,
+                        "key in the page"
+                    );
+                }
+                if handled {
+                    unsafe { a.SetHandled(true)? };
+                }
             }
             Ok(())
         }
@@ -738,15 +756,25 @@ impl PageInner {
     ) {
         match kind {
             COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => {
-                tracing::warn!("WebView2 browser process exited");
+                tracing::warn!(
+                    url = ?self.status.borrow().url,
+                    shown = self.host.rendering(),
+                    "WebView2 browser process exited under the page"
+                );
                 if let Some(wv) = self.release_webview(Life::Dead) {
                     controller::close(&wv);
                 }
                 self.status.borrow_mut().loading = false;
                 self.profile.engine.browser_died();
+                // The page stays (its tab, its URL stack). The shell
+                // decides whether it comes back now (copper-win `frame.rs`
+                // reloads it, as the Mac's `Tab.swift` does, and says it
+                // stopped once that keeps failing); a page that is
+                // reloaded, attached or used is rebuilt then. Only a page
+                // the backstage shows (no shell frame over it) comes back
+                // at once, as before.
                 self.emit(PageEvent::Crashed(CrashReason::Crashed));
-                // A page on screen comes back at once; others when next used.
-                if self.host.rendering() {
+                if self.host.in_stage() && self.host.rendering() {
                     self.wake();
                 }
             }

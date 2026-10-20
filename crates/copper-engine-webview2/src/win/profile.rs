@@ -79,6 +79,8 @@ pub(crate) struct ProfileInner {
     /// yet, or the browser process restarted). Only a marker and a last
     /// resort: see [`ProfileInner::core`].
     core: RefCell<Option<ICoreWebView2Profile>>,
+    /// The browser process `core` belongs to (its process id).
+    core_browser: Cell<u32>,
     /// Waiting for the next webview of this profile.
     core_waiters: RefCell<Vec<OneshotTx<Result<ICoreWebView2Profile>>>>,
     spare: RefCell<Spare>,
@@ -111,6 +113,7 @@ impl ProfileInner {
             download_dir: RefCell::new(download_dir),
             downloads: Rc::new(Downloads::default()),
             core: RefCell::new(None),
+            core_browser: Cell::new(0),
             core_waiters: RefCell::new(Vec::new()),
             spare: RefCell::new(Spare::Empty),
             pages: RefCell::new(Vec::new()),
@@ -148,15 +151,31 @@ impl ProfileInner {
 
     /// A fresh hidden controller in this profile.
     pub async fn create(self: &Rc<Self>) -> Result<Wv> {
-        let env = self.engine.env.get().await?;
-        let wv = controller::create(
-            &env,
-            self.engine.park.0,
-            self.name.as_deref(),
-            self.ephemeral,
-            self.engine.ground.get(),
-        )
-        .await?;
+        let env = &self.engine.env;
+        let make = |e: ICoreWebView2Environment| {
+            let me = self.clone();
+            async move {
+                controller::create(
+                    &e,
+                    me.engine.park.0,
+                    me.name.as_deref(),
+                    me.ephemeral,
+                    me.engine.ground.get(),
+                )
+                .await
+            }
+        };
+        let wv = match make(env.get().await?).await {
+            Err(e) if env.ended() => {
+                // The browser process ended normally and the environment
+                // did not start another: a new environment does.
+                tracing::info!("profile {}: no webview after the browser process ended ({e})", self.id);
+                env.renew();
+                make(env.get().await?).await?
+            }
+            r => r?,
+        };
+        env.alive();
         self.saw(&wv);
         Ok(wv)
     }
@@ -168,10 +187,23 @@ impl ProfileInner {
         let Some(core) = controller::profile_of(wv) else {
             return;
         };
+        let browser = controller::browser_pid(wv);
+        if self.core.borrow().is_some() && self.core_browser.get() != browser {
+            // A new browser process, and no `reset` for the old one: it
+            // ended normally (its last webview closed, so no ProcessFailed)
+            // and the environment started another. What the old one was
+            // given went with it.
+            tracing::debug!(
+                "profile {}: a new browser process ({browser}); set up again",
+                self.id
+            );
+            self.forget_browser();
+        }
         let first = self.core.borrow().is_none();
         if first {
             controller::configure_profile(&core, &self.download_dir());
             *self.core.borrow_mut() = Some(core.clone());
+            self.core_browser.set(browser);
         }
         // Every time: the scheme may have changed while no webview of
         // this profile was open to take it.
@@ -281,10 +313,18 @@ impl ProfileInner {
     pub fn reset(&self) {
         // Taken out and dropped after each borrow: releasing WebView2
         // objects calls out.
-        let core = self.core.borrow_mut().take();
         let spare = std::mem::replace(&mut *self.spare.borrow_mut(), Spare::Empty);
         let retired = self.fetcher.borrow_mut().reset();
-        drop((core, spare, retired));
+        drop((spare, retired));
+        self.forget_browser();
+    }
+
+    /// What the profile was given in a browser process that is gone: its
+    /// profile object (so the next webview sets it up again) and the
+    /// filters it held.
+    fn forget_browser(&self) {
+        let core = self.core.borrow_mut().take();
+        drop(core);
         self.filters.installed.borrow_mut().clear();
         self.filters.swept.set(false);
     }

@@ -157,6 +157,14 @@ pub(crate) fn configure_profile(profile: &ICoreWebView2Profile, download_dir: &s
     }
 }
 
+/// The process id of the webview's browser process (0 if unknown).
+pub(crate) fn browser_pid(wv: &Wv) -> u32 {
+    let mut pid = 0u32;
+    // SAFETY: an out-parameter on a live webview.
+    let _ = unsafe { wv.view.BrowserProcessId(&mut pid) };
+    pid
+}
+
 /// The webview's profile object.
 pub(crate) fn profile_of(wv: &Wv) -> Option<ICoreWebView2Profile> {
     unsafe { wv.view.cast::<ICoreWebView2_13>().ok()?.Profile().ok() }

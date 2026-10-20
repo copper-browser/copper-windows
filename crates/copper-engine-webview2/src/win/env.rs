@@ -8,7 +8,10 @@
 //! dies, every webview dies with it; the environment is then made again
 //! (with everything set up so far) once the old process has exited
 //! (WebView2 refuses a second environment on a user data folder still in
-//! use).
+//! use). WebView2 also ends the browser process, normally, when its last
+//! webview closes (every tab closed, no warm spare); that is no failure:
+//! the environment starts a new browser process for its next webview (and
+//! is made again only if that does not work).
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -72,6 +75,11 @@ pub(crate) struct Env {
     exited: RefCell<Option<OneshotTx<()>>>,
     started: Cell<Option<Instant>>,
     ready_after: Cell<Option<Duration>>,
+    /// See [`Env::ended`].
+    ended: Cell<bool>,
+    /// Told when the browser process failed with no page to hear it
+    /// ([`Env::on_lost`]).
+    lost: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 impl Env {
@@ -87,6 +95,8 @@ impl Env {
             exited: RefCell::new(None),
             started: Cell::new(None),
             ready_after: Cell::new(None),
+            ended: Cell::new(false),
+            lost: RefCell::new(None),
         });
         let weak = Rc::downgrade(&env);
         copper_win_rt::spawn_local(async move {
@@ -188,17 +198,62 @@ impl Env {
             *self.exited.borrow_mut() = Some(tx);
             rx
         };
-        // Removing the handlers calls into WebView2: not under the borrow.
-        let old = std::mem::take(&mut *self.tokens.borrow_mut());
-        drop(old);
-        tracing::warn!("WebView2 browser process exited; recreating the environment");
+        tracing::warn!("WebView2 browser process failed; a new environment follows");
         let weak = Rc::downgrade(self);
+        let t = Instant::now();
         copper_win_rt::spawn_local(async move {
-            let _ = within(exit_rx, EXIT_WAIT).await;
+            // The exit handler stays until the old process has exited (it
+            // is what says so; without it this always waited it all out).
+            let heard = within(exit_rx, EXIT_WAIT).await.is_some();
             if let Some(env) = weak.upgrade() {
+                tracing::debug!(
+                    "the old browser process {} after {:.0} ms",
+                    if heard { "exited" } else { "had not exited" },
+                    t.elapsed().as_secs_f64() * 1000.0
+                );
+                // Removing the handlers calls into WebView2: not under the
+                // borrow.
+                let old = std::mem::take(&mut *env.tokens.borrow_mut());
+                drop(old);
                 env.create();
             }
         });
+    }
+
+    /// The browser process ended normally (its last webview closed) since
+    /// the last webview was made: if making one now fails, a new
+    /// environment is the cure ([`Env::renew`]).
+    pub fn ended(&self) -> bool {
+        self.ended.get()
+    }
+
+    /// `f` runs when the browser process fails while no page has a webview
+    /// (so no ProcessFailed tells the engine): what it held (a warm spare)
+    /// went with it.
+    pub fn on_lost(&self, f: Rc<dyn Fn()>) {
+        *self.lost.borrow_mut() = Some(f);
+    }
+
+    /// A webview was made: the environment's browser process is up.
+    pub fn alive(&self) {
+        self.ended.set(false);
+    }
+
+    /// Make a new environment now (its browser process has exited already).
+    pub fn renew(self: &Rc<Self>) {
+        self.ended.set(false);
+        {
+            let mut state = self.state.borrow_mut();
+            if matches!(*state, State::Creating(_) | State::Idle) {
+                return;
+            }
+            *state = State::Creating(Vec::new());
+        }
+        // Removing the handlers calls into WebView2: not under the borrow.
+        let old = std::mem::take(&mut *self.tokens.borrow_mut());
+        drop(old);
+        tracing::info!("WebView2 browser process gone; a new environment");
+        self.create();
     }
 
     /// The options for a new environment, from the config and the set-up.
@@ -314,18 +369,30 @@ impl Env {
             env5,
             BrowserProcessExited,
             BrowserProcessExitedEventHandler,
-            move |_, _| {
+            move |_, a: Option<ICoreWebView2BrowserProcessExitedEventArgs>| {
                 if let Some(this) = weak.upgrade()
                     && this.generation.get() == generation
                 {
+                    let (normal, pid) = a.as_ref().map_or((false, 0), exit_of);
                     let exited = this.exited.borrow_mut().take();
                     if let Some(tx) = exited {
                         tx.send(());
                     }
-                    // Exited without a ProcessFailed (e.g. killed with the
-                    // last webview gone): the next page needs a new one.
-                    if this.now().is_some() {
-                        this.invalidate();
+                    if normal {
+                        // WebView2 ends its browser process once the last
+                        // webview is closed: not a failure, and the same
+                        // environment starts a new one for the next webview.
+                        tracing::debug!(pid, "WebView2 browser process ended (no webview left)");
+                        this.ended.set(true);
+                    } else if this.now().is_some() {
+                        // Failed with no page to hear a ProcessFailed (no
+                        // page had a webview): the next page needs a new one.
+                        tracing::warn!(pid, "WebView2 browser process failed");
+                        let lost = this.lost.borrow().clone();
+                        if let Some(f) = lost {
+                            f();
+                        }
+                        this.renew();
                     }
                 }
                 Ok(())
@@ -360,4 +427,17 @@ impl Env {
             tx.send(result.clone());
         }
     }
+}
+
+/// Whether the browser process ended normally (its last webview closed)
+/// rather than failing, and its process id.
+fn exit_of(a: &ICoreWebView2BrowserProcessExitedEventArgs) -> (bool, u32) {
+    let mut kind = COREWEBVIEW2_BROWSER_PROCESS_EXIT_KIND_FAILED;
+    let mut pid = 0u32;
+    // SAFETY: out-parameters on a live event argument.
+    unsafe {
+        let _ = a.BrowserProcessExitKind(&mut kind);
+        let _ = a.BrowserProcessId(&mut pid);
+    }
+    (kind == COREWEBVIEW2_BROWSER_PROCESS_EXIT_KIND_NORMAL, pid)
 }
