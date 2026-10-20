@@ -129,7 +129,7 @@ fn click(chrome: &Rc<Chrome>, shell: &Shell, id: NodeId) {
         Clicked::Strip(h) => strip_click(shell, h),
         Clicked::Stage(StageHit::StatusButton(tab)) => shell.reload(&tab),
         Clicked::Other(id) => {
-            if !crate::panels::click(shell, id) {
+            if !crate::panels::click(shell, id) && !crate::forms::click(shell, id) {
                 crate::find::click(shell, id);
             }
         }
@@ -335,6 +335,9 @@ fn key_event(chrome: &Rc<Chrome>, shell: &Shell, key: Key, mods: Mods, focused: 
             _ => {}
         }
     }
+    if crate::panels::key(shell, key, mods, focused) {
+        return;
+    }
     if let Some(id) = keys::command(Chord::new(key, mods)) {
         crate::commands::run(shell, id);
     }
@@ -366,6 +369,9 @@ pub fn hook_page(shell: &Shell, tab: &TabId, page: &WebView2Page) {
         let weak = shell.downgrade();
         copper_win_rt::spawn_local(async move {
             if let Some(s) = weak.upgrade() {
+                if crate::panels::key(&s, chord.key, chord.mods, None) {
+                    return;
+                }
                 crate::commands::run(&s, id);
             }
         });

@@ -46,6 +46,24 @@ pub trait Panel: 'static {
     }
     /// The plate went away (its nodes with it).
     fn closed(&self) {}
+    /// A key the chrome's focused node did not use, offered before Copper's
+    /// own shortcuts (`focused`: the chrome node with the keyboard, `None`
+    /// from a page); `true` if the panel took it (Settings: Ctrl+F to its
+    /// search, ↑/↓ through its results).
+    fn key(
+        &self,
+        _shell: &Shell,
+        _key: copper_win_ui::input::Key,
+        _mods: copper_win_ui::input::Mods,
+        _focused: Option<NodeId>,
+    ) -> bool {
+        false
+    }
+    /// A popup menu the panel opened (`ui.show_menu`) was answered; `true`
+    /// if `menu` was the panel's.
+    fn menu(&self, _shell: &Shell, _menu: u32, _item: u32) -> bool {
+        false
+    }
 }
 
 struct Open {
@@ -174,8 +192,28 @@ pub fn field_event(shell: &Shell, id: NodeId, e: &Event) {
     }
 }
 
-/// A menu a panel opened was answered (no panel opens one yet).
-pub fn menu_chosen(_shell: &Shell, menu: u32, item: u32) {
+/// A key for the panel on show before Copper's own shortcuts
+/// ([`Panel::key`]); `true` if it took it.
+pub fn key(
+    shell: &Shell,
+    key: copper_win_ui::input::Key,
+    mods: copper_win_ui::input::Mods,
+    focused: Option<NodeId>,
+) -> bool {
+    shell
+        .view()
+        .panels()
+        .current()
+        .is_some_and(|(p, _)| p.key(shell, key, mods, focused))
+}
+
+/// A menu a panel opened was answered ([`Panel::menu`]).
+pub fn menu_chosen(shell: &Shell, menu: u32, item: u32) {
+    if let Some((p, _)) = shell.view().panels().current()
+        && p.menu(shell, menu, item)
+    {
+        return;
+    }
     tracing::debug!("menu {menu} item {item}: nobody asked");
 }
 

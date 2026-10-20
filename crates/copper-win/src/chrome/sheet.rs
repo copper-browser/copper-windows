@@ -25,7 +25,6 @@ pub struct Sheet {
 }
 
 struct Bar {
-    ticket: u64,
     node: NodeId,
     allow: NodeId,
     deny: NodeId,
@@ -43,7 +42,7 @@ pub fn build(_ui: &mut Ui, parent: NodeId) -> Sheet {
 
 impl Sheet {
     /// Ask `q` (now, or after the questions already asked). The ticket
-    /// takes it back ([`Sheet::withdraw`]).
+    /// numbers it.
     pub fn ask(&mut self, ui: &mut Ui, q: Question, answer: Answer) -> u64 {
         self.next += 1;
         let ticket = self.next;
@@ -55,20 +54,11 @@ impl Sheet {
         ticket
     }
 
-    /// Take question `ticket` back unanswered (its answer is dropped).
-    pub fn withdraw(&mut self, ui: &mut Ui, ticket: u64) {
-        if self.bar.as_ref().is_some_and(|b| b.ticket == ticket) {
-            drop(self.dismiss(ui));
-        } else {
-            self.waiting.retain(|(t, _, _)| *t != ticket);
-        }
-    }
-
     pub fn is_open(&self) -> bool {
         self.bar.is_some()
     }
 
-    fn show(&mut self, ui: &mut Ui, ticket: u64, q: Question, answer: Answer) {
+    fn show(&mut self, ui: &mut Ui, _ticket: u64, q: Question, answer: Answer) {
         let node = ui
             .tree
             .insert(self.parent, 0, ask_pill().role(Role::Group).name(&q.title));
@@ -93,7 +83,6 @@ impl Sheet {
         ui.tree.add(deny, t);
         ui.focus(Some(allow));
         self.bar = Some(Bar {
-            ticket,
             node,
             allow,
             deny,

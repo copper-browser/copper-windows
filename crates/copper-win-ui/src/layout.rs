@@ -205,8 +205,26 @@ fn measure_uncached(tree: &mut Tree, id: NodeId, room: Size, m: &mut dyn Measure
         let mut main = 0.0f32;
         let mut cross = 0.0f32;
         let mut n = 0;
+        // A row gives what shrinks only the width its fixed parts leave,
+        // as arranging will: text that wraps is measured at the width it
+        // gets, so the row is as tall as it ends up.
+        let shrink_room = if s.dir == Dir::Row && inner_room.w.is_finite() {
+            let mut fixed = s.gap * children.len().saturating_sub(1) as f32;
+            for c in &children {
+                if tree.get(*c).is_some_and(|n| n.style.shrink == 0.0) {
+                    fixed += measure(tree, *c, inner_room, m).w;
+                }
+            }
+            Some(Size::new((inner_room.w - fixed).max(0.0), inner_room.h))
+        } else {
+            None
+        };
         for c in &children {
-            let cs = measure(tree, *c, inner_room, m);
+            let room = match shrink_room {
+                Some(r) if tree.get(*c).is_some_and(|n| n.style.shrink > 0.0) => r,
+                _ => inner_room,
+            };
+            let cs = measure(tree, *c, room, m);
             n += 1;
             match s.dir {
                 Dir::Row => {
@@ -326,6 +344,7 @@ fn arrange_flow(tree: &mut Tree, s: &Style, inner: Rect, kids: Vec<NodeId>, m: &
                 styles.push(cst);
             }
             let gaps = s.gap * n.saturating_sub(1) as f32;
+            let natural = base.clone();
             let used: f32 = base.iter().sum::<f32>() + gaps;
             let free = main_room - used;
             if free > 0.0 {
@@ -351,6 +370,15 @@ fn arrange_flow(tree: &mut Tree, s: &Style, inner: Rect, kids: Vec<NodeId>, m: &
                 } else {
                     clamp(*b, st.min_h, st.max_h)
                 };
+            }
+            // In a row, a child that shrank wraps at the width it got: it is
+            // as tall as it measures there, not at its natural width.
+            if row {
+                for (i, c) in kids.iter().enumerate() {
+                    if base[i] < natural[i] {
+                        cross[i] = measure(tree, *c, Size::new(base[i], cross_room), m).h;
+                    }
+                }
             }
             let used: f32 = base.iter().sum::<f32>() + gaps;
             let left = (main_room - used).max(0.0);
@@ -489,6 +517,40 @@ mod tests {
         let mark = t.add(root, Node::new().size(16.0, 16.0));
         layout(&mut t, root, Rect::new(0.0, 0.0, 100.0, 37.0), &mut Fixed);
         assert_eq!(frame(&t, mark).y, 10.5);
+    }
+
+    #[test]
+    fn a_row_measures_wrapping_text_at_the_width_it_gets() {
+        // A "text" leaf that wraps: 8 DIPs per char, 18 per line.
+        struct Wrapping;
+        impl Measure for Wrapping {
+            fn measure(&mut self, tree: &Tree, id: NodeId, room: Size) -> Size {
+                let n = tree
+                    .get(id)
+                    .and_then(|n| n.content_text())
+                    .map_or(0, |t| t.chars().count()) as f32;
+                let w = (n * 8.0).min(room.w.max(8.0));
+                let lines = (n * 8.0 / w).ceil().max(1.0);
+                Size::new(w, if n > 0.0 { 18.0 * lines } else { 0.0 })
+            }
+        }
+        let mut t = Tree::new();
+        let root = t.add_root(Node::column());
+        let row = t.add(root, Node::row().gap(10.0).align(Align::Center));
+        // 40 chars = 320 wide: one line at the row's 330, two at the 290
+        // the switch leaves it.
+        let words = t.add(row, Node::text(&"x".repeat(40), 13.0).shrink(1.0));
+        let switch = t.add(row, Node::new().size(30.0, 18.0));
+        layout(
+            &mut t,
+            root,
+            Rect::new(0.0, 0.0, 330.0, 400.0),
+            &mut Wrapping,
+        );
+        assert_eq!(frame(&t, switch).w, 30.0);
+        assert_eq!(frame(&t, words).w, 290.0);
+        assert_eq!(frame(&t, words).h, 36.0);
+        assert_eq!(frame(&t, row).h, 36.0);
     }
 
     #[test]

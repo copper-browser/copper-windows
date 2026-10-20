@@ -54,3 +54,29 @@ pub const GEAR: char = '\u{E713}';
 pub const COPY: char = '\u{E8C8}';
 /// `rectangle.on.rectangle`: a private tab's mark.
 pub const PRIVATE: char = '\u{E727}';
+/// `chevron.down`: a popup chooser's mark.
+pub const CHEVRON_DOWN: char = '\u{E70D}';
+/// `chevron.right`: a row that opens out.
+pub const CHEVRON_RIGHT: char = '\u{E76C}';
+/// `checkmark`.
+pub const CHECK: char = '\u{E73E}';
+/// `xmark.circle.fill`: clear a field.
+pub const CLEAR: char = '\u{EB90}';
+/// `return`: what Enter does in a list.
+pub const RETURN: char = '\u{E751}';
+/// `arrow.down.circle`: Downloads.
+pub const DOWNLOAD: char = '\u{E896}';
+/// `mic`: Voice.
+pub const MIC: char = '\u{E720}';
+/// `info.circle`: About.
+pub const INFO: char = '\u{E946}';
+/// `flask`: Labs (Windows has no flask; a light bulb is its "try this").
+pub const LABS: char = '\u{EA80}';
+/// `sparkles`: Intelligence.
+pub const INTELLIGENCE: char = '\u{E945}';
+/// `square.split.2x1`: Tabs.
+pub const TABS: char = '\u{E8A9}';
+/// `lock`: a 1Password account in the list under a sign-in box.
+pub const LOCK: char = '\u{E72E}';
+/// `number`: a two-step code in the list under a code box (the dial pad).
+pub const DIALPAD: char = '\u{E75F}';
