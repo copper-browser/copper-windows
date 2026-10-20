@@ -46,6 +46,8 @@ pub fn handle(chrome: &Rc<Chrome>, e: Event) {
             crate::palette::submit(&shell, alt_down())
         }
         Event::FieldCancel(id) if is_card_field(chrome, id) => crate::palette::cancel(&shell),
+        Event::FieldChanged(id) | Event::FieldSubmit(id) | Event::FieldCancel(id)
+            if crate::palette::strip_field(&shell, id, &e) => {}
         Event::FieldChanged(id) | Event::FieldSubmit(id) | Event::FieldCancel(id) => {
             crate::find::field_event(&shell, id, &e);
             crate::panels::field_event(&shell, id, &e);

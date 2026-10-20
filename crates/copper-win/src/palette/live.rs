@@ -52,6 +52,10 @@ thread_local! {
     static CYCLING: Cell<bool> = const { Cell::new(false) };
     /// Every bookmark, flat, and the generation it was read at.
     static SHELF: RefCell<(u64, Vec<rank::Mark>)> = const { RefCell::new((u64::MAX, Vec::new())) };
+    /// Closed tabs brought back from the middle of the list: shell-core
+    /// only gives back the newest (`reopen_closed` pops it), so these stay
+    /// in its list and are left out of the cards' Closed rows here.
+    static TAKEN: RefCell<Vec<copper_core::browser::ClosedTab>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The cards' own commands, Ctrl's release, the spaces' commands.
@@ -81,6 +85,20 @@ pub fn register(shell: &Shell) {
             s.switch_space_nth(n - 1)
         }));
     }
+    // Escape with a panel (Settings) over the empty stage's standing
+    // field: the panel goes, the field stays. Everything else is the
+    // view's own Escape.
+    reg.add(Command::key("escape", |s| {
+        if !panel_over_standing(s) || !s.view().panels().hide(s) {
+            s.view().escape(s);
+        }
+    }));
+    // `Ctrl+L` is the plain field even with the tabs on top, where a
+    // click on the live tab edits it in place.
+    reg.add(Command::key("focus-field", plain_field));
+    super::spaces::watch(shell);
+    super::spaces::pointer(shell);
+    super::strip_edit::pointer(shell);
     // Ctrl let go of while `Ctrl+K` walks: take the row. The hook only
     // looks; the work runs on the loop's next turn.
     let weak = shell.downgrade();
@@ -138,9 +156,20 @@ pub fn open(shell: &Shell, purpose: Purpose, private: bool) {
     changed(shell);
 }
 
-/// `Ctrl+L` / a click on the address: edit it, or launch when there is
-/// nothing to edit.
+/// A click on the address (or, tabs on top, the live tab): edit it, or
+/// launch when there is nothing to edit.
 pub fn edit_address(shell: &Shell) {
+    // Tabs on top: the live tab itself becomes the address.
+    if shell.view().layout() == copper_core::settings::TabsPosition::Top
+        && super::strip_edit::begin(shell)
+    {
+        return;
+    }
+    plain_field(shell);
+}
+
+/// `Ctrl+L` (`Browser.edit`): the plain field, in either layout.
+fn plain_field(shell: &Shell) {
     if shell.active_id().is_some() {
         open(shell, Purpose::Edit, false);
     } else {
@@ -164,10 +193,25 @@ pub fn close(shell: &Shell) {
     shell.view().focus_page();
 }
 
+/// A panel (Settings) is up over the plain field standing on the empty
+/// stage: Escape is the panel's.
+fn panel_over_standing(shell: &Shell) -> bool {
+    shell.view().panels().showing().is_some()
+        && shell
+            .view()
+            .chrome()
+            .read(|_, st| st.card.is_standing())
+            .unwrap_or(false)
+}
+
 /// Escape in the field, a step at a time (`App.swift` 793–815): a picked
 /// row is let go of first, then the card goes; `Ctrl+T` goes at once; the
-/// plain field standing on an empty stage stays.
+/// plain field standing on an empty stage stays. With Settings over the
+/// standing field, Settings goes first.
 pub fn cancel(shell: &Shell) {
+    if panel_over_standing(shell) && shell.view().panels().hide(shell) {
+        return;
+    }
     let chrome = shell.view().chrome().clone();
     let Some((purpose, picked, standing, asking)) = chrome.read(|_, st| {
         (
@@ -250,6 +294,7 @@ pub fn changed(shell: &Shell) {
     }) else {
         return;
     };
+    let began = std::time::Instant::now();
     let m = mode(purpose);
     let inputs = gather(shell, &text, m, private);
     let offers = rank::offers(m, &inputs);
@@ -263,12 +308,15 @@ pub fn changed(shell: &Shell) {
         .then(|| offers.ending.clone())
         .flatten();
     let marks = marks(shell, &offers.rows);
+    let ranked = began.elapsed();
     chrome.edit(move |ui, st| {
         // Typing reached the field after this was read: its own change
         // will bring its rows.
         if st.card.text(ui) != text {
             return;
         }
+        let drawing = std::time::Instant::now();
+        let count = offers.rows.len();
         let mut marks = marks;
         let launch = m == Mode::Launch;
         st.card.set_rows(
@@ -293,6 +341,13 @@ pub fn changed(shell: &Shell) {
         if let Some(rest) = inline {
             st.card.offer(ui, &rest);
         }
+        // Our share of a keystroke's frame: the ranking, then the rows.
+        tracing::debug!(
+            target: "copper::perf",
+            "palette rows: {:.2} ms ranked, {:.2} ms drawn ({count} rows)",
+            ranked.as_secs_f64() * 1000.0,
+            drawing.elapsed().as_secs_f64() * 1000.0
+        );
     });
 }
 
@@ -558,19 +613,7 @@ pub fn perform(shell: &Shell, row: &Row, purpose: Purpose, private: bool, how: H
                 }
             }
         }
-        Action::Reopen { url, last } => {
-            if *last {
-                shell.reopen();
-            } else {
-                shell.open(
-                    url,
-                    Opening {
-                        foreground: true,
-                        ..Default::default()
-                    },
-                );
-            }
-        }
+        Action::Reopen { url, .. } => reopen_ghost(shell, url),
         // Merge point: the cloud's `Action::Go(url) if crate::cloud::open_link(..) => {}`
         // and then the canvas's `Action::Go(url) if crate::canvas::go(shell, url,
         // purpose == Purpose::Edit && !new_tab) => {}` sit here, ahead of the plain go.
@@ -604,6 +647,81 @@ pub fn perform(shell: &Shell, row: &Row, purpose: Purpose, private: bool, how: H
         },
     }
     shell.view().focus_page();
+}
+
+/// A closed tab, by address (`Browser.reopen(_ ghost:)`): the newest is
+/// shell-core's own `reopen_closed`; any other comes back the same way —
+/// in its space at the place it had, in front, in Saved again if it was.
+/// Like the Mac's, it starts a fresh history at its address: a closed tab
+/// keeps no back/forward list (`ClosedTab` and the Mac's `Ghost` are
+/// address, title and place only).
+fn reopen_ghost(shell: &Shell, url: &str) {
+    let ghosts = untaken(shell);
+    let newest = ghosts.last().cloned();
+    let ghost = ghosts.into_iter().rev().find(|g| g.url == url);
+    // The newest of all: shell-core's own reopen, which also lets it go.
+    if ghost.is_some() && ghost == newest && shell.browser().closed_tabs().last() == ghost.as_ref()
+    {
+        shell.reopen();
+        return;
+    }
+    let Some(g) = ghost else {
+        shell.open(
+            url,
+            Opening {
+                foreground: true,
+                ..Default::default()
+            },
+        );
+        return;
+    };
+    shell.with_browser(|b| {
+        let id = b.open_tab(
+            &g.url,
+            copper_core::browser::OpenOptions {
+                title: g.title.clone(),
+                // A space that has gone since: the one you are in.
+                space: Some(g.space.clone()),
+                index: Some(g.index),
+                foreground: true,
+                ..Default::default()
+            },
+        );
+        b.update_tab(&id, |t| {
+            t.group = g.group.clone();
+            t.saved = g.saved;
+        });
+    });
+    TAKEN.with(|t| t.borrow_mut().push(g));
+}
+
+/// Shell-core's closed tabs, oldest first, less the ones already brought
+/// back from the middle (each taken once).
+fn untaken(shell: &Shell) -> Vec<copper_core::browser::ClosedTab> {
+    let closed = shell.browser().closed_tabs().to_vec();
+    TAKEN.with(|t| {
+        let mut t = t.borrow_mut();
+        // Forget the ones shell-core has let go of since.
+        let mut left = closed.clone();
+        t.retain(|g| match left.iter().position(|c| c == g) {
+            Some(i) => {
+                left.remove(i);
+                true
+            }
+            None => false,
+        });
+        let mut skip = t.clone();
+        closed
+            .into_iter()
+            .filter(|c| match skip.iter().position(|g| g == c) {
+                Some(i) => {
+                    skip.remove(i);
+                    false
+                }
+                None => true,
+            })
+            .collect()
+    })
 }
 
 /// The selected tab shows nothing yet.
@@ -669,9 +787,7 @@ fn gather(shell: &Shell, typed: &str, m: Mode, private: bool) -> Inputs {
         inputs.marks = shelf(shell);
         inputs.canvases = canvases();
     }
-    inputs.closed = shell
-        .browser()
-        .closed_tabs()
+    inputs.closed = untaken(shell)
         .iter()
         .map(|c| rank::Closed {
             title: if c.title.is_empty() {
