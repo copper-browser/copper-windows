@@ -187,6 +187,7 @@ pub fn perform(shell: &Shell, row: &Row, purpose: Purpose, private: bool, new_ta
                 crate::commands::run(shell, id);
             }
         }
+        Action::Go(url) if crate::cloud::open_link(shell, url) => {}
         Action::Go(url) => match purpose {
             Purpose::Edit if !new_tab && shell.active_id().is_some() => {
                 if let Some(id) = shell.active_id() {

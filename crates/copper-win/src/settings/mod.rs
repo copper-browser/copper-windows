@@ -12,4 +12,4 @@ mod pages;
 mod panel;
 
 #[cfg(windows)]
-pub use panel::{Page, changed, open, register};
+pub use panel::{Page, changed, open, register, showing};
