@@ -292,14 +292,12 @@ mod tests {
         use std::time::Duration;
         let open = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = open.local_addr().unwrap().port();
-        assert!(!super::refuses("127.0.0.1", port, Duration::from_secs(2)));
+        // Windows retries a refused connect for ~2 s before it says so.
+        let limit = Duration::from_secs(6);
+        assert!(!super::refuses("127.0.0.1", port, limit));
         drop(open);
-        assert!(super::refuses("127.0.0.1", port, Duration::from_secs(2)));
-        assert!(!super::refuses(
-            "no-such-host.invalid",
-            80,
-            Duration::from_secs(2)
-        ));
+        assert!(super::refuses("127.0.0.1", port, limit));
+        assert!(!super::refuses("no-such-host.invalid", 80, limit));
     }
 
     use super::*;
