@@ -406,6 +406,7 @@ dependencies = [
  "png",
  "rustls",
  "serde_json",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "url",

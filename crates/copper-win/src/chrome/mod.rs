@@ -34,6 +34,7 @@ pub mod glyph;
 pub mod images;
 pub mod menus;
 pub mod model;
+pub mod pane;
 pub mod sheet;
 pub mod stage;
 pub mod strip;

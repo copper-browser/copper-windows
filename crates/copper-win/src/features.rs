@@ -22,6 +22,7 @@ pub fn register(shell: &Shell) {
     crate::cloud::register(shell);
     crate::canvas::register(shell);
     crate::agents::register(shell);
+    crate::addons::register(shell);
     crate::panels::register(shell);
     crate::settings::register(shell);
     crate::find::register(shell);

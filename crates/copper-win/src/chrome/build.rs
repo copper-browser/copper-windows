@@ -75,6 +75,7 @@ pub fn build(ui: &mut Ui) -> State {
             .fill(Swatch::Fade(Token::ColumnHairline, side::EDGE_ALPHA)),
     );
     let stage = stage::build(ui, well);
+    super::pane::build(ui, well);
     let plates = ui.tree.add(content, Node::stack().absolute(Abs::FILL));
     let toast = toast::build(ui, content);
     let card = card::build(ui, content);

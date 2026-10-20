@@ -99,7 +99,7 @@ pub fn register_scheme(engine: &WebView2Engine, log: &Rc<Log>) -> Result<(), Str
 }
 
 /// Evaluate `expr` in the page world.
-async fn js(ctx: &Ctx, expr: &str) -> Result<JsonValue, String> {
+pub async fn js(ctx: &Ctx, expr: &str) -> Result<JsonValue, String> {
     ctx.page
         .eval(expr, &World::Page)
         .await
@@ -107,7 +107,7 @@ async fn js(ctx: &Ctx, expr: &str) -> Result<JsonValue, String> {
 }
 
 /// Poll `f` every 50 ms for up to `limit`.
-async fn until(limit: Duration, mut f: impl FnMut() -> bool) -> bool {
+pub async fn until(limit: Duration, mut f: impl FnMut() -> bool) -> bool {
     let t = Instant::now();
     loop {
         if f() {
@@ -121,7 +121,7 @@ async fn until(limit: Duration, mut f: impl FnMut() -> bool) -> bool {
 }
 
 /// Poll page expression `expr` until it equals `want`.
-async fn until_js(ctx: &Ctx, expr: &str, want: &JsonValue, limit: Duration) -> bool {
+pub async fn until_js(ctx: &Ctx, expr: &str, want: &JsonValue, limit: Duration) -> bool {
     let t = Instant::now();
     loop {
         if js(ctx, expr).await.ok().as_ref() == Some(want) {
@@ -135,20 +135,20 @@ async fn until_js(ctx: &Ctx, expr: &str, want: &JsonValue, limit: Duration) -> b
 }
 
 /// A page-world expression that `JSON.stringify`s, parsed back.
-async fn js_json(ctx: &Ctx, expr: &str) -> Result<JsonValue, String> {
+pub async fn js_json(ctx: &Ctx, expr: &str) -> Result<JsonValue, String> {
     match js(ctx, expr).await? {
         JsonValue::String(s) => serde_json::from_str(&s).map_err(|e| e.to_string()),
         other => Ok(other),
     }
 }
 
-fn pass(log: &Log, ok: bool, what: &str) -> bool {
+pub fn pass(log: &Log, ok: bool, what: &str) -> bool {
     log.at(&format!("{} {what}", if ok { "PASS" } else { "FAIL" }));
     ok
 }
 
 /// Keep a visual moment on screen for `--hold`.
-async fn hold(ctx: &Ctx, what: &str) {
+pub async fn hold(ctx: &Ctx, what: &str) {
     if !ctx.hold.is_zero() {
         ctx.log.at(&format!(
             "{what}: holding {} ms (screenshot now)",
@@ -364,7 +364,7 @@ document.getElementById('t').addEventListener('input', (e) => { ic.inputs.push(e
 </script>"#;
 
 /// The centre of the element with `id`, in viewport CSS px.
-async fn centre(ctx: &Ctx, id: &str) -> Option<(f64, f64)> {
+pub async fn centre(ctx: &Ctx, id: &str) -> Option<(f64, f64)> {
     let r = js_json(
         ctx,
         &format!(
@@ -377,7 +377,7 @@ async fn centre(ctx: &Ctx, id: &str) -> Option<(f64, f64)> {
     Some((r[0].as_f64()?, r[1].as_f64()?))
 }
 
-async fn act(ctx: &Ctx, ev: InputEvent) -> Result<Trust, String> {
+pub async fn act(ctx: &Ctx, ev: InputEvent) -> Result<Trust, String> {
     ctx.page.input(ev).await.map_err(|e| e.to_string())
 }
 

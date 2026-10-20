@@ -147,6 +147,18 @@ impl NavStack {
         self.pending = None;
     }
 
+    /// Forget a pending traversal to `url` (the navigation filter refused
+    /// it); one to elsewhere stays.
+    pub fn cancel_pending_to(&mut self, url: &str) {
+        if self
+            .pending
+            .and_then(|t| self.slots.get(t))
+            .is_some_and(|s| s.url == url)
+        {
+            self.pending = None;
+        }
+    }
+
     /// The webview was closed (slept or crashed): every native id is gone,
     /// and the next document is this stack's current entry again.
     pub fn detach_native(&mut self) {
@@ -381,6 +393,30 @@ mod tests {
             )
         );
         assert_eq!(s.go(-2), Some(Step::Load("https://a/".into())));
+    }
+
+    #[test]
+    fn refused_traversal_forgets_only_its_own() {
+        let mut s = NavStack::default();
+        s.observe(&native(0, &[(1, "https://a/")]));
+        s.observe(&native(1, &[(1, "https://a/"), (2, "https://b/")]));
+        s.detach_native();
+        assert_eq!(s.go(-1), Some(Step::Load("https://a/".into())));
+        // Refusing another URL keeps the traversal…
+        s.cancel_pending_to("https://elsewhere/");
+        s.observe(&native(0, &[(5, "https://a/")]));
+        assert_eq!(
+            urls(&s),
+            (vec!["https://a/".into(), "https://b/".into()], 0)
+        );
+        // …refusing its own drops it: the next commit is a new entry.
+        assert_eq!(s.go(1), Some(Step::Load("https://b/".into())));
+        s.cancel_pending_to("https://b/");
+        s.observe(&native(1, &[(5, "https://a/"), (6, "https://c/")]));
+        assert_eq!(
+            urls(&s),
+            (vec!["https://a/".into(), "https://c/".into()], 1)
+        );
     }
 
     #[test]

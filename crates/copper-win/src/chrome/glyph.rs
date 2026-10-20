@@ -54,3 +54,5 @@ pub const GEAR: char = '\u{E713}';
 pub const COPY: char = '\u{E8C8}';
 /// `rectangle.on.rectangle`: a private tab's mark.
 pub const PRIVATE: char = '\u{E727}';
+/// `sidebar.right`: the Agent sidebar (Segoe Fluent `DockRight`).
+pub const AGENT_SIDEBAR: char = '\u{E90D}';

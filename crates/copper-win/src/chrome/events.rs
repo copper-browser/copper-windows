@@ -129,7 +129,7 @@ fn click(chrome: &Rc<Chrome>, shell: &Shell, id: NodeId) {
         Clicked::Strip(h) => strip_click(shell, h),
         Clicked::Stage(StageHit::StatusButton(tab)) => shell.reload(&tab),
         Clicked::Other(id) => {
-            if !crate::panels::click(shell, id) {
+            if !crate::panels::click(shell, id) && !crate::addons::click(shell, id) {
                 crate::find::click(shell, id);
             }
         }

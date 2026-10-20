@@ -56,12 +56,14 @@ impl Page for Updates {
                 true,
             );
         }
+        crate::addons::updates_section(&mut f);
         f
     }
 
     fn act(&self, shell: &Shell, action: &str, _value: &str) {
         use copper_shell_core::updates;
         match action {
+            a if a.starts_with("addon-") => crate::addons::updates_act(shell, a),
             "check" => updates::check::<Win>(shell, true),
             "download" => {
                 if let Err(e) = crate::sys::shell::open(&updates::release_page::<Win>()) {

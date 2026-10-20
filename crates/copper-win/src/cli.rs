@@ -26,7 +26,9 @@ pub fn dispatch(args: &[String]) -> Option<i32> {
     if args.iter().any(|a| a == "--mcp-stdio") {
         // Headless over the inherited handles: no console, no window, no
         // single-instance hand-off. A browser it starts is detached
-        // (`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`).
+        // (`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`), and holds
+        // none of the client's pipes.
+        keep_pipes_to_ourselves();
         return agents_cli::dispatch(args);
     }
     if args.iter().any(|a| a == "--cli") || agents_cli::is_cli(args) {
@@ -84,6 +86,34 @@ pub fn attach_console() {
 
 #[cfg(not(windows))]
 pub fn attach_console() {}
+
+/// The client's pipes are ours alone: a Copper the bridge starts must not
+/// inherit them. (`CreateProcess` hands every inheritable handle to the
+/// child even when its own stdio is null, so a browser started from the
+/// bridge would keep the client's stdout open after the bridge exits, and
+/// a client reading to the end would wait for the browser to quit.)
+#[cfg(windows)]
+fn keep_pipes_to_ourselves() {
+    use windows::Win32::Foundation::{HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation};
+    use windows::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: this process's own standard handles; only the inherit
+        // flag changes.
+        unsafe {
+            if let Ok(h) = GetStdHandle(which)
+                && !h.is_invalid()
+                && !h.0.is_null()
+            {
+                let _ = SetHandleInformation(h, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn keep_pipes_to_ourselves() {}
 
 /// Open `url` in the default browser (`copper cloud sso`'s sign-in page).
 #[cfg(windows)]

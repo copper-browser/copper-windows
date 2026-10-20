@@ -68,8 +68,9 @@ pub(crate) struct ProfileInner {
     pub id: ProfileId,
     pub ephemeral: bool,
     data_dir: Option<PathBuf>,
-    /// The WebView2 profile name.
-    pub name: String,
+    /// The WebView2 profile name; `None`: WebView2's default profile (see
+    /// `profile_home`).
+    pub name: Option<String>,
     download_dir: RefCell<PathBuf>,
     pub downloads: Rc<Downloads>,
     /// The profile object of the browser process's first webview of this
@@ -97,7 +98,7 @@ impl ProfileInner {
         id: ProfileId,
         ephemeral: bool,
         data_dir: Option<PathBuf>,
-        name: String,
+        name: Option<String>,
         download_dir: PathBuf,
     ) -> Rc<Self> {
         let p = Rc::new(ProfileInner {
@@ -147,7 +148,13 @@ impl ProfileInner {
     /// A fresh hidden controller in this profile.
     pub async fn create(self: &Rc<Self>) -> Result<Wv> {
         let env = self.engine.env.get().await?;
-        let wv = controller::create(&env, self.engine.park.0, &self.name, self.ephemeral).await?;
+        let wv = controller::create(
+            &env,
+            self.engine.park.0,
+            self.name.as_deref(),
+            self.ephemeral,
+        )
+        .await?;
         self.saw(&wv);
         Ok(wv)
     }
