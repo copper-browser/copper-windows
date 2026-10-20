@@ -135,6 +135,7 @@ fn shape(n: &Node) -> u8 {
         Content::Field(_) => 2,
         Content::Image(_) => 3,
         Content::Slot => 4,
+        Content::Ring(_) => 5,
     }
 }
 
