@@ -17,11 +17,12 @@ pub(crate) struct Wv {
     pub view: ICoreWebView2,
 }
 
-/// Make a hidden composition controller in WebView2 profile `name`.
+/// Make a hidden composition controller in WebView2 profile `name` (`None`:
+/// WebView2's default profile).
 pub(crate) async fn create(
     env: &ICoreWebView2Environment,
     parent: HWND,
-    name: &str,
+    name: Option<&str>,
     private: bool,
 ) -> Result<Wv> {
     let env10: ICoreWebView2Environment10 = env.cast().map_err(|_| {
@@ -30,9 +31,11 @@ pub(crate) async fn create(
     let options = unsafe { env10.CreateCoreWebView2ControllerOptions() }
         .map_err(|e| other("controller options", e))?;
     unsafe {
-        options
-            .SetProfileName(&hs(name))
-            .map_err(|e| other("profile name", e))?;
+        if let Some(name) = name {
+            options
+                .SetProfileName(&hs(name))
+                .map_err(|e| other("profile name", e))?;
+        }
         options
             .SetIsInPrivateModeEnabled(private)
             .map_err(|e| other("InPrivate", e))?;

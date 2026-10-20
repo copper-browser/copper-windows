@@ -70,8 +70,11 @@ pub(crate) fn sanitize_filename(suggested: &str) -> String {
     name
 }
 
-/// `dir/name`, or `dir/stem (n).ext` for the first `n` whose path is neither
-/// on disk nor reserved by another running download.
+/// `dir/name`, or Mac-style `dir/stem n.ext` (`name 2.pdf`, `name 3.pdf`…,
+/// as the Mac's `Browser.free`) for the first `n` from 2 whose path is
+/// neither on disk nor reserved by another running download. Only the last
+/// extension is kept apart (`a.tar 2.gz`), and a leading dot starts no
+/// extension (`.env 2`), as with `NSString.pathExtension`.
 pub(crate) fn unique_path(dir: &Path, suggested: &str, reserved: &HashSet<PathBuf>) -> PathBuf {
     let name = sanitize_filename(suggested);
     let (stem, ext) = match name.rfind('.') {
@@ -83,10 +86,50 @@ pub(crate) fn unique_path(dir: &Path, suggested: &str, reserved: &HashSet<PathBu
     if free(&first) {
         return first;
     }
-    (1u32..)
-        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
+    (2u32..)
+        .map(|n| dir.join(format!("{stem} {n}{ext}")))
         .find(free)
         .expect("an unused file name exists")
+}
+
+/// The name a download was given before Chromium numbered it: Chromium's
+/// default target for `a.pdf` is `a (1).pdf` (or `a (2).pdf`…) when `a.pdf`
+/// is `taken` in the download folder. That number is dropped, so the
+/// engine numbers names its own way ([`unique_path`]) and the Save As
+/// dialog offers the page's name. A name whose unnumbered form is free
+/// keeps its number (the page named it so).
+pub(crate) fn unnumbered(name: &str, taken: impl Fn(&str) -> bool) -> String {
+    let Some(open) = name.rfind(" (") else {
+        return name.to_owned();
+    };
+    let rest = &name[open + 2..];
+    let Some(close) = rest.find(')') else {
+        return name.to_owned();
+    };
+    let (digits, after) = (&rest[..close], &rest[close + 1..]);
+    let numbered = open > 0
+        && !digits.is_empty()
+        && digits.len() <= 6
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && (after.is_empty() || after.starts_with('.'));
+    let plain = format!("{}{after}", &name[..open]);
+    if numbered && taken(&plain) {
+        plain
+    } else {
+        name.to_owned()
+    }
+}
+
+/// The extension of file `name` when it is a plain one a Save As filter
+/// can name (`pdf` of `a.pdf`, `gz` of `a.tar.gz`; none for `.env`, `a.`
+/// or `a.b c`).
+pub(crate) fn plain_extension(name: &str) -> Option<&str> {
+    let (stem, ext) = name.rsplit_once('.')?;
+    let plain = !stem.is_empty()
+        && !ext.is_empty()
+        && ext.len() <= 16
+        && ext.chars().all(|c| c.is_ascii_alphanumeric());
+    plain.then_some(ext)
 }
 
 /// A plain JavaScript identifier (`call_async` argument names).
@@ -119,9 +162,11 @@ pub(crate) fn js_string(s: &str) -> String {
 /// WebView2 accepts at most 64 characters of `[A-Za-z0-9#@$()+-_~. ]` and
 /// compares names case-insensitively, while Copper ids are case-sensitive and
 /// up to 128 characters. Ids that are already lowercase and short are used
-/// as they are (so `default` is WebView2's own default profile); others get a
-/// lowercase prefix plus a hash of the exact id, which keeps distinct ids
-/// distinct and maps each id to the same name on every run.
+/// as they are; others get a lowercase prefix plus a hash of the exact id,
+/// which keeps distinct ids distinct and maps each id to the same name on
+/// every run. Every name is a profile of its own, `default` included
+/// (`WV2Profile_default`, not WebView2's default profile; see
+/// `profile_home`).
 pub(crate) fn webview2_profile_name(id: &str) -> String {
     if id.len() <= 64 && !id.bytes().any(|b| b.is_ascii_uppercase()) {
         return id.to_owned();
@@ -214,11 +259,36 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cw2-unique-{}", next_id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        std::fs::write(dir.join("b"), b"x").unwrap();
+        std::fs::write(dir.join(".env"), b"x").unwrap();
+        std::fs::write(dir.join("c.tar.gz"), b"x").unwrap();
         let mut reserved = HashSet::new();
-        reserved.insert(dir.join("a (1).txt"));
-        assert_eq!(unique_path(&dir, "a.txt", &reserved), dir.join("a (2).txt"));
-        assert_eq!(unique_path(&dir, "b", &reserved), dir.join("b"));
+        assert_eq!(
+            unique_path(&dir, "fresh.pdf", &reserved),
+            dir.join("fresh.pdf")
+        );
+        assert_eq!(unique_path(&dir, "a.txt", &reserved), dir.join("a 2.txt"));
+        reserved.insert(dir.join("a 2.txt"));
+        assert_eq!(unique_path(&dir, "a.txt", &reserved), dir.join("a 3.txt"));
+        std::fs::write(dir.join("a 3.txt"), b"x").unwrap();
+        assert_eq!(unique_path(&dir, "a.txt", &reserved), dir.join("a 4.txt"));
+        assert_eq!(unique_path(&dir, "b", &reserved), dir.join("b 2"));
+        assert_eq!(unique_path(&dir, ".env", &reserved), dir.join(".env 2"));
+        assert_eq!(
+            unique_path(&dir, "c.tar.gz", &reserved),
+            dir.join("c.tar 2.gz")
+        );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn plain_extensions() {
+        assert_eq!(plain_extension("report.pdf"), Some("pdf"));
+        assert_eq!(plain_extension("a.tar.gz"), Some("gz"));
+        assert_eq!(plain_extension(".env"), None);
+        assert_eq!(plain_extension("noext"), None);
+        assert_eq!(plain_extension("a."), None);
+        assert_eq!(plain_extension("a.b c"), None);
     }
 
     #[test]
@@ -255,5 +325,22 @@ mod tests {
         let uuid = webview2_profile_name("6F9619FF-8B86-D011-B42D-00C04FC964FF");
         assert!(uuid.starts_with("6f9619ff-8b86-d011-b42d-00c04fc964ff~"));
         assert!(uuid.len() <= 64);
+    }
+
+    #[test]
+    fn chromium_numbers_dropped() {
+        let taken = |n: &str| ["a.pdf", "c.tar.gz", "notes", "x (1).bin"].contains(&n);
+        assert_eq!(unnumbered("a (1).pdf", taken), "a.pdf");
+        assert_eq!(unnumbered("a (12).pdf", taken), "a.pdf");
+        assert_eq!(unnumbered("c (1).tar.gz", taken), "c.tar.gz");
+        assert_eq!(unnumbered("notes (3)", taken), "notes");
+        assert_eq!(unnumbered("x (1) (1).bin", taken), "x (1).bin");
+        // Free unnumbered names: the page's own name.
+        assert_eq!(unnumbered("b (1).pdf", taken), "b (1).pdf");
+        // Not Chromium's form.
+        assert_eq!(unnumbered("a (one).pdf", taken), "a (one).pdf");
+        assert_eq!(unnumbered("a (1)x.pdf", taken), "a (1)x.pdf");
+        assert_eq!(unnumbered(" (1).pdf", |_| true), " (1).pdf");
+        assert_eq!(unnumbered("a.pdf", taken), "a.pdf");
     }
 }

@@ -94,6 +94,14 @@ impl Tokens {
             remove();
         }
     }
+
+    /// Let go of the removers without running them: the object they would
+    /// call is gone and must not be called again (see
+    /// `page::events::FrameHandlers`). Its handlers go when the object is
+    /// released.
+    pub fn forget(&mut self) {
+        self.0.clear();
+    }
 }
 
 impl Drop for Tokens {

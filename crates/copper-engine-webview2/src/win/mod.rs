@@ -16,6 +16,7 @@ pub(crate) mod loader;
 pub(crate) mod page;
 pub(crate) mod paths;
 pub(crate) mod profile;
+pub(crate) mod save_dialog;
 pub(crate) mod schemes;
 pub(crate) mod window;
 pub(crate) mod worker;

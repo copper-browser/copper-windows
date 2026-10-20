@@ -23,6 +23,7 @@
 pub(crate) mod accept;
 pub(crate) mod args;
 pub(crate) mod cdp;
+pub(crate) mod context_menu;
 pub(crate) mod convert;
 pub(crate) mod dnr;
 pub(crate) mod filter;
@@ -31,6 +32,8 @@ pub mod hosting;
 pub(crate) mod input_plan;
 pub(crate) mod keys;
 pub(crate) mod languages;
+pub(crate) mod navigation;
+pub(crate) mod profile_home;
 pub(crate) mod scheme;
 pub(crate) mod scripts;
 pub(crate) mod util;
@@ -38,15 +41,17 @@ pub(crate) mod util;
 #[cfg(windows)]
 mod win;
 
+pub use context_menu::{ContextItemKind, ContextKind, ContextMenuItem, ContextMenuRequest};
 pub use filter::WebView2ContentFilter;
 pub use history::HistoryEntry;
 pub use hosting::{Cover, PageChange};
+pub use navigation::NavigationRequest;
 
 #[cfg(windows)]
 pub use win::backstage::WebView2Backstage;
 #[cfg(windows)]
 pub use win::engine::{EngineConfig, WebView2Engine};
 #[cfg(windows)]
-pub use win::page::WebView2Page;
+pub use win::page::{ContextMenuReply, WebView2Page};
 #[cfg(windows)]
 pub use win::profile::WebView2Profile;

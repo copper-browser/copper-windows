@@ -2,6 +2,11 @@
 //! squares, then titled pills sharing the room, a plus, the empty strip
 //! that drags the window, back / forward / reload, and the caption
 //! buttons' corner.
+//!
+//! Clicking the live tab turns it into the address (`TabAddressField`):
+//! it widens to take the field, the address comes up short and selected,
+//! Return goes there, Escape or looking away puts the tab back. `Ctrl+L`
+//! is the plain field over the page, as in the column (`Browser.edit`).
 
 use super::build::{door, mark, tip};
 use super::glyph;
@@ -23,6 +28,11 @@ const TITLE: f32 = 12.5;
 const RADIUS: f32 = 8.0;
 const DOOR: f32 = 26.0;
 const DOOR_GLYPH: f32 = 13.0;
+/// The live tab as the address: as wide as this, room allowing
+/// (`TabBar.content`: `min(340, strip - lights - 12)`).
+const EDIT_WIDTH: f32 = 340.0;
+/// The field's line in it.
+const EDIT_LINE: f32 = 16.0;
 
 /// What a click in the strip means.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +69,16 @@ pub struct Strip {
     titled: usize,
     targets: HashMap<NodeId, Hit>,
     nav: Nav,
+    /// The tab being edited in place and the words in its field.
+    editing: Option<(TabId, String)>,
+    /// The field, while it shows; `fresh` until it has been given its
+    /// address, selected, and the keyboard.
+    field: Option<NodeId>,
+    fresh: bool,
+    /// The field had the keyboard before a redraw (it gets it back).
+    keyboard: bool,
+    /// Its selection before a redraw.
+    picked: Option<std::ops::Range<usize>>,
 }
 
 pub fn build(ui: &mut Ui, parent: NodeId) -> Strip {
@@ -148,6 +168,11 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Strip {
         titled: 0,
         targets,
         nav: Nav::default(),
+        editing: None,
+        field: None,
+        fresh: false,
+        keyboard: false,
+        picked: None,
     }
 }
 
@@ -185,30 +210,94 @@ impl Strip {
             .collect();
         let width = ui.size().w;
         let titled = drawn.iter().filter(|d| !d.pinned).count();
-        if drawn == self.drawn && (width - self.width).abs() < 0.5 && titled == self.titled {
+        // The edit ends when its tab is no longer the live, titled one.
+        if let Some((id, _)) = &self.editing
+            && !drawn.iter().any(|d| d.id == *id && d.live && !d.pinned)
+        {
+            self.editing = None;
+        }
+        if drawn == self.drawn
+            && (width - self.width).abs() < 0.5
+            && titled == self.titled
+            && self.field.is_some() == self.editing.is_some()
+        {
             return;
         }
+        // What was typed so far, what is selected, and the keyboard
+        // survive the redraw.
+        if let (Some(f), Some((_, words))) = (self.field, self.editing.as_mut())
+            && let Some(field) = ui.tree.get(f).and_then(|n| n.field_ref())
+        {
+            *words = field.edit.text().to_string();
+            self.picked = Some(field.edit.selection());
+        }
+        let focused = self.fresh || (self.field.is_some() && ui.tree.focused() == self.field);
+        self.keyboard = focused;
+        self.field = None;
         self.width = width;
         self.titled = titled;
-        let tab_w = self.tab_width(width, &drawn);
+        let editing = self.editing.as_ref().map(|(id, _)| id.clone());
+        let edit_w = self.edit_width(width);
+        let tab_w = self.tab_width(width, &drawn, editing.as_ref().map(|_| edit_w));
         for c in ui.tree.children(self.run).to_vec() {
             self.forget(ui, c);
         }
         ui.tree.clear_children(self.run);
         for (t, d) in tabs.iter().zip(&drawn) {
-            let w = if d.pinned { metrics::PIN_WIDTH } else { tab_w };
+            let edit = editing.as_ref() == Some(&d.id);
+            let w = if d.pinned {
+                metrics::PIN_WIDTH
+            } else if edit {
+                edit_w
+            } else {
+                tab_w
+            };
             let icon = super::build::icon_id(ui, images, t.favicon.as_ref());
-            self.add_tab(ui, t, d, w, icon);
+            self.add_tab(ui, t, d, w, icon, edit);
         }
         self.drawn = drawn;
     }
 
+    /// The live tab `id` becomes the address, `text` in it, selected.
+    pub fn begin_edit(&mut self, id: TabId, text: String) {
+        self.editing = Some((id, text));
+        self.fresh = true;
+        self.picked = None;
+        self.drawn.clear();
+    }
+
+    /// Put the tab back (`true` if it was being edited).
+    pub fn end_edit(&mut self) -> bool {
+        self.fresh = false;
+        self.drawn.clear();
+        self.editing.take().is_some()
+    }
+
+    /// The in-tab address field, while it shows.
+    pub fn field(&self) -> Option<NodeId> {
+        self.field
+    }
+
+    /// The width the edited tab takes in a window `window_w` wide.
+    fn edit_width(&self, window_w: f32) -> f32 {
+        let room = window_w
+            - side::INSET
+            - 12.0
+            - metrics::PLUS_WIDTH
+            - 24.0
+            - metrics::HELM
+            - Caption::width();
+        room.clamp(metrics::TAB_WIDTH, EDIT_WIDTH)
+    }
+
     /// Room for the titled tabs: what the strip leaves, shared, between
     /// the minimum and the fixed width.
-    fn tab_width(&self, window_w: f32, drawn: &[Drawn]) -> f32 {
+    fn tab_width(&self, window_w: f32, drawn: &[Drawn], edit: Option<f32>) -> f32 {
         let pinned = drawn.iter().filter(|d| d.pinned).count() as f32;
-        let titled = drawn.len() as f32 - pinned;
-        let fixed = side::INSET
+        let edited = if edit.is_some() { 1.0 } else { 0.0 };
+        let titled = drawn.len() as f32 - pinned - edited;
+        let fixed = edit.map_or(0.0, |w| w + metrics::TAB_GAP)
+            + side::INSET
             + pinned * (metrics::PIN_WIDTH + metrics::TAB_GAP)
             + metrics::PLUS_WIDTH
             + 24.0
@@ -221,7 +310,15 @@ impl Strip {
         each.clamp(metrics::TAB_MIN_WIDTH, metrics::TAB_WIDTH)
     }
 
-    fn add_tab(&mut self, ui: &mut Ui, t: &TabView<Icon>, d: &Drawn, w: f32, icon: Option<u32>) {
+    fn add_tab(
+        &mut self,
+        ui: &mut Ui,
+        t: &TabView<Icon>,
+        d: &Drawn,
+        w: f32,
+        icon: Option<u32>,
+        edit: bool,
+    ) {
         let mut n = Node::row()
             .size(w, TAB_HEIGHT)
             .shrink(0.0)
@@ -251,6 +348,34 @@ impl Strip {
                 .shadow_ink(Token::Lift);
         }
         let node = ui.tree.add(self.run, n);
+        if edit {
+            // `TabAddressField`: 12.5 in the ink, a line of 16, no mark,
+            // no cross.
+            ui.tree.edit(node, |n| n.tooltip = None);
+            let field = ui.tree.add(
+                node,
+                Node::field("", TITLE)
+                    .height(EDIT_LINE)
+                    .grow(1.0)
+                    .ink(Token::ColumnInk)
+                    .name("Address"),
+            );
+            let words = self
+                .editing
+                .as_ref()
+                .map(|(_, w)| w.clone())
+                .unwrap_or_default();
+            ui.set_field_text(field, &words, self.fresh);
+            if let Some(r) = self.picked.take().filter(|_| !self.fresh) {
+                ui.edit_field(field, |e| e.select(r));
+            }
+            if self.keyboard {
+                ui.focus(Some(field));
+            }
+            self.fresh = false;
+            self.field = Some(field);
+            return;
+        }
         mark(ui, node, icon, &t.letter, side::MARK);
         self.targets.insert(node, Hit::Tab(t.id.clone()));
         if d.pinned || w < metrics::TAB_TITLED {
