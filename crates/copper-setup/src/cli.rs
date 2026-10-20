@@ -145,6 +145,13 @@ mod tests {
     }
 
     #[test]
+    fn the_prewarm_is_a_browser_start() {
+        // `copper --prewarm` (what setup starts after an install) reaches
+        // the browser's own start, which warms up and leaves.
+        assert_eq!(classify(Some("copper"), &args(&["--prewarm"])), Launch::App);
+    }
+
+    #[test]
     fn install_flag_and_silent_forms() {
         for silent in ["/S", "/s", "/silent", "--silent", "--SILENT"] {
             match classify(Some("copper"), &args(&["--install", silent])) {

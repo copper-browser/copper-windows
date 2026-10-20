@@ -25,6 +25,7 @@ use windows::Win32::UI::Shell::{
 use windows::core::{HSTRING, PCWSTR};
 
 use super::worker;
+use crate::partials::Mark;
 use crate::util::plain_extension;
 
 /// Where the engine asks: the window that owns the dialog, as a number
@@ -39,6 +40,9 @@ pub(crate) struct SaveSpec {
     /// The folder it opens in (made if missing).
     pub folder: PathBuf,
     pub owner: AskOwner,
+    /// Left in this folder while the dialog is open (see
+    /// [`crate::partials`]): the download is being written meanwhile.
+    pub mark: Option<(PathBuf, Mark)>,
 }
 
 /// Lets one Save As dialog show at a time, in the order they were asked:
@@ -70,9 +74,17 @@ async fn show(spec: SaveSpec) -> Option<PathBuf> {
         tracing::warn!("save dialog folder {}: {e}", spec.folder.display());
     }
     let done = worker::run("copper-save-dialog", move || {
+        let left = spec.mark.as_ref().and_then(|(marks, mark)| {
+            mark.leave(marks, crate::util::next_id())
+                .map_err(|e| tracing::debug!("download ask mark: {e}"))
+                .ok()
+        });
         let init =
             unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
         let r = show_with_com(&spec);
+        if let Some(path) = left {
+            let _ = std::fs::remove_file(path);
+        }
         if init.is_ok() {
             unsafe { CoUninitialize() };
         }

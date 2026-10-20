@@ -104,6 +104,8 @@ pub struct Chrome {
     shell: RefCell<Option<WeakShell>>,
     /// A latency being measured to the next frame: what, and since when.
     watch: Cell<Option<(&'static str, Instant)>>,
+    /// Frames drawn so far, up to a few (the first ones are logged).
+    frames: Cell<u32>,
 }
 
 impl Chrome {
@@ -120,7 +122,10 @@ impl Chrome {
                 backdrop: Backdrop::Mica,
                 ..Options::default()
             },
-            move |_ui: &mut Ui, e: Event| {
+            move |ui: &mut Ui, e: Event| {
+                if matches!(e, Event::FirstFrame { .. }) {
+                    tracing::debug!(target: "copper::perf", "window: {}", ui.startup_phases().line());
+                }
                 if let Some(c) = handler_me.get().and_then(Weak::upgrade) {
                     c.heard(e);
                 }
@@ -136,6 +141,7 @@ impl Chrome {
             overlay: Cell::new(false),
             shell: RefCell::new(None),
             watch: Cell::new(None),
+            frames: Cell::new(0),
         });
         let _ = me.set(Rc::downgrade(&chrome));
         let state = chrome.window.with(build::build);
@@ -230,10 +236,38 @@ impl Chrome {
     /// rest for the drain.
     fn heard(self: &Rc<Self>, e: Event) {
         match e {
-            Event::Frame { cpu_ms, .. } => {
+            Event::Frame {
+                cpu_ms,
+                input_to_screen_ms,
+                layers,
+                ..
+            } => {
+                // The first frames, and the early ones that redraw much
+                // (the move to the hardware device).
+                let n = self.frames.get();
+                if n < 6 || (n < 120 && layers >= 5) {
+                    tracing::debug!(
+                        target: "copper::perf",
+                        "frame {}: {layers} layers, {cpu_ms:.1} ms CPU, at {:.1} ms from process start",
+                        n + 1,
+                        perf::since_start_ms()
+                    );
+                }
+                if n < 120 {
+                    self.frames.set(n + 1);
+                }
                 if let Some((what, since)) = self.watch.take() {
                     let ms = since.elapsed().as_secs_f64() * 1000.0;
-                    tracing::info!(target: "copper::perf", "{what}: {ms:.1} ms to its frame ({cpu_ms:.1} ms CPU)");
+                    match input_to_screen_ms {
+                        Some(screen) => tracing::info!(
+                            target: "copper::perf",
+                            "{what}: {ms:.1} ms to its frame ({cpu_ms:.1} ms CPU), input to screen {screen:.1} ms"
+                        ),
+                        None => tracing::info!(
+                            target: "copper::perf",
+                            "{what}: {ms:.1} ms to its frame ({cpu_ms:.1} ms CPU)"
+                        ),
+                    }
                 }
                 return;
             }

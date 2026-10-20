@@ -9,31 +9,40 @@
 //! attachment`, so the browser downloads it (same cookies, same network
 //! stack). Fetches run one at a time; the id is handed out at once.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use copper_engine::{DownloadEvent, DownloadId, DownloadState, EventSink, PageEvent};
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
-use windows::core::PWSTR;
+use windows::core::{Interface, PWSTR};
 
 use super::com::{Tokens, get, get_string, hs};
 use super::page::PageInner;
 use super::profile::ProfileInner;
 use super::save_dialog::SaveSpec;
 use crate::convert::{download_failure, fraction, new_download_id};
+use crate::partials::Mark;
 use crate::util::{sanitize_filename, unique_path, unnumbered};
 
 /// Minimum spacing of `Progress` events per download.
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
+/// How often running downloads are looked at for one Chromium gave up on.
+const STALL_EVERY: Duration = Duration::from_secs(2);
+/// Looks in a row at an operation left "in progress" with an interrupt
+/// reason and no restart before the download counts as failed.
+const STALL_LOOKS: u8 = 3;
 
 struct Live {
     op: ICoreWebView2DownloadOperation,
+    url: Option<String>,
     path: PathBuf,
     page: Option<Weak<PageInner>>,
     last_progress: Option<Instant>,
+    /// Looks in a row that found the operation interrupted (see [`STALL_LOOKS`]).
+    stalled: u8,
     _tokens: Tokens,
 }
 
@@ -53,6 +62,8 @@ pub(crate) struct Downloads {
     pub jobs: RefCell<VecDeque<Job>>,
     /// The fetch whose download has not started yet.
     pub current: RefCell<Option<Job>>,
+    /// The stall watch runs (while any download does).
+    watching: Cell<bool>,
 }
 
 impl Downloads {
@@ -148,6 +159,17 @@ pub(crate) fn take_over(
     decided: impl FnOnce() + 'static,
 ) -> windows::core::Result<()> {
     let mut start = Starting::read(args)?;
+    // Chromium resumes an interrupted download on its own, from scratch
+    // when the server cannot resume (a fresh `200`), and announces it
+    // again: it is the same download, not a new one.
+    if id.is_none()
+        && let Some(was) = profile.downloads.restarted(&start)
+    {
+        unsafe { args.SetHandled(true)? };
+        let r = profile.downloads.rebind(args, start, was);
+        decided();
+        return r;
+    }
     let id = id.unwrap_or_else(new_download_id);
     let dir = profile.download_dir();
     // Chromium's default name is numbered against this folder (`a (1).pdf`);
@@ -179,10 +201,16 @@ pub(crate) fn take_over(
     let args = args.clone();
     let engine = profile.engine.clone();
     let downloads = profile.downloads.clone();
+    // The browser writes the download into this folder meanwhile.
+    let mark = Mark {
+        since: SystemTime::now(),
+        dir: dir.clone(),
+    };
     let spec = SaveSpec {
         name: sanitize_filename(start.suggested.as_deref().unwrap_or("download")),
         folder: dir,
         owner,
+        mark: Some((engine.asks_dir.clone(), mark)),
     };
     copper_win_rt::spawn_local(async move {
         match engine.save_queue.ask(spec).await {
@@ -237,7 +265,11 @@ fn destined(
         total,
     } = start;
     unsafe { args.SetResultFilePath(&hs(&path.to_string_lossy()))? };
-    downloads.emit(id, DownloadState::Started { url }, page.as_ref());
+    downloads.emit(
+        id,
+        DownloadState::Started { url: url.clone() },
+        page.as_ref(),
+    );
     downloads.emit(
         id,
         DownloadState::Destination {
@@ -247,6 +279,29 @@ fn destined(
         },
         page.as_ref(),
     );
+    let tokens = follow(downloads, &op, id)?;
+    downloads.live.borrow_mut().insert(
+        id,
+        Live {
+            op,
+            url,
+            path,
+            page,
+            last_progress: None,
+            stalled: 0,
+            _tokens: tokens,
+        },
+    );
+    downloads.watch_stalls();
+    Ok(())
+}
+
+/// Report `op`'s progress and end as download `id`.
+fn follow(
+    downloads: &Rc<Downloads>,
+    op: &ICoreWebView2DownloadOperation,
+    id: DownloadId,
+) -> windows::core::Result<Tokens> {
     let mut tokens = Tokens::default();
     let weak = Rc::downgrade(downloads);
     on!(
@@ -274,20 +329,76 @@ fn destined(
             Ok(())
         }
     )?;
-    downloads.live.borrow_mut().insert(
-        id,
-        Live {
-            op,
-            path,
-            page,
-            last_progress: None,
-            _tokens: tokens,
-        },
-    );
-    Ok(())
+    Ok(tokens)
 }
 
 impl Downloads {
+    /// The running download `start` is Chromium restarting: the same
+    /// operation, or one for the same URL whose own operation was
+    /// interrupted (whether or not its state says so).
+    fn restarted(&self, start: &Starting) -> Option<DownloadId> {
+        let me: windows::core::IUnknown = start.op.cast().ok()?;
+        let live = self.live.borrow();
+        let mut found = None;
+        for (id, l) in live.iter() {
+            let same =
+                l.op.cast::<windows::core::IUnknown>()
+                    .is_ok_and(|u| u == me);
+            let same_url = l.url.is_some() && l.url == start.url;
+            if !same && !same_url {
+                continue;
+            }
+            let state = get(|p| unsafe { l.op.State(p) })
+                .unwrap_or(COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS);
+            let reason = get(|p| unsafe { l.op.InterruptReason(p) })
+                .unwrap_or(COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_NONE);
+            tracing::debug!(
+                ?id,
+                same,
+                state = state.0,
+                reason = reason.0,
+                "download starting again? {:?}",
+                start.url
+            );
+            // Chromium resuming by itself leaves the old operation "in
+            // progress" with an interrupt reason (seen: 24, content length
+            // mismatch), and starts a new one for the same URL.
+            if same
+                || state == COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED
+                || reason != COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_NONE
+            {
+                found = Some(*id);
+            }
+        }
+        found
+    }
+
+    /// Follow `start` as download `id` (restarted), into the same file.
+    fn rebind(
+        self: &Rc<Self>,
+        args: &ICoreWebView2DownloadStartingEventArgs,
+        start: Starting,
+        id: DownloadId,
+    ) -> windows::core::Result<()> {
+        let Some(path) = self.live.borrow().get(&id).map(|l| l.path.clone()) else {
+            return Ok(());
+        };
+        unsafe { args.SetResultFilePath(&hs(&path.to_string_lossy()))? };
+        let tokens = follow(self, &start.op, id)?;
+        // The old operation's handlers go with its entry.
+        if let Some(l) = self.live.borrow_mut().get_mut(&id) {
+            l.op = start.op;
+            l.last_progress = None;
+            l.stalled = 0;
+            l._tokens = tokens;
+        }
+        tracing::debug!(
+            ?id,
+            "download restarted by the browser: same row, same file"
+        );
+        Ok(())
+    }
+
     fn progress(&self, id: DownloadId, op: &ICoreWebView2DownloadOperation) {
         let page = {
             let mut live = self.live.borrow_mut();
@@ -314,11 +425,67 @@ impl Downloads {
         self.emit(id, state, page.as_ref());
     }
 
+    /// Chromium restarts a download cut off by the server (content length
+    /// mismatch) a few times by itself, then gives up without a word: the
+    /// last operation stays "in progress" with an interrupt reason and no
+    /// state change ever comes. Such a download is failed here.
+    fn watch_stalls(self: &Rc<Self>) {
+        if self.watching.replace(true) {
+            return;
+        }
+        let me = Rc::downgrade(self);
+        copper_win_rt::spawn_local(async move {
+            loop {
+                copper_win_rt::sleep(STALL_EVERY).await;
+                let Some(d) = me.upgrade() else { return };
+                let mut gone = Vec::new();
+                {
+                    let mut live = d.live.borrow_mut();
+                    if live.is_empty() {
+                        d.watching.set(false);
+                        return;
+                    }
+                    for (id, l) in live.iter_mut() {
+                        let state = get(|p| unsafe { l.op.State(p) })
+                            .unwrap_or(COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS);
+                        let reason = get(|p| unsafe { l.op.InterruptReason(p) })
+                            .unwrap_or(COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_NONE);
+                        if state == COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS
+                            && reason != COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_NONE
+                            && reason != COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_PAUSED
+                        {
+                            l.stalled += 1;
+                            if l.stalled >= STALL_LOOKS {
+                                gone.push((*id, reason));
+                            }
+                        } else {
+                            l.stalled = 0;
+                        }
+                    }
+                }
+                for (id, reason) in gone {
+                    let Some(l) = d.live.borrow_mut().remove(&id) else {
+                        continue;
+                    };
+                    tracing::debug!(?id, reason = reason.0, "download given up by the browser");
+                    d.reserved.borrow_mut().remove(&l.path);
+                    let (error, cancelled) = download_failure(reason.0);
+                    d.emit(
+                        id,
+                        DownloadState::Failed { error, cancelled },
+                        l.page.as_ref(),
+                    );
+                }
+            }
+        });
+    }
+
     fn state_changed(&self, id: DownloadId, op: &ICoreWebView2DownloadOperation) {
         let state =
             get(|p| unsafe { op.State(p) }).unwrap_or(COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS);
         let reason = get(|p| unsafe { op.InterruptReason(p) })
             .unwrap_or(COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_NONE);
+        tracing::debug!(?id, state = state.0, reason = reason.0, "download state");
         let terminal = state == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED
             || (state == COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED
                 && reason != COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_PAUSED);

@@ -27,7 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
-use super::clock::WM_FRAME;
+use super::clock::{WM_FRAME, WM_GFX_READY};
 use super::slot::{SlotMouse, SlotPointer};
 use super::ui::{Capture, Command, Drag, Pan, TIMER_CARET, TIMER_TIP, Ui};
 use super::{clipboard, frame, ime, keys};
@@ -104,9 +104,20 @@ impl Ui {
     pub(super) fn message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         let r = LRESULT(0);
         match msg {
+            WM_KEYDOWN | WM_SYSKEYDOWN | WM_CHAR | WM_IME_COMPOSITION | WM_LBUTTONDOWN
+            | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN | WM_POINTERDOWN
+            | WM_POINTERUP => self.note_input(true),
+            WM_MOUSEWHEEL | WM_MOUSEHWHEEL => self.note_input(false),
+            _ => {}
+        }
+        match msg {
             WM_FRAME => {
                 self.clock.handled();
                 self.render();
+                Some(r)
+            }
+            WM_GFX_READY => {
+                self.hardware_ready(wp.0 as f32);
                 Some(r)
             }
             WM_PAINT => {

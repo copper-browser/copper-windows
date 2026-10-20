@@ -248,7 +248,15 @@ pub(crate) fn user_script_source(script: &UserScript) -> String {
     format!("(() => {{\n{guard}{body}\n}})();\n")
 }
 
-/// A user style sheet as a document-created script.
+/// Where a document keeps the user style sheets it has adopted, by id:
+/// `document[Symbol.for(SHEETS_KEY)]`, a `Map` (one per world). On the
+/// document, not the window: Chromium hands the initial `about:blank`'s
+/// window on to the first real document, which needs its own sheets.
+const SHEETS_KEY: &str = "copper.userSheets";
+
+/// User style sheet `id` as a script: run when a document is created (the
+/// registration), and in a document already open when the sheet is added
+/// (WebKit applies user sheets to live documents too).
 ///
 /// The sheet is a constructed `CSSStyleSheet` in `document.adoptedStyleSheets`
 /// (exempt from the page's CSP, invisible to the DOM, after every sheet the
@@ -256,8 +264,10 @@ pub(crate) fn user_script_source(script: &UserScript) -> String {
 /// [`StyleLevel::User`] also cascades as an author sheet; to keep its
 /// `!important` rules ahead of the page's like a user sheet's, the sheet is
 /// re-appended last whenever the page replaces `adoptedStyleSheets` (checked
-/// at `DOMContentLoaded` and `load`).
-pub(crate) fn style_sheet_source(sheet: &UserStyleSheet) -> String {
+/// at `DOMContentLoaded` and `load`). The document's sheets are kept by id
+/// so [`style_sheet_removal`] can take one off a live document, and so a
+/// sheet is never adopted twice.
+pub(crate) fn style_sheet_source(sheet: &UserStyleSheet, id: u64) -> String {
     let top_only = sheet.frames == Frames::TopOnly;
     let mut checks = Vec::new();
     if top_only {
@@ -276,11 +286,16 @@ pub(crate) fn style_sheet_source(sheet: &UserStyleSheet) -> String {
     let keep_last = sheet.level == StyleLevel::User;
     format!(
         "(() => {{\n{guard}\
+         const key = Symbol.for({key});\n\
+         const sheets = document[key] || (document[key] = new Map());\n\
+         if (sheets.has({id})) return;\n\
          const css = {css};\n\
          let sheet;\n\
          try {{ sheet = new CSSStyleSheet(); sheet.replaceSync(css); }} catch (_) {{ return; }}\n\
+         sheets.set({id}, sheet);\n\
          const attach = () => {{\n\
            try {{\n\
+             if (sheets.get({id}) !== sheet) return;\n\
              const list = document.adoptedStyleSheets;\n\
              const at = list.indexOf(sheet);\n\
              if (at >= 0 && (at === list.length - 1 || !{keep_last})) return;\n\
@@ -291,7 +306,23 @@ pub(crate) fn style_sheet_source(sheet: &UserStyleSheet) -> String {
          document.addEventListener('DOMContentLoaded', attach, {{ once: true }});\n\
          addEventListener('load', attach, {{ once: true }});\n\
          }})();\n",
+        key = js_string(SHEETS_KEY),
         css = js_string(&sheet.source),
+    )
+}
+
+/// Take user style sheet `id` off the document the script runs in (it stays
+/// registered for no new document: its registration is gone already).
+pub(crate) fn style_sheet_removal(id: u64) -> String {
+    format!(
+        "(() => {{\n\
+         const sheets = document[Symbol.for({key})];\n\
+         const sheet = sheets && sheets.get({id});\n\
+         if (!sheet) return;\n\
+         sheets.delete({id});\n\
+         try {{ document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet); }} catch (_) {{}}\n\
+         }})();\n",
+        key = js_string(SHEETS_KEY),
     )
 }
 
@@ -596,7 +627,7 @@ mod tests {
     #[test]
     fn style_sheets() {
         let sheet = UserStyleSheet::new("a { color: red }\n`${x}`");
-        let s = style_sheet_source(&sheet);
+        let s = style_sheet_source(&sheet, 7);
         assert!(
             s.contains(r#"const css = "a { color: red }\n`${x}`";"#),
             "{s}"
@@ -604,7 +635,12 @@ mod tests {
         assert!(s.contains("adoptedStyleSheets"));
         assert!(!s.contains("window.top"));
         let top = UserStyleSheet::new("b{}").frames(Frames::TopOnly);
-        assert!(style_sheet_source(&top).contains("window === window.top"));
+        assert!(style_sheet_source(&top, 8).contains("window === window.top"));
+        assert!(s.contains("sheets.has(7)") && s.contains("sheets.set(7, sheet)"));
+        assert!(s.contains(r#"Symbol.for("copper.userSheets")"#), "{s}");
+        let off = style_sheet_removal(7);
+        assert!(off.contains("sheets.get(7)") && off.contains("sheets.delete(7)"));
+        assert!(off.contains(r#"Symbol.for("copper.userSheets")"#));
     }
 
     fn chain_of(sources: &[&str]) -> Chain {

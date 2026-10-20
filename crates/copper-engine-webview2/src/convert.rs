@@ -33,6 +33,59 @@ pub(crate) fn web_error_name(status: i32) -> &'static str {
     }
 }
 
+/// The error of a load nothing listened for: WebView2 has no status for a
+/// refused connection (Chromium's `ERR_CONNECTION_REFUSED` arrives as
+/// `UNKNOWN`), so a failed `UNKNOWN` load knocks once (see [`refuses`]).
+pub(crate) const CONNECTION_REFUSED: &str = "connection refused";
+
+/// `COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN`.
+pub(crate) const WEB_ERROR_UNKNOWN: i32 = 0;
+
+/// Ports Chromium will not load from at all (`net/base/port_util.cc`
+/// `kRestrictedPorts`): their failure is that, not a refusal.
+const RESTRICTED_PORTS: &[u16] = &[
+    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
+    103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465,
+    512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993,
+    995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668,
+    6669, 6679, 6697, 10080,
+];
+
+/// Where to knock for a failed load of `url`: an http(s) host and port
+/// Chromium would have tried.
+pub(crate) fn knock_target(url: &str) -> Option<(String, u16)> {
+    let u = url::Url::parse(url).ok()?;
+    if !matches!(u.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = u
+        .host_str()?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_owned();
+    let port = u.port_or_known_default()?;
+    if RESTRICTED_PORTS.contains(&port) {
+        return None;
+    }
+    Some((host, port))
+}
+
+/// Whether `host:port` refuses a TCP connection (nothing listens there).
+/// Anything else (it answers, a timeout, no address) is not a refusal.
+pub(crate) fn refuses(host: &str, port: u16, limit: std::time::Duration) -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let Ok(addrs) = (host, port).to_socket_addrs() else {
+        return false;
+    };
+    // The first address only: each knock on Windows may take its whole limit.
+    addrs.into_iter().next().is_some_and(|a| {
+        matches!(
+            TcpStream::connect_timeout(&a, limit),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused
+        )
+    })
+}
+
 /// `COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED`: the load was stopped
 /// or replaced, not failed.
 pub(crate) const WEB_ERROR_CANCELED: i32 = 14;
@@ -214,6 +267,41 @@ pub(crate) fn new_download_id() -> DownloadId {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn knocks_only_where_chromium_would_connect() {
+        use super::knock_target;
+        assert_eq!(
+            knock_target("http://127.0.0.1:59321/"),
+            Some(("127.0.0.1".into(), 59321))
+        );
+        assert_eq!(
+            knock_target("https://example.com/a"),
+            Some(("example.com".into(), 443))
+        );
+        assert_eq!(
+            knock_target("http://[::1]:8080/"),
+            Some(("::1".into(), 8080))
+        );
+        assert_eq!(knock_target("http://127.0.0.1:9/"), None);
+        assert_eq!(knock_target("file:///C:/a.html"), None);
+        assert_eq!(knock_target("copper://newtab"), None);
+    }
+
+    #[test]
+    fn tells_a_refusal() {
+        use std::time::Duration;
+        let open = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = open.local_addr().unwrap().port();
+        assert!(!super::refuses("127.0.0.1", port, Duration::from_secs(2)));
+        drop(open);
+        assert!(super::refuses("127.0.0.1", port, Duration::from_secs(2)));
+        assert!(!super::refuses(
+            "no-such-host.invalid",
+            80,
+            Duration::from_secs(2)
+        ));
+    }
+
     use super::*;
 
     #[test]
