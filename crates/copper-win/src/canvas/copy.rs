@@ -621,7 +621,9 @@ pub fn role_word(role: &str) -> String {
 
 /// The page for an address that names no canvas here (instead of the
 /// engine's error page).
-pub fn missing_page(id: &str) -> String {
+/// `dark`: the window's look (the page can't follow the system's: Copper's
+/// look may differ from it).
+pub fn missing_page(id: &str, dark: bool) -> String {
     let esc = id
         .chars()
         .take(120)
@@ -634,11 +636,12 @@ pub fn missing_page(id: &str) -> String {
         })
         .collect::<String>();
     format!(
-        "<!doctype html><meta charset=utf-8><meta name=color-scheme content='light dark'><title>No such canvas</title>\
+        "<!doctype html><meta charset=utf-8><meta name=color-scheme content='only {scheme}'><title>No such canvas</title>\
          <body style='font:14px system-ui,sans-serif;margin:0;display:grid;place-items:center;height:100vh'>\
          <div style='max-width:420px;text-align:center'><h1 style='font-size:17px;font-weight:600'>There's no canvas here</h1>\
          <p style='opacity:.7'>“{esc}” isn't one of your canvases on {PLACE}. It may have been deleted, or it's shared on an account that isn't signed in.</p>\
-         <p style='opacity:.7'>Open the Canvas card at the foot of the sidebar to see your canvases.</p></div></body>"
+         <p style='opacity:.7'>Open the Canvas card at the foot of the sidebar to see your canvases.</p></div></body>",
+        scheme = if dark { "dark" } else { "light" },
     )
 }
 
@@ -919,7 +922,8 @@ mod tests {
 
     #[test]
     fn the_missing_page_escapes_the_id() {
-        let p = missing_page("<b>");
+        let p = missing_page("<b>", true);
+        assert!(p.contains("only dark"));
         assert!(p.contains("&lt;b&gt;"));
         assert!(!p.contains("<b>"));
         assert_eq!(address_label("Plan"), "Canvas · Plan");

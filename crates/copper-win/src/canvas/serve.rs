@@ -33,37 +33,77 @@ use std::sync::OnceLock;
 /// The Windows half's own handler, in the bridge's world.
 const WIN_HANDLER: &str = "canvasWin";
 
-/// Ahead of copper-shell-core's relay (on `window`, so before its
-/// listener on `document`): `share` goes to the native card instead;
-/// `chatRead`'s mention ids are copied over and the message goes on. Added
-/// after the relay, so where it runs the relay does too
-/// (`__copperWinRelay`, [`check_bridge`]).
+/// The page's relay, in the bridge's world, ahead of copper-shell-core's
+/// (on `window`, so before its listener on `document`, which it stops):
+///
+/// * `share` goes to the native card instead;
+/// * `chatRead`'s mention ids are copied to the Windows half, and the
+///   message goes on;
+/// * everything else goes on to the `canvas` handler — held until the
+///   host says the world's handlers really reach it (`__copperWinFlush`,
+///   [`check_bridge`]): WebView2 gives an isolated world its way out (a
+///   CDP binding) only in documents that existed when it was made, so a
+///   new document's messages would be dropped until it is made again.
+///
+/// Added after copper-shell-core's relay, so where it runs that one does
+/// too (`__copperWinRelay`).
 const WIN_RELAY: &str = r#"(() => {
   if (location.protocol !== 'copper:' || location.host !== 'canvas') return;
+  const handlers = () => (window.webkit && window.webkit.messageHandlers) || {};
+  const held = [];
+  let live = false;
+  const pass = (d) => { const h = handlers().canvas; if (h) h.postMessage(d); };
+  const win = (m) => { const h = handlers().canvasWin; if (h) h.postMessage(JSON.stringify(m)); };
   Object.defineProperty(globalThis, '__copperWinRelay', { value: true });
+  Object.defineProperty(globalThis, '__copperWinProbe', { value: (n) => { win({ type: 'bridge', n }); return held.length; } });
+  Object.defineProperty(globalThis, '__copperWinFlush', {
+    value: () => {
+      live = true;
+      const all = held.splice(0);
+      for (const d of all) pass(d);
+      return all.length;
+    },
+  });
   window.addEventListener('copper-canvas-post', (e) => {
     if (location.protocol !== 'copper:' || location.host !== 'canvas') return;
     const d = e.detail;
-    if (typeof d !== 'string' || d.length > 65536) return;
-    let m = null;
-    try { m = JSON.parse(d); } catch (_) { return; }
-    if (!m || typeof m !== 'object') return;
-    const win = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.canvasWin;
-    if (!win) return;
-    if (m.type === 'share') {
-      e.stopImmediatePropagation();
-      win.postMessage(JSON.stringify({ type: 'share' }));
-    } else if (m.type === 'chatRead' && Array.isArray(m.mentionIds) && m.mentionIds.length) {
-      win.postMessage(JSON.stringify({ type: 'chatRead', mentionIds: m.mentionIds.filter((x) => typeof x === 'string').slice(0, 200) }));
+    if (typeof d !== 'string' || d.length >= 64 * 1024 * 1024) return;
+    e.stopImmediatePropagation();
+    const kind = /^\{"type":"([A-Za-z]+)"/.exec(d.slice(0, 40));
+    const type = kind ? kind[1] : '';
+    if (type === 'share') {
+      win({ type: 'share' });
+      return;
     }
+    if (type === 'chatRead') {
+      try {
+        const m = JSON.parse(d);
+        if (m && Array.isArray(m.mentionIds) && m.mentionIds.length) {
+          win({ type: 'chatRead', mentionIds: m.mentionIds.filter((x) => typeof x === 'string').slice(0, 200) });
+        }
+      } catch (_) {}
+    }
+    if (live) pass(d); else if (held.length < 100000) held.push(d);
   }, true);
 })();"#;
 
 /// The page the first request gets: it gives way to the canvas at once.
-const AGAIN: &str = "<!doctype html><meta charset=utf-8><meta name=color-scheme content='light dark'><title>Canvas</title><script>setTimeout(() => location.replace(location.href), 150)</script>";
+/// (`copper-again` tells [`check_bridge`] it goes by itself.)
+const AGAIN: &str = "<meta name=copper-again><script>setTimeout(() => location.replace(location.href), 150)</script>";
 
 /// What a tab that showed a duplicate gets while it goes.
-const ELSEWHERE: &str = "<!doctype html><meta charset=utf-8><meta name=color-scheme content='light dark'><title>Canvas</title><body></body>";
+const ELSEWHERE: &str = "<body></body>";
+
+/// What a join link shows while it is taken.
+const OPENING: &str =
+    "<body style='font:15px system-ui;padding:3em;opacity:.7'>Opening the canvas…</body>";
+
+/// A passing page in the window's look (Copper's look may not be the
+/// system's, which is all `prefers-color-scheme` knows).
+fn passing(shell: &Shell, body: &str) -> Vec<u8> {
+    let scheme = if shell.is_dark() { "dark" } else { "light" };
+    format!("<!doctype html><meta charset=utf-8><meta name=color-scheme content='only {scheme}'><title>Canvas</title>{body}").into_bytes()
+}
 
 thread_local! {
     /// Pages whose bridge was bound before their document: they get the canvas.
@@ -72,6 +112,10 @@ thread_local! {
     static DRESSED: RefCell<HashSet<PageId>> = RefCell::new(HashSet::new());
     /// Reloads spent on a canvas page that came up without its bridge.
     static RETRIES: RefCell<HashMap<PageId, u8>> = RefCell::new(HashMap::new());
+    /// The last bridge probe each page answered ([`check_bridge`]).
+    static ANSWERED: RefCell<HashMap<PageId, u64>> = RefCell::new(HashMap::new());
+    /// Bridge probes sent so far (each one's number).
+    static PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Tabs whose web join link is being taken.
     static JOINING: RefCell<HashSet<TabId>> = RefCell::new(HashSet::new());
 }
@@ -132,14 +176,19 @@ fn serve(shell: &Shell, tab: &TabId, uri: &str) -> scheme::Answer {
         let s = shell.clone();
         let t = tab.clone();
         copper_win_rt::spawn_local(async move { join(&s, link, Some(t)).await });
-        let page = "<!doctype html><meta charset=utf-8><meta name=color-scheme content='light dark'><title>Canvas</title><body style='font:15px system-ui;padding:3em;opacity:.7'>Opening the canvas…</body>";
-        return Ok((page.as_bytes().to_vec(), "text/html"));
+        return Ok((passing(shell, OPENING), "text/html"));
     }
     let Some(id) = core::id_from_url(uri) else {
-        return Ok((copy::missing_page(uri).into_bytes(), "text/html"));
+        return Ok((
+            copy::missing_page(uri, shell.is_dark()).into_bytes(),
+            "text/html",
+        ));
     };
     if registry::entry(&id).is_none() {
-        return Ok((copy::missing_page(&id).into_bytes(), "text/html"));
+        return Ok((
+            copy::missing_page(&id, shell.is_dark()).into_bytes(),
+            "text/html",
+        ));
     }
     // The same canvas already in another tab: that one comes forward.
     let private = shell.browser().tab(tab).is_some_and(|t| t.private);
@@ -147,7 +196,7 @@ fn serve(shell: &Shell, tab: &TabId, uri: &str) -> scheme::Answer {
         let s = shell.clone();
         let t = tab.clone();
         copper_win_rt::spawn_local(async move { give_way(&s, &t, &other) });
-        return Ok((ELSEWHERE.as_bytes().to_vec(), "text/html"));
+        return Ok((passing(shell, ELSEWHERE), "text/html"));
     }
     let Some(slot) = shell.slot(tab) else {
         host::CanvasHost::attach(shell, tab, &id);
@@ -158,7 +207,7 @@ fn serve(shell: &Shell, tab: &TabId, uri: &str) -> scheme::Answer {
     dress(shell, &page);
     if PRIMED.with(|p| p.borrow_mut().insert(page.page_id())) {
         // Bound just now: the scripts are there from the next document.
-        return Ok((AGAIN.as_bytes().to_vec(), "text/html"));
+        return Ok((passing(shell, AGAIN), "text/html"));
     }
     Ok((page_html().to_vec(), "text/html"))
 }
@@ -211,9 +260,6 @@ fn dress(shell: &Shell, page: &copper_engine_webview2::WebView2Page) {
         while let Some(ev) = std::future::poll_fn(|cx| events.poll_recv(cx)).await {
             let Some(shell) = weak.upgrade() else { break };
             match ev {
-                PageEvent::ScriptMessage { name, body } if name != WIN_HANDLER => {
-                    tracing::info!(target: "copper::canvas", "DIAG msg {name} {}", body.to_string().chars().take(60).collect::<String>()); // DIAG
-                }
                 PageEvent::ScriptMessage { name, body } if name == WIN_HANDLER => {
                     let body = match body {
                         Value::String(s) => serde_json::from_str(&s).unwrap_or(Value::Null),
@@ -233,6 +279,7 @@ fn dress(shell: &Shell, page: &copper_engine_webview2::WebView2Page) {
         DRESSED.with(|d| d.borrow_mut().remove(&mine));
         PRIMED.with(|p| p.borrow_mut().remove(&mine));
         RETRIES.with(|r| r.borrow_mut().remove(&mine));
+        ANSWERED.with(|a| a.borrow_mut().remove(&mine));
     });
 }
 
@@ -256,23 +303,21 @@ async fn check_bridge(shell: &Shell, id: PageId) {
         return;
     };
     let world = World::isolated(host::HOST_WORLD);
-    let live = matches!(
-        page.eval("globalThis.__copperWinRelay === true", &world)
-            .await,
-        Ok(Value::Bool(true))
-    );
+    let state = page
+        .eval(
+            "globalThis.__copperWinRelay === true ? 'live' : document.querySelector('meta[name=copper-again]') ? 'again' : 'bare'",
+            &world,
+        )
+        .await;
+    let state = state.ok();
+    if state.as_ref().and_then(Value::as_str) == Some("again") {
+        // The page that gives way to the canvas: it goes by itself.
+        return;
+    }
+    let live = state.as_ref().and_then(Value::as_str) == Some("live");
     if live {
         RETRIES.with(|r| r.borrow_mut().remove(&id));
-        // DIAG
-        let main = World::Page;
-        let iso_setup = "globalThis.__diagSeen = []; window.addEventListener('copper-canvas-post', (e) => { globalThis.__diagSeen.push(typeof e.detail + ':' + String(e.detail).slice(0, 40)); }, true); JSON.stringify({wk: typeof window.webkit, mh: window.webkit ? Object.keys(window.webkit.messageHandlers || {}) : null, bind: Object.getOwnPropertyNames(globalThis).filter((n) => n.startsWith('__copperPost'))})";
-        tracing::info!(target: "copper::canvas", "DIAG iso {:?}", page.eval(iso_setup, &world).await);
-        let main_probe = "JSON.stringify({host: typeof window.__copperHost, wk: typeof window.webkit, own: window.webkit ? Object.getOwnPropertyNames(window.webkit) : null, canvas: window.webkit && window.webkit.messageHandlers ? typeof window.webkit.messageHandlers.canvas : null})";
-        tracing::info!(target: "copper::canvas", "DIAG main {:?}", page.eval(main_probe, &main).await);
-        let _ = page.eval("document.dispatchEvent(new CustomEvent('copper-canvas-post', { detail: JSON.stringify({type: 'diag'}) })); 1", &main).await;
-        tracing::info!(target: "copper::canvas", "DIAG seen {:?}", page.eval("JSON.stringify(globalThis.__diagSeen)", &world).await);
-        let _ = page.eval("window.__copperHost && window.__copperHost.onMessage({type:'diag2'}, JSON.stringify({type:'diag2'})); 1", &main).await;
-        tracing::info!(target: "copper::canvas", "DIAG seen2 {:?}", page.eval("JSON.stringify(globalThis.__diagSeen)", &world).await);
+        open_way(shell, id).await;
         return;
     }
     let tries = RETRIES.with(|r| {
@@ -292,6 +337,60 @@ async fn check_bridge(shell: &Shell, id: PageId) {
     }
 }
 
+/// Make sure the bridge's world reaches the host from this document, then
+/// let the messages the page has said so far go.
+///
+/// The engine adds an isolated world's way out (`Runtime.addBinding`)
+/// once, and Chromium puts it only in the documents there at that moment
+/// (without the Runtime domain on, which Copper keeps off), so a canvas
+/// document made after the bridge was bound can't post. Probe: the
+/// Windows handler answers through the same binding. No answer: take the
+/// world's handlers away and back, which makes the engine add the binding
+/// again — into this document now — and probe again.
+async fn open_way(shell: &Shell, id: PageId) {
+    use std::time::Duration;
+    let world = World::isolated(host::HOST_WORLD);
+    let started = std::time::Instant::now();
+    for round in 0..4u64 {
+        let Some(page) = page_by_id(shell, id) else {
+            return;
+        };
+        if round > 0 {
+            page.remove_message_handler(WIN_HANDLER, &world);
+            page.remove_message_handler(host::HANDLER, &world);
+            copper_win_rt::sleep(Duration::from_millis(60 * round)).await;
+            page.add_message_handler(host::HANDLER, &world);
+            page.add_message_handler(WIN_HANDLER, &world);
+            copper_win_rt::sleep(Duration::from_millis(60 * round)).await;
+        }
+        let probe = PROBES.with(|n| {
+            n.set(n.get() + 1);
+            n.get()
+        });
+        let call = format!("globalThis.__copperWinProbe && globalThis.__copperWinProbe({probe})");
+        if page.eval(&call, &world).await.is_err() {
+            return;
+        }
+        // A live binding answers within a few milliseconds.
+        let tries = if round == 0 { 4 } else { 12 };
+        for _ in 0..tries {
+            if ANSWERED.with(|a| a.borrow().get(&id) == Some(&probe)) {
+                let sent = page.eval("globalThis.__copperWinFlush()", &world).await;
+                tracing::debug!(
+                    target: "copper::canvas",
+                    rebound = round,
+                    held = ?sent.ok(),
+                    ms = started.elapsed().as_millis() as u64,
+                    "canvas bridge open"
+                );
+                return;
+            }
+            copper_win_rt::sleep(Duration::from_millis(25)).await;
+        }
+    }
+    tracing::warn!(target: "copper::canvas", "canvas bridge never reached the host");
+}
+
 /// The canvas a page shows, by its tab.
 fn canvas_of(shell: &Shell, page: PageId) -> Option<String> {
     let tab = shell
@@ -305,6 +404,11 @@ fn canvas_of(shell: &Shell, page: PageId) -> Option<String> {
 
 fn message(shell: &Shell, page: PageId, body: &Value) {
     match body["type"].as_str() {
+        Some("bridge") => {
+            if let Some(n) = body["n"].as_u64() {
+                ANSWERED.with(|a| a.borrow_mut().insert(page, n));
+            }
+        }
         Some("share") => {
             if let Some(id) = canvas_of(shell, page) {
                 super::share::show(shell, &id);
