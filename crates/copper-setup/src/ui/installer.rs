@@ -212,6 +212,9 @@ impl Controller for Installer {
             }
             Msg::Finished(Ok(exe)) => {
                 self.exit = exit::SUCCESS;
+                if !self.options.launch || self.close_when_done {
+                    crate::prewarm(&exe);
+                }
                 if self.close_when_done {
                     ctx.close();
                     return;

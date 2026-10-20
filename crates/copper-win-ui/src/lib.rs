@@ -8,7 +8,7 @@
 //!
 //! * Platform-free and tested anywhere: [`geom`], [`spring`], [`tokens`],
 //!   [`theme`], [`node`], [`tree`], [`layout`], [`scroll`], [`edit`],
-//!   [`input`], [`event`], [`menu`], [`chrome`], [`stats`]. The retained tree, flex layout, hit
+//!   [`input`], [`event`], [`menu`], [`chrome`], [`stats`], [`pace`]. The retained tree, flex layout, hit
 //!   testing, focus, the text-editing model and all the motion maths live
 //!   here.
 //! * Windows-only, in [`win`]: the window with its custom frame and Mica,
@@ -28,6 +28,7 @@ pub mod input;
 pub mod layout;
 pub mod menu;
 pub mod node;
+pub mod pace;
 pub mod scroll;
 pub mod spring;
 pub mod stats;

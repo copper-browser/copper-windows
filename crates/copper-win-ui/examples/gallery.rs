@@ -3,12 +3,16 @@
 //! tooltips, a long scrolling list, a WebSlot standing in for the page, and
 //! the light/dark switch.
 //!
-//! It logs the time to first frame and frame timings to stdout and to
-//! `%TEMP%\copper-gallery.log`.
+//! It logs the time to first frame and frame timings to
+//! `%TEMP%\copper-gallery.log` (and to stdout when started with one). It is
+//! a windowed program, as Copper is: a console program waits for its
+//! console (Windows Terminal, ~300 ms) before `main` runs.
 //!
 //! Keys: Ctrl+K palette · Ctrl+L address · Ctrl+T new tab · Ctrl+W close
 //! tab · Ctrl+Shift+L light/dark/system · Shift+F10 or the menu key for the
 //! context menu · Tab / Shift+Tab focus.
+
+#![windows_subsystem = "windows"]
 
 fn main() {
     #[cfg(windows)]
@@ -1078,17 +1082,28 @@ mod app {
                         ui.has_backdrop(),
                         ui.scale()
                     ));
+                    self.log
+                        .borrow_mut()
+                        .line(&format!("window: {}", ui.startup_phases().line()));
                 }
                 Event::Frame {
                     cpu_ms,
                     layers,
                     interval_ms,
+                    input_to_screen_ms,
                 } => {
                     self.frames += 1;
-                    if self.frames <= 3 {
+                    if let Some(ms) = input_to_screen_ms {
+                        self.log
+                            .borrow_mut()
+                            .line(&format!("input to screen {ms:.1} ms (cpu {cpu_ms:.2} ms)"));
+                    }
+                    if self.frames <= 6 || (self.frames <= 120 && layers >= 5) {
                         self.log.borrow_mut().line(&format!(
-                            "frame {}: cpu {cpu_ms:.2} ms, {layers} layers redrawn, {interval_ms:.1} ms since the last",
-                            self.frames
+                            "frame {}: cpu {cpu_ms:.2} ms, {layers} layers redrawn, {interval_ms:.1} ms since the last, \
+                             at {:.1} ms from process start",
+                            self.frames,
+                            copper_win_ui::win::since_process_ms()
                         ));
                     }
                     if self.frames.is_multiple_of(240) {
@@ -1268,7 +1283,12 @@ mod app {
     }
 
     pub fn main() {
+        // The window's devices and fonts start now, while the rest starts.
+        copper_win_ui::win::prewarm();
+        let entered = copper_win_ui::win::since_process_ms();
         let log = Rc::new(RefCell::new(Log::open()));
+        log.borrow_mut()
+            .line(&format!("main entered {entered:.1} ms from process start"));
         if let Err(e) = copper_win_rt::init() {
             log.borrow_mut().line(&format!("runtime: {e}"));
             return;
