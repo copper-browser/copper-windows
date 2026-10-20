@@ -86,9 +86,88 @@ impl FrameStats {
     }
 }
 
+/// The named steps of a one-off sequence (making the window, its first
+/// frame), each with the milliseconds it took — so a slow start says where
+/// its time went.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Phases {
+    list: Vec<(&'static str, f32)>,
+}
+
+impl Phases {
+    pub fn new() -> Phases {
+        Phases::default()
+    }
+
+    /// Step `name` took `ms`.
+    pub fn push(&mut self, name: &'static str, ms: f32) {
+        self.list.push((name, ms));
+    }
+
+    pub fn list(&self) -> &[(&'static str, f32)] {
+        &self.list
+    }
+
+    /// The steps' total.
+    pub fn total(&self) -> f32 {
+        self.list.iter().map(|(_, ms)| ms).sum()
+    }
+
+    /// One line for a log: `create 4.1 · gfx 12.0 · …`.
+    pub fn line(&self) -> String {
+        self.list
+            .iter()
+            .map(|(n, ms)| format!("{n} {ms:.1}"))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+}
+
+/// A stopwatch that writes each step into [`Phases`] while it is on (off,
+/// it costs a branch).
+pub struct Lap {
+    at: std::time::Instant,
+    on: bool,
+}
+
+impl Lap {
+    pub fn new(on: bool) -> Lap {
+        Lap {
+            at: std::time::Instant::now(),
+            on,
+        }
+    }
+
+    /// The step since the last mark was `name`.
+    pub fn mark(&mut self, phases: &mut Phases, name: &'static str) {
+        if self.on {
+            let now = std::time::Instant::now();
+            phases.push(name, now.duration_since(self.at).as_secs_f32() * 1000.0);
+            self.at = now;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phases_list_in_order_and_sum() {
+        let mut p = Phases::new();
+        assert_eq!(p.line(), "");
+        p.push("create", 4.04);
+        p.push("gfx", 12.0);
+        assert_eq!(p.line(), "create 4.0 · gfx 12.0");
+        assert_eq!(p.list().len(), 2);
+        assert!((p.total() - 16.04).abs() < 1e-4);
+        let mut lap = Lap::new(false);
+        lap.mark(&mut p, "off");
+        assert_eq!(p.list().len(), 2, "an off stopwatch writes nothing");
+        let mut lap = Lap::new(true);
+        lap.mark(&mut p, "on");
+        assert_eq!(p.list().last().map(|s| s.0), Some("on"));
+    }
 
     #[test]
     fn percentiles() {

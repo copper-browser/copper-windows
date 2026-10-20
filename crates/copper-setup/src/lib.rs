@@ -119,10 +119,13 @@ fn silent_install(options: &InstallOptions) -> i32 {
     let cancel = std::sync::atomic::AtomicBool::new(false);
     match install::run(options, install::plan(), &cancel, |_| {}) {
         Ok(exe) => {
-            if options.launch
-                && let Err(e) = sys::process::launch(&exe)
-            {
-                log::line(&format!("couldn't open Copper: {e:#}"));
+            if options.launch {
+                if let Err(e) = sys::process::launch(&exe) {
+                    log::line(&format!("couldn't open Copper: {e:#}"));
+                }
+            } else {
+                // Started, never waited for: `/S` returns now.
+                prewarm(&exe);
             }
             exit::SUCCESS
         }
@@ -130,6 +133,17 @@ fn silent_install(options: &InstallOptions) -> i32 {
             log::line(&format!("silent install failed: {e}"));
             exit::FAILED
         }
+    }
+}
+
+/// Warm Copper up after an install that doesn't open it at once (an
+/// install that does is its own warm-up, and a warm-up racing it would
+/// only compete for the disk): `copper --prewarm`, detached.
+#[cfg(windows)]
+pub(crate) fn prewarm(exe: &std::path::Path) {
+    match sys::process::prewarm(exe) {
+        Ok(()) => log::line("prewarm started"),
+        Err(e) => log::line(&format!("couldn't start the prewarm: {e:#}")),
     }
 }
 

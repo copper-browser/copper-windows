@@ -25,8 +25,20 @@ use std::time::Duration;
 /// shortcuts).
 const APP_ID: &str = "Copper.Browser";
 
+/// The installer's warm-up: `copper --prewarm` ([`prewarm`]).
+pub const PREWARM: &str = "--prewarm";
+
+/// How long the warm-up keeps WebView2's browser process up. Its first
+/// run in a new user data folder goes on well past the first blank page;
+/// cut short (gone ~0.7 s in, once the page is loaded) the first start
+/// still took ~6 s to paint, kept up 30 s ~1 s (measured on the lab PC).
+const PREWARM_STAY: Duration = Duration::from_secs(30);
+
 /// Run the browser; the process's exit code.
 pub fn run(args: Vec<String>) -> i32 {
+    if args.iter().any(|a| a == PREWARM) {
+        return prewarm();
+    }
     set_app_id();
     let launch = args::split(&args);
     let opts = match Options::parse(launch.options.clone()) {
@@ -51,9 +63,14 @@ pub fn run(args: Vec<String>) -> i32 {
             Role::First(g) => Some(g),
         }
     };
+    perf::step("claimed");
+    // This start opens the window: the GPU device and the font system
+    // are made on their own thread meanwhile.
+    copper_win_ui::win::prewarm();
     let logs = logs_dir();
     init_logging(&logs);
     log_panics();
+    perf::step("log open");
     if let Err(e) = copper_win_rt::init() {
         sys::dialog::error("Copper could not start", &e.to_string());
         return 1;
@@ -62,6 +79,7 @@ pub fn run(args: Vec<String>) -> i32 {
         sys::dialog::webview2_missing("No WebView2 Runtime is installed.");
         return 1;
     }
+    perf::step("webview2 found");
     let shell = build(opts.clone());
     perf::mark(perf::SESSION);
     copper_shell_core::control::install(&shell);
@@ -87,6 +105,95 @@ pub fn run(args: Vec<String>) -> i32 {
     end(code)
 }
 
+/// `copper --prewarm`, which the installer starts, detached, once Copper
+/// is in place: make the WebView2 environment and the main profile's first
+/// webview exactly as the browser will (the same folders, languages and
+/// `copper://` scheme, so a browser started meanwhile shares its browser
+/// process), load a blank page, keep the browser process up for
+/// [`PREWARM_STAY`] and leave — no window, no single-instance claim, no
+/// `copper.log` (its own goes to `logs\prewarm.log`). The user's first
+/// start then finds the user data folder made and set up, and the
+/// runtime's files in memory.
+fn prewarm() -> i32 {
+    use copper_engine::{Engine, PageOptions, PageView, ProfileId};
+    use copper_shell_core::Platform;
+    init_prewarm_log(&logs_dir());
+    if copper_win_rt::init().is_err() || WebView2Engine::runtime_version().is_none() {
+        // Nothing to warm: the browser explains a missing runtime itself.
+        return 0;
+    }
+    let store = copper_core::store::Store::from_env();
+    let loaded = copper_shell_core::session::load(&store);
+    let engine = engine(copper_shell_core::session::engine_paths(
+        &store,
+        &loaded.settings,
+    ));
+    engine.set_preferred_languages(&crate::platform::Win::preferred_languages());
+    let scheme = engine.register_scheme(
+        "copper",
+        Box::new(|_| Err("not served while warming up".into())),
+    );
+    let started = std::time::Instant::now();
+    let page = ProfileId::new("default")
+        .ok()
+        .and_then(|id| engine.profile(&id, false).ok())
+        .map(|profile| engine.new_page(&profile, PageOptions::default()));
+    let Some(page) = page else {
+        return 1;
+    };
+    let mut events = page.events();
+    page.load("about:blank");
+    copper_win_rt::spawn_local(async move {
+        use copper_engine::{LoadState, PageEvent};
+        let mut ready_ms = None;
+        let outcome = loop {
+            copper_win_rt::sleep(Duration::from_millis(50)).await;
+            let mut end = None;
+            while let Some(e) = events.try_next() {
+                match e {
+                    PageEvent::Load(LoadState::Finished { .. }) => end = Some("ready".to_owned()),
+                    PageEvent::Load(LoadState::Failed { error, .. }) => {
+                        end = Some(format!("failed ({error})"));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(end) = end
+                && ready_ms.is_none()
+            {
+                ready_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+                tracing::info!(
+                    target: "copper::prewarm",
+                    "page {end} in {:.0} ms (scheme: {})",
+                    ready_ms.unwrap_or_default(),
+                    if scheme.is_ok() { "same" } else { "missing" },
+                );
+            }
+            if started.elapsed() > PREWARM_STAY {
+                break match ready_ms {
+                    Some(_) => "done".to_owned(),
+                    None => format!(
+                        "done, the page never loaded (url {:?}, loading {}, progress {:.2})",
+                        page.url(),
+                        page.is_loading(),
+                        page.progress()
+                    ),
+                };
+            }
+        };
+        tracing::info!(
+            target: "copper::prewarm",
+            "prewarm {outcome} after {:.0} ms",
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
+        drop(page);
+        copper_win_rt::quit(0);
+    });
+    let code = copper_win_rt::run();
+    drop(engine);
+    end(code)
+}
+
 /// End the process now, without running thread-local destructors: the
 /// loop's leftover tasks (a pending `sleep`) would otherwise be dropped
 /// after the loop's timer table and abort the exit (copper-win-rt).
@@ -103,6 +210,7 @@ fn end(code: i32) -> i32 {
 /// The shell, its window and everything it runs, started.
 fn build(opts: Options) -> Shell {
     let shell = Shell::new(opts, engine, |_| {
+        perf::step("engine made");
         let chrome = match Chrome::new("Copper") {
             Ok(c) => c,
             Err(e) => {
@@ -110,11 +218,14 @@ fn build(opts: Options) -> Shell {
                 std::process::exit(1);
             }
         };
+        perf::step("window built");
         WinView::new(chrome)
     });
     shell.view().chrome().attach(&shell);
     crate::actions::register(&shell);
+    perf::step("actions");
     crate::features::register(&shell);
+    perf::step("features");
     WinView::listen_downloads(&shell);
     shell.start();
     shell
@@ -123,6 +234,7 @@ fn build(opts: Options) -> Shell {
 /// The engine, in this world's folders. A runtime that cannot start at all
 /// is reported and ends the run (the shell cannot do without it).
 fn engine(paths: copper_engine::EnginePaths) -> WebView2Engine {
+    perf::step("session loaded");
     let user_data_dir = paths.data_root.parent().map(|root| root.join("WebView2"));
     let config = EngineConfig {
         paths: Some(paths),
@@ -143,11 +255,14 @@ fn engine(paths: copper_engine::EnginePaths) -> WebView2Engine {
 /// `ShellView::present`: put the window where it was last time and show
 /// it.
 pub fn show_window(_shell: &Shell, chrome: &Rc<Chrome>) {
+    perf::step("shell started");
     let hwnd = chrome.window().hwnd();
     let maximized = sys::window::load(&place_file())
         .map(|p| sys::window::restore(hwnd, p))
         .unwrap_or(false);
     chrome.window().show_as(maximized);
+    perf::step("shown");
+    tracing::debug!(target: "copper::perf", "start-up: {}", perf::steps_line());
 }
 
 /// What a later start handed over: open its addresses, or just come
@@ -227,6 +342,21 @@ fn init_logging(logs: &std::path::Path) {
         Ok(f) => builder.with_writer(std::sync::Mutex::new(f)).try_init(),
         Err(_) => builder.with_writer(std::io::stderr).try_init(),
     };
+}
+
+/// The warm-up's log, `logs\prewarm.log` (the last warm-up's; the
+/// browser's own `copper.log` is left alone).
+fn init_prewarm_log(logs: &std::path::Path) {
+    let _ = std::fs::create_dir_all(logs);
+    if let Ok(f) = std::fs::File::create(logs.join("prewarm.log")) {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(
+                "warn,copper::prewarm=info,copper_engine_webview2=info",
+            ))
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(f))
+            .try_init();
+    }
 }
 
 /// Write a panic to the log (where it is found after the fact: the

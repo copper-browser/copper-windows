@@ -85,5 +85,10 @@ pub enum Event {
         layers: u32,
         /// Time since the previous frame.
         interval_ms: f32,
+        /// From the key, click or wheel turn this frame answers to the
+        /// composition that picks it up (the first vertical blank after
+        /// the commit, from the compositor's timing); `None` if no input
+        /// led to it.
+        input_to_screen_ms: Option<f32>,
     },
 }

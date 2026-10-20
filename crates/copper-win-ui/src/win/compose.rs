@@ -64,6 +64,8 @@ struct Layer {
     /// driving the angle.
     spin: Option<(IDCompositionRotateTransform, IDCompositionAnimation)>,
     surface: Option<IDCompositionVirtualSurface>,
+    /// The [`Gfx::generation`] `surface` was made in.
+    surface_generation: u32,
     size: (u32, u32),
     bleed_px: u32,
     parent: Option<NodeId>,
@@ -80,7 +82,11 @@ pub struct Scene {
     target: Option<IDCompositionTarget>,
     layers: HashMap<NodeId, Layer>,
     structure_rev: u32,
+    /// The composition device's generation the visuals were made in.
     generation: u32,
+    /// The rendering device's generation the layers were last all drawn
+    /// for.
+    surface_generation: u32,
     scale: f32,
     frame: u64,
     scratch: Vec<NodeId>,
@@ -103,6 +109,7 @@ impl Scene {
             layers: HashMap::new(),
             structure_rev: u32::MAX,
             generation: u32::MAX,
+            surface_generation: u32::MAX,
             scale: 1.0,
             frame: 0,
             scratch: Vec::new(),
@@ -141,11 +148,19 @@ impl Scene {
         tree: &Tree,
         new_slots: &mut Vec<NodeId>,
     ) -> Result<()> {
-        if self.generation != gfx.generation {
+        if self.generation != gfx.comp_generation {
             self.layers.clear();
             self.target = None;
-            self.generation = gfx.generation;
+            self.generation = gfx.comp_generation;
             self.structure_rev = u32::MAX;
+        }
+        if self.surface_generation != gfx.generation {
+            // Another rendering device: every layer is drawn again (its
+            // old surface shows until the new one replaces it).
+            self.surface_generation = gfx.generation;
+            for l in self.layers.values_mut() {
+                l.fresh = true;
+            }
         }
         if self.target.is_none() {
             // SAFETY: a target for our own window, below any child windows.
@@ -206,6 +221,7 @@ impl Scene {
                     slot,
                     spin,
                     surface: None,
+                    surface_generation: gfx.generation,
                     size: (0, 0),
                     bleed_px: 0,
                     parent,
@@ -391,6 +407,11 @@ impl Scene {
             l.bleed_px = bleed_px;
             l.applied = None;
         }
+        if l.surface_generation != gfx.generation {
+            // Made on the previous rendering device: a new one replaces it
+            // (in the visual, at this frame's commit).
+            l.surface = None;
+        }
         match &l.surface {
             Some(sf) if l.size != (w, h) => {
                 // SAFETY: resizing our own surface.
@@ -401,7 +422,7 @@ impl Scene {
             None => {
                 // SAFETY: surface creation on the live device.
                 let sf = unsafe {
-                    gfx.dcomp.CreateVirtualSurface(
+                    gfx.surfaces.CreateVirtualSurface(
                         w,
                         h,
                         DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -411,6 +432,7 @@ impl Scene {
                 // SAFETY: as above.
                 unsafe { l.visual.SetContent(&sf)? };
                 l.surface = Some(sf);
+                l.surface_generation = gfx.generation;
                 l.size = (w, h);
             }
         }

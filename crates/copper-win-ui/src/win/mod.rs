@@ -26,7 +26,7 @@ mod window;
 pub use frame::Backdrop;
 pub use slot::{FocusReason, SlotHost, SlotMouse, SlotPointer, request_frame};
 pub use ui::Ui;
-pub use window::{Options, Window};
+pub use window::{Options, Window, prewarm, since_process_ms};
 
 /// Report a failure that the toolkit recovers from on its own.
 pub(crate) fn log(message: &str) {
