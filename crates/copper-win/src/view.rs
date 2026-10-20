@@ -78,8 +78,9 @@ impl WinView {
     /// it (Escape from the page is the chrome's while it does).
     pub fn overlay_changed(&self) {
         let c = self.chrome.clone();
+        let panel = self.panels.showing().is_some();
         self.chrome.edit(move |_, st| {
-            c.set_overlay(st.card.is_open() || st.sheet.is_open());
+            c.set_overlay(st.card.is_open() || st.sheet.is_open() || panel);
         });
     }
 
@@ -220,6 +221,7 @@ impl ShellView<Win> for WinView {
         self.chrome.watch("tab switch");
         let backstage = shell.engine().backstage().clone();
         let chrome = self.chrome.clone();
+        let panel = self.panels.showing().is_some();
         self.chrome.edit(move |ui, st| {
             st.stage.show(ui, tab.as_ref(), &backstage);
             match &tab {
@@ -233,7 +235,7 @@ impl ShellView<Win> for WinView {
                 }
                 None => {}
             }
-            chrome.set_overlay(st.card.is_open() || st.sheet.is_open());
+            chrome.set_overlay(st.card.is_open() || st.sheet.is_open() || panel);
             if let Some(t) = &tab
                 && !st.card.is_open()
                 && let Some(slot) = st.stage.slot_of(t)

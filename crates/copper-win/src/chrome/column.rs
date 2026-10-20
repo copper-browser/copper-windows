@@ -430,7 +430,7 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
         (
             glyph::BOOKMARKS,
             "Bookmarks",
-            "show-bookmarks",
+            "bookmarks-door",
             Hit::Bookmarks,
         ),
         (glyph::CANVAS, "New canvas", "new-canvas", Hit::Canvas),

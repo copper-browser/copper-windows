@@ -21,6 +21,7 @@ copper-cloud.workspace = true
 copper-creds.workspace = true
 copper-mcp.workspace = true
 copper-shell-core.workspace = true
+copper-import.workspace = true
 copper-setup = { path = "../copper-setup" }
 # The toolkit's platform-free half (keys, layout, the node tree) builds and
 # tests everywhere; its window lives behind `cfg(windows)`.
@@ -49,6 +50,7 @@ windows = { workspace = true, features = [
     "Win32_Networking_NetworkListManager",
     "Win32_Security",
     "Win32_Security_Authentication_Identity",
+    "Win32_Storage_FileSystem",
     "Win32_Storage_Xps",
     "Win32_System_Com",
     "Win32_System_Console",

@@ -49,7 +49,6 @@ mod frame;
 #[cfg(windows)]
 mod instance;
 mod palette;
-#[cfg(windows)]
 mod panels;
 mod picture;
 #[cfg(windows)]

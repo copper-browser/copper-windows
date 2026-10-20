@@ -169,7 +169,7 @@ fn column_click(chrome: &Rc<Chrome>, shell: &Shell, h: ColumnHit) {
             crate::commands::run(shell, "settings");
         }
         ColumnHit::Bookmarks => {
-            crate::commands::run(shell, "show-bookmarks");
+            crate::commands::run(shell, "bookmarks-door");
         }
         ColumnHit::Canvas => {
             crate::commands::run(shell, "new-canvas");
@@ -216,6 +216,7 @@ fn context_menu(chrome: &Rc<Chrome>, shell: &Shell, target: Option<NodeId>, at: 
         return;
     }
     let Some(tab) = target.and_then(|t| tab_at(chrome, t)) else {
+        crate::panels::context_menu(shell, target, at);
         return;
     };
     let facts = {
@@ -341,7 +342,8 @@ fn key_event(chrome: &Rc<Chrome>, shell: &Shell, key: Key, mods: Mods, focused: 
             _ => {}
         }
     }
-    if let Some(id) = keys::command(Chord::new(key, mods)) {
+    let chord = Chord::new(key, mods);
+    if let Some(id) = crate::panels::hidden::takes(shell, chord).or_else(|| keys::command(chord)) {
         crate::commands::run(shell, id);
     }
 }
@@ -365,7 +367,9 @@ pub fn hook_page(shell: &Shell, tab: &TabId, page: &WebView2Page) {
                 alt: k.alt,
             },
         );
-        let Some(id) = keys::page_takes(chord, shell.view().chrome().has_overlay()) else {
+        let Some(id) = crate::panels::hidden::takes(&shell, chord)
+            .or_else(|| keys::page_takes(chord, shell.view().chrome().has_overlay()))
+        else {
             return false;
         };
         // Run on the loop's next turn: never inside WebView2's callback.
