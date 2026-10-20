@@ -3,13 +3,14 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::rc::Weak;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetActiveWindow, GetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{GetCaretBlinkTime, IsChild, KillTimer, SetTimer};
 
-use super::clock::Clock;
+use super::clock::{self, Clock};
 use super::compose::Scene;
 use super::frame::{self, Backdrop};
 use super::gfx::{self, Gfx};
@@ -26,10 +27,15 @@ use crate::geom::{Point, Rect, Size};
 use crate::layout::Abs;
 use crate::menu::Menu;
 use crate::node::Node;
-use crate::stats::{FrameStats, Summary};
+use crate::pace;
+use crate::stats::{FrameStats, Lap, Phases, Summary};
 use crate::theme::{Appearance, Theme};
 use crate::tokens::Theme as SpaceTheme;
 use crate::tree::{NodeId, Tree};
+
+/// How long an input may wait for its frame and still count as its cause
+/// (and as urgent), in milliseconds.
+const INPUT_WINDOW_MS: f64 = 250.0;
 
 /// Timer: the caret blinks.
 pub(super) const TIMER_CARET: usize = 1;
@@ -137,6 +143,23 @@ pub struct Ui {
     stats: FrameStats,
     last_step: Option<Instant>,
     last_frame: Option<Instant>,
+    /// When the last frame with changes was committed (QPC ticks): one
+    /// frame is drawn at once per refresh interval ([`pace`]).
+    last_commit: Option<i64>,
+    /// The earliest input not yet answered by a frame (QPC ticks).
+    pub(super) input_at: Option<i64>,
+    /// That input includes a key press or a click (drawn at once).
+    input_urgent: bool,
+    /// QPC ticks per millisecond.
+    qpc_per_ms: f64,
+    /// Where the window's making and its first frame spent their time.
+    pub(super) phases: Phases,
+    /// The hardware device being made while the window draws on WARP
+    /// (filled, then [`super::clock::WM_GFX_READY`] posted).
+    pub(super) hardware: Option<Arc<Mutex<Option<gfx::D3d>>>>,
+    /// Dropped once the window is shown: the hardware device is made
+    /// then (not while the window is still being shown).
+    pub(super) hardware_go: Option<std::sync::mpsc::Sender<()>>,
     pub(super) created: Instant,
     pub(super) shown: bool,
     /// The child window (a page's) that had the keyboard when the open
@@ -153,6 +176,8 @@ pub(super) struct Parts {
     pub appearance: Appearance,
     pub backdrop: Backdrop,
     pub created: Instant,
+    /// The window's making so far.
+    pub phases: Phases,
 }
 
 impl Ui {
@@ -215,6 +240,13 @@ impl Ui {
             stats: FrameStats::new(),
             last_step: None,
             last_frame: None,
+            last_commit: None,
+            input_at: None,
+            input_urgent: false,
+            qpc_per_ms: clock::qpc_frequency() as f64 / 1000.0,
+            phases: p.phases,
+            hardware: None,
+            hardware_go: None,
             created: p.created,
             shown: false,
             menu_from: None,
@@ -266,6 +298,12 @@ impl Ui {
     /// Frame timings of the recent frames (resets the slow-frame count).
     pub fn stats(&mut self) -> Summary {
         self.stats.summary()
+    }
+
+    /// Where making the window and drawing its first frame spent their
+    /// time, step by step (complete once [`Event::FirstFrame`] is sent).
+    pub fn startup_phases(&self) -> &Phases {
+        &self.phases
     }
 
     // — what the app changes —
@@ -737,6 +775,62 @@ impl Ui {
             || self.tip.as_ref().is_some_and(|t| t.needs_frame())
     }
 
+    /// Something changed: draw it. On a window that committed nothing
+    /// since the last vertical blank the frame is posted at once — drawn
+    /// as soon as the work queued before it is done, so it shows at the
+    /// next composition; otherwise the clock draws it after that blank.
+    pub(super) fn want_frame(&mut self) {
+        let now = clock::qpc();
+        let period = (self.qpc_per_ms * 1000.0 / 60.0) as i64;
+        let urgent = self.input_urgent
+            && self
+                .input_at
+                .is_some_and(|t| ((now - t) as f64 / self.qpc_per_ms) < INPUT_WINDOW_MS);
+        if pace::draw_now(urgent, self.last_commit, clock::vsync(), now, period)
+            && self.clock.post_now()
+        {
+            return;
+        }
+        self.clock.request();
+    }
+
+    /// Note an input the next frame answers: its latency to the screen is
+    /// reported with that frame. `urgent` for a key press or a click,
+    /// which is drawn at once even mid-animation; the wheel is not (a
+    /// touchpad sends far more turns than the display shows frames).
+    pub(super) fn note_input(&mut self, urgent: bool) {
+        if self.input_at.is_none() {
+            self.input_at = Some(clock::qpc());
+        }
+        self.input_urgent |= urgent;
+    }
+
+    /// The hardware device is ready: move off WARP. The visual tree, its
+    /// targets and hosted pages stay; every surface is redrawn on the new
+    /// device and swapped in at one commit.
+    pub(super) fn hardware_ready(&mut self, took_ms: f32) {
+        let Some(d3d) = self
+            .hardware
+            .take()
+            .and_then(|slot| slot.lock().ok().and_then(|mut s| s.take()))
+        else {
+            return;
+        };
+        if gfx::ON_WARP.load(std::sync::atomic::Ordering::Relaxed) {
+            // No hardware device after all: stay on the WARP one we have.
+            return;
+        }
+        match self.gfx.rebind(d3d) {
+            Ok(g) => {
+                self.gfx = g;
+                self.phases.push("(hardware device, after)", took_ms);
+                self.repaint_all();
+                self.want_frame();
+            }
+            Err(e) => crate::win::log(&format!("copper-win-ui: staying on WARP: {e}")),
+        }
+    }
+
     /// Step animations, lay out, compose, draw what changed, commit.
     pub(super) fn render(&mut self) {
         if let Err(e) = self.try_render() {
@@ -749,6 +843,9 @@ impl Ui {
 
     fn try_render(&mut self) -> windows::core::Result<()> {
         let started = Instant::now();
+        let work = self.needs_frame();
+        // The first frame says where its time goes.
+        let mut lap = Lap::new(!self.shown_once());
         let dt = self
             .last_step
             .map_or(0.0, |t| started.duration_since(t).as_secs_f32().min(0.1));
@@ -760,6 +857,7 @@ impl Ui {
         if let Some(t) = &mut self.tip {
             t.step(dt);
         }
+        lap.mark(&mut self.phases, "frame: step");
 
         self.fonts.set_space(0);
         if self.tree.layout(
@@ -771,6 +869,7 @@ impl Ui {
             self.fonts.prune(&self.tree);
             self.uia.prune(&self.tree);
         }
+        lap.mark(&mut self.phases, "frame: layout");
         self.new_slots.clear();
         self.scene
             .sync_structure(&self.gfx, &self.tree, &mut self.new_slots)?;
@@ -783,10 +882,12 @@ impl Ui {
                 *told = Told::default();
             }
         }
+        lap.mark(&mut self.phases, "frame: visuals made");
         if self.tree.take_visuals_dirty() {
             self.scene.sync_visuals(&self.tree)?;
             self.tell_slots();
         }
+        lap.mark(&mut self.phases, "frame: visuals placed");
         self.tree.take_dirty_layers(&mut self.dirty);
         let drawn = self.scene.draw(
             &self.gfx,
@@ -797,6 +898,7 @@ impl Ui {
             &self.theme,
             self.focused_window,
         )?;
+        lap.mark(&mut self.phases, "frame: draw");
         let mut popups = 0;
         if let Some(m) = &mut self.menu {
             popups += m.render(&self.gfx, &mut self.painter, &mut self.fonts, &self.theme)?;
@@ -807,6 +909,14 @@ impl Ui {
         self.fonts.set_space(0);
         // SAFETY: committing our own device's batch.
         unsafe { self.gfx.dcomp.Commit()? };
+        lap.mark(&mut self.phases, "frame: commit");
+        let input_to_screen_ms = if work {
+            let t = clock::qpc();
+            self.last_commit = Some(t);
+            self.input_to_screen(t)
+        } else {
+            None
+        };
 
         let now = Instant::now();
         let cpu = now.duration_since(started).as_secs_f32() * 1000.0;
@@ -820,6 +930,7 @@ impl Ui {
                 cpu_ms: cpu,
                 layers: drawn + popups,
                 interval_ms: interval,
+                input_to_screen_ms,
             });
         }
         if self.needs_frame() {
@@ -829,6 +940,28 @@ impl Ui {
             self.last_step = None;
         }
         Ok(())
+    }
+
+    /// Whether the first frame was drawn already (its phases are in).
+    fn shown_once(&self) -> bool {
+        self.last_frame.is_some()
+    }
+
+    /// From the input this frame answers (committed at `committed`) to the
+    /// composition that picks the frame up — the first vertical blank
+    /// after the commit — in milliseconds. `None` without such an input
+    /// (or one too old to be this frame's cause) or without the
+    /// compositor's timing.
+    fn input_to_screen(&mut self, committed: i64) -> Option<f32> {
+        self.input_urgent = false;
+        let input = self.input_at.take()?;
+        let ms = |ticks: i64| ticks as f64 / self.qpc_per_ms;
+        if ms(committed - input) > INPUT_WINDOW_MS {
+            return None;
+        }
+        let v = clock::vsync()?;
+        let shown = v.latest(committed) + v.period;
+        Some(ms(shown - input) as f32)
     }
 
     /// Tell each slot where it is, how big, and whether it shows.

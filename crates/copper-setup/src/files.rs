@@ -66,6 +66,17 @@ pub fn is_inside(path: &str, dir: &str) -> bool {
     !d.is_empty() && p.len() > d.len() + 1 && p.starts_with(d) && p.as_bytes()[d.len()] == b'\\'
 }
 
+/// Whether Copper's data folder holds only what the installer's warm-up
+/// (`copper --prewarm`) made — it was never opened: the warm-up's log is
+/// there and the browser's own logs (written at every start) are not.
+/// Uninstalling such a copy leaves no data behind, deleting it or not.
+pub fn only_warmed_up(data: &std::path::Path) -> bool {
+    let logs = data.join("Data").join("logs");
+    logs.join("prewarm.log").is_file()
+        && !logs.join("copper.log").exists()
+        && !logs.join("copper.previous.log").exists()
+}
+
 /// What to tell the user when putting Copper's files in place failed, in
 /// words they can act on. The full error, codes and all, goes to the log.
 pub fn failure_sentence(error: &anyhow::Error) -> &'static str {
@@ -95,6 +106,23 @@ pub fn failure_sentence(error: &anyhow::Error) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_copy_never_opened_is_only_warmed_up() {
+        let root = std::env::temp_dir().join(format!("copper-setup-warm-{}", std::process::id()));
+        let logs = root.join("Data").join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        assert!(!super::only_warmed_up(&root), "nothing at all");
+        std::fs::write(logs.join("prewarm.log"), "ready").unwrap();
+        assert!(super::only_warmed_up(&root));
+        std::fs::write(logs.join("copper.previous.log"), "").unwrap();
+        assert!(!super::only_warmed_up(&root), "opened before");
+        std::fs::remove_file(logs.join("copper.previous.log")).unwrap();
+        std::fs::write(logs.join("copper.log"), "").unwrap();
+        assert!(!super::only_warmed_up(&root), "opened");
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(!super::only_warmed_up(&root), "no folder");
+    }
+
     use super::*;
 
     #[test]

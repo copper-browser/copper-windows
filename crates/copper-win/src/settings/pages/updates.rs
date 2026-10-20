@@ -122,9 +122,7 @@ impl Page for Updates {
                     .anchor("updates.notes");
             }
         }
-        // Addons waiting for Install go here, under Copper's own row (Mac
-        // `AddonUpdatesSection`): the agents worker's
-        // `crate::addons::updates_section(&mut f);` — keep it when merging.
+        crate::addons::updates_section(&mut f);
         let mut note = format!("Updates come from {}", feed_host());
         if let Some(when) = st.checked {
             note += &format!(" · last checked {}", ago(when));
@@ -135,9 +133,7 @@ impl Page for Updates {
 
     fn act(&self, shell: &Shell, action: &str, _value: &str) {
         match action {
-            // The agents worker's addon rows answer here — keep when
-            // merging: `a if a.starts_with("addon-") =>
-            // crate::addons::updates_act(shell, a),`
+            a if a.starts_with("addon-") => crate::addons::updates_act(shell, a),
             "check" => updates::check::<Win>(shell, true),
             "download" => {
                 if let Err(e) = crate::sys::shell::open(&updates::release_page::<Win>()) {

@@ -155,7 +155,9 @@ impl WinView {
         let c = self.chrome.clone();
         let panel = self.panels.showing().is_some();
         self.chrome.edit(move |_, st| {
-            c.set_overlay(st.card.is_open() || st.sheet.is_open() || panel);
+            c.set_overlay(
+                st.card.is_open() || st.sheet.is_open() || panel || crate::canvas::overlay_open(),
+            );
         });
     }
 
@@ -199,6 +201,9 @@ impl WinView {
             return;
         }
         if self.panels.hide(shell) {
+            return;
+        }
+        if crate::canvas::escape(shell) {
             return;
         }
         // A page's full screen first, then the window's.
@@ -380,7 +385,9 @@ impl ShellView<Win> for WinView {
                 }
                 None => {}
             }
-            chrome.set_overlay(st.card.is_open() || st.sheet.is_open() || panel);
+            chrome.set_overlay(
+                st.card.is_open() || st.sheet.is_open() || panel || crate::canvas::overlay_open(),
+            );
             if let Some(t) = &tab
                 && !st.card.is_open()
                 && let Some(slot) = st.stage.slot_of(t)

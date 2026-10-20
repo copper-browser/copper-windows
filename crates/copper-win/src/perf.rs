@@ -17,6 +17,8 @@ use std::time::Instant;
 /// time cannot be read.
 static MAIN: OnceLock<Instant> = OnceLock::new();
 static MARKS: Mutex<Vec<(&'static str, f64)>> = Mutex::new(Vec::new());
+/// Where start-up has got to, step by step, before the window shows.
+static STEPS: Mutex<Vec<(&'static str, f64)>> = Mutex::new(Vec::new());
 
 /// The start-up marks, in the order they normally land.
 pub const FIRST_FRAME: &str = "first-frame";
@@ -54,6 +56,31 @@ pub fn mark_at(name: &'static str, ms: f64) -> f64 {
     marks.push((name, ms));
     tracing::info!(target: "copper::perf", "{name}: {ms:.1} ms from process start");
     ms
+}
+
+/// Start-up reached step `name` now (kept until [`steps_line`] reports
+/// them with the first frame; the log may not be open yet).
+pub fn step(name: &'static str) {
+    let ms = since_start_ms();
+    if let Ok(mut s) = STEPS.lock() {
+        s.push((name, ms));
+    }
+}
+
+/// The steps so far as one line, each with when it was reached and how
+/// long it took since the one before: `claim 21.0 (+2.1) · …`.
+pub fn steps_line() -> String {
+    let steps = STEPS.lock().map(|s| s.clone()).unwrap_or_default();
+    let mut prev = 0.0;
+    steps
+        .iter()
+        .map(|(n, ms)| {
+            let d = ms - prev;
+            prev = *ms;
+            format!("{n} {ms:.1} (+{d:.1})")
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 /// The marks so far.
@@ -135,6 +162,16 @@ mod tests {
         let text = line(&marks());
         assert!(text.contains("test-a=10.0"));
         assert!(text.find("test-a").unwrap() < text.find("test-b=20.5").unwrap());
+    }
+
+    #[test]
+    fn steps_say_when_and_how_long() {
+        step("test-step-a");
+        step("test-step-b");
+        let line = steps_line();
+        assert!(line.contains("test-step-a"), "{line}");
+        assert!(line.find("test-step-a").unwrap() < line.find("test-step-b").unwrap());
+        assert!(line.contains("(+"), "{line}");
     }
 
     #[test]

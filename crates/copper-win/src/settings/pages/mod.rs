@@ -14,6 +14,7 @@ use crate::platform::Shell;
 use std::rc::Rc;
 
 mod about;
+mod addons;
 mod agents;
 mod cloud;
 mod downloads;
@@ -44,6 +45,7 @@ pub fn all() -> Vec<Rc<dyn Page>> {
         Rc::new(agents::Agents),
         Rc::new(labs::Labs),
         Rc::new(updates::Updates),
+        Rc::new(addons::Addons),
         Rc::new(about::About),
     ]
 }

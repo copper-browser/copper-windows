@@ -3,7 +3,7 @@
 
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WAIT_TIMEOUT, WPARAM};
@@ -212,6 +212,29 @@ pub fn close_running_copper(dir: &Path, grace: Duration, found: impl FnOnce()) -
 pub fn launch(exe: &Path) -> anyhow::Result<()> {
     let dir = exe.parent().unwrap_or(Path::new("."));
     Command::new(exe).current_dir(dir).spawn()?;
+    Ok(())
+}
+
+/// The flag that has Copper warm up and leave (`copper-win`'s
+/// `app::PREWARM`).
+pub const PREWARM_FLAG: &str = "--prewarm";
+
+/// Start `copper --prewarm`, detached, and don't wait for it: it makes the
+/// WebView2 environment and profile once, with no window, and exits — so
+/// the user's first start is warm. Its outcome goes to Copper's
+/// `logs\prewarm.log`.
+pub fn prewarm(exe: &Path) -> anyhow::Result<()> {
+    let dir = exe.parent().unwrap_or(Path::new("."));
+    Command::new(exe)
+        .arg(PREWARM_FLAG)
+        .current_dir(dir)
+        // Nothing of ours is held open: a caller reading setup's output
+        // to its end doesn't wait for the warm-up.
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW.0)
+        .spawn()?;
     Ok(())
 }
 
