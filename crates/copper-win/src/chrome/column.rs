@@ -109,8 +109,25 @@ pub struct Column {
     header_drawn: Option<SpaceView>,
     divider: NodeId,
     new_tab: NodeId,
+    /// The chips' window (clipped) and the row that slides in it.
+    chips: NodeId,
     chips_row: NodeId,
     chips_drawn: Vec<SpaceView>,
+    /// The chips on show, by space, in order.
+    chip_nodes: Vec<(String, NodeId)>,
+    /// How far the row is slid left (DIPs, at least 0).
+    chips_slide: f32,
+    /// The soft edges, shown while the chips overflow.
+    /// The hovered chip's name above it.
+    bubble: NodeId,
+    bubble_text: NodeId,
+    /// The space whose name the bubble shows.
+    named: Option<String>,
+    /// The chip being dragged: its space, where it started, how far the
+    /// pointer has gone.
+    held: Option<Held>,
+    /// The space the rows were last drawn for, to slide on a switch.
+    band_space: Option<String>,
     rows: HashMap<TabId, Row>,
     /// Every pointer target in the column and what it means.
     targets: HashMap<NodeId, Hit>,
@@ -132,6 +149,29 @@ const HEADER_MORE: f32 = 16.0;
 const HEADER_GAP: f32 = 10.0;
 /// A chip's mark (`SpaceGlyph(size: 17, bare: true)`).
 const CHIP_GLYPH: f32 = 17.0;
+/// One chip's step along the row (`SpaceStrip.step`).
+const CHIP_STEP: f32 = side::CHIP + side::CHIP_GAP;
+/// How far a press moves before it is a drag (`DragGesture`'s 5).
+pub const DRAG_FROM: f32 = 5.0;
+/// The soft edges' bands (one DIP each: 8% of the chips' window).
+/// The name bubble: 11pt medium, 8 × 4 in a capsule, centred 16 above
+/// the chip's top.
+const BUBBLE_HEIGHT: f32 = 22.0;
+const BUBBLE_ABOVE: f32 = 16.0;
+/// The space switch's slide (`SpaceSlide.curve`: 0.22 s on
+/// (0.2, 0.9, 0.3, 1)), how far the band starts off to one side.
+const SLIDE: copper_win_ui::Motion = copper_win_ui::Motion::Curve {
+    curve: copper_win_ui::spring::Bezier::new(0.2, 0.9, 0.3, 1.0),
+    seconds: 0.22,
+};
+
+/// A chip being dragged (`SpaceStrip.dragging/from/travel`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Held {
+    pub id: String,
+    pub from: usize,
+    pub travel: f32,
+}
 /// The plus at the foot.
 const PLUS_GLYPH: f32 = 15.0;
 /// A resting chip's mark, and the second copy that lifts it to
@@ -149,6 +189,9 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
             .width(metrics::SIDE)
             .shrink(0.0)
             .layer()
+            // The band slides in from beside the column on a space switch:
+            // never over the page.
+            .clip()
             .role(Role::Pane)
             .name("Tabs"),
     );
@@ -479,6 +522,43 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
     );
     targets.insert(plus, Hit::NewSpace);
 
+    // The hovered chip's name, at once, above it (`SpaceStrip.label`): a
+    // row as wide as the column, so the capsule can be centred on any x.
+    let bubble = ui.tree.add(
+        side_n,
+        Node::row()
+            .absolute(copper_win_ui::Abs {
+                left: Some(0.0),
+                top: Some(0.0),
+                right: Some(0.0),
+                bottom: None,
+            })
+            .height(BUBBLE_HEIGHT)
+            .justify(Justify::Center)
+            .align(Align::Center)
+            .layer()
+            .opacity(0.0)
+            .role(Role::None),
+    );
+    let bubble_pill = ui.tree.add(
+        bubble,
+        Node::row()
+            .height(BUBBLE_HEIGHT)
+            .padding(Insets::hv(8.0, 0.0))
+            .align(Align::Center)
+            .radius(BUBBLE_HEIGHT / 2.0)
+            .fill(Token::Pill)
+            .shadow(copper_win_ui::tokens::Shadow::new(0.18, 6.0, 2.0))
+            .role(Role::None),
+    );
+    let bubble_text = ui.tree.add(
+        bubble_pill,
+        Node::text("", 11.0)
+            .weight(Weight::Medium)
+            .ink(Token::ColumnInk)
+            .role(Role::None),
+    );
+
     Column {
         side: side_n,
         address,
@@ -501,8 +581,16 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
         header_drawn: None,
         divider,
         new_tab,
+        chips,
         chips_row,
         chips_drawn: Vec::new(),
+        chip_nodes: Vec::new(),
+        chips_slide: 0.0,
+        bubble,
+        bubble_text,
+        named: None,
+        held: None,
+        band_space: None,
         rows: HashMap::new(),
         targets,
         nav: Nav::default(),
@@ -535,9 +623,32 @@ impl Column {
         self.sync_nav(ui, m.nav);
         self.sync_address(ui, &m.host);
         self.sync_pins(ui, images, &m.visible.pins);
+        self.slide_band(ui, m);
         self.sync_header(ui, &m.space);
         self.sync_rows(ui, images, &m.visible.saved, &m.visible.today);
         self.sync_chips(ui, &m.spaces);
+    }
+
+    /// Another space: its name and rows come in from the side the space
+    /// sits on (`SpaceSlide`: from the right for a space after this one),
+    /// over 0.22 s on Arc's curve, inside the column's edges. The ground,
+    /// the head and the foot stay where they are.
+    fn slide_band(&mut self, ui: &mut Ui, m: &Model) {
+        let to = m.space.id.clone();
+        let Some(from) = self.band_space.replace(to.clone()) else {
+            return;
+        };
+        if from == to {
+            return;
+        }
+        let at = |id: &str| m.spaces.iter().position(|s| s.id == id);
+        let way = match (at(&from), at(&to)) {
+            (Some(a), Some(b)) if b < a => -1.0,
+            _ => 1.0,
+        };
+        let width = ui.tree.window_rect(self.side).w.max(metrics::SIDE);
+        ui.tree.set_prop(self.scroll, Prop::X, way * width);
+        ui.tree.animate(self.scroll, Prop::X, 0.0, SLIDE);
     }
 
     /// Back, forward, reload / stop.
@@ -820,15 +931,49 @@ impl Column {
     }
 
     /// The space chips (`SpaceStrip`): rebuilt when the spaces change. One
-    /// space still shows its chip — the way to its page.
+    /// space still shows its chip — the way to its page. Only an order
+    /// changed (a drag) moves the chips that are there, each gliding from
+    /// where it was to its new place.
     fn sync_chips(&mut self, ui: &mut Ui, spaces: &[SpaceView]) {
         if spaces == self.chips_drawn.as_slice() {
+            return;
+        }
+        let reordered = spaces.len() == self.chips_drawn.len()
+            && spaces.iter().all(|s| self.chips_drawn.contains(s));
+        if reordered {
+            let before: Vec<String> = self.chip_nodes.iter().map(|(id, _)| id.clone()).collect();
+            for (i, s) in spaces.iter().enumerate() {
+                let Some(node) = self.chip_node(&s.id) else {
+                    continue;
+                };
+                ui.tree.reorder(node, i);
+                let old = before.iter().position(|id| *id == s.id).unwrap_or(i);
+                if self.held.as_ref().is_some_and(|h| h.id == s.id) {
+                    continue;
+                }
+                if old != i {
+                    // Where it was, as an offset from its new place.
+                    let now = ui.tree.get(node).map_or(0.0, |n| n.transform.translate.x);
+                    ui.tree
+                        .set_prop(node, Prop::X, now + (old as f32 - i as f32) * CHIP_STEP);
+                    ui.tree.animate(node, Prop::X, 0.0, motion::SETTLE);
+                }
+            }
+            self.chip_nodes = spaces
+                .iter()
+                .filter_map(|s| self.chip_node(&s.id).map(|n| (s.id.clone(), n)))
+                .collect();
+            self.chips_drawn = spaces.to_vec();
+            self.place_held(ui);
+            self.fade_chips(ui);
             return;
         }
         for c in ui.tree.children(self.chips_row).to_vec() {
             self.forget_targets(ui, c);
         }
         ui.tree.clear_children(self.chips_row);
+        self.chip_nodes.clear();
+        self.hide_bubble(ui);
         for s in spaces {
             let title = symbols::title(s.icon.as_deref(), &s.title);
             let help = if s.current {
@@ -842,6 +987,7 @@ impl Column {
                 .radius(side::CHIP_RADIUS)
                 .align(Align::Center)
                 .justify(Justify::Center)
+                .layer()
                 .button(&title)
                 .tooltip(&help);
             if !s.current {
@@ -853,28 +999,226 @@ impl Column {
             if s.current {
                 space_mark(ui, chip, s, CHIP_GLYPH, ink, 1.0);
             } else {
-                // Thinned at rest; a second copy lifts it under the pointer.
-                space_mark(ui, chip, s, CHIP_GLYPH, ink, side::CHIP_RESTING);
-                let lift = space_mark(ui, chip, s, CHIP_GLYPH, ink, CHIP_LIFT);
+                // Greyed and thinned at rest (`.saturation(0)`, .42); a
+                // second copy, in colour, lifts it under the pointer.
+                // Over a grey picture the lift is the colour itself at the
+                // hover's opacity; over the same mark it composes to it.
+                let lift = if resting_mark(ui, chip, s, ink) {
+                    side::CHIP_HOVER
+                } else {
+                    CHIP_LIFT
+                };
+                let lift = space_mark(ui, chip, s, CHIP_GLYPH, ink, lift);
                 ui.tree.edit(lift, |n| n.flags.reveal = true);
             }
             self.targets.insert(chip, Hit::Space(s.id.clone()));
+            self.chip_nodes.push((s.id.clone(), chip));
         }
         // More chips than room: slide the row so the current one is in
-        // the middle of what shows.
+        // the middle of what shows, and soften the edges.
         let n = spaces.len() as f32;
         let whole = n * side::CHIP + (n - 1.0).max(0.0) * side::CHIP_GAP;
         let room = chip_room();
         let at = spaces.iter().position(|s| s.current).unwrap_or(0) as f32;
-        let centre = at * (side::CHIP + side::CHIP_GAP) + side::CHIP / 2.0;
+        let centre = at * CHIP_STEP + side::CHIP / 2.0;
         let slide = if whole > room {
             (centre - room / 2.0).clamp(0.0, whole - room)
         } else {
             0.0
         };
-        ui.tree
-            .animate(self.chips_row, Prop::X, -slide.round(), motion::GLIDE);
+        self.slide_chips(ui, slide);
         self.chips_drawn = spaces.to_vec();
+    }
+
+    fn chip_node(&self, id: &str) -> Option<NodeId> {
+        self.chip_nodes
+            .iter()
+            .find(|(s, _)| s == id)
+            .map(|(_, n)| *n)
+    }
+
+    /// Slide the chips' row to `slide` (clamped to the row's overflow).
+    fn slide_chips(&mut self, ui: &mut Ui, slide: f32) {
+        let n = self.chip_nodes.len().max(self.chips_drawn.len()) as f32;
+        let whole = n * side::CHIP + (n - 1.0).max(0.0) * side::CHIP_GAP;
+        let most = (whole - chip_room()).max(0.0);
+        self.chips_slide = slide.clamp(0.0, most);
+        ui.tree.animate(
+            self.chips_row,
+            Prop::X,
+            -self.chips_slide.round(),
+            motion::GLIDE,
+        );
+        self.fade_chips(ui);
+    }
+
+    /// The soft edges an overflowing row runs out under (`SpaceStrip.fade`,
+    /// a mask clear at each end and whole from 8% in): each chip takes the
+    /// mask's mean over the width it shows at — the column's ground is
+    /// see-through, so a band of it over the chips would not match.
+    fn fade_chips(&self, ui: &mut Ui) {
+        let room = chip_room();
+        let n = self.chip_nodes.len() as f32;
+        let whole = n * side::CHIP + (n - 1.0).max(0.0) * side::CHIP_GAP;
+        let overflowing = whole > room + 1.0;
+        let soft = room * 0.08;
+        let held = self.held.as_ref().map(|h| h.id.as_str());
+        for (i, (id, node)) in self.chip_nodes.iter().enumerate() {
+            let left = i as f32 * CHIP_STEP - self.chips_slide.round();
+            let k = if !overflowing || held == Some(id.as_str()) {
+                1.0
+            } else {
+                const SAMPLES: usize = 8;
+                (0..SAMPLES)
+                    .map(|j| {
+                        let x = left + side::CHIP * (j as f32 + 0.5) / SAMPLES as f32;
+                        (x.min(room - x) / soft).clamp(0.0, 1.0)
+                    })
+                    .sum::<f32>()
+                    / SAMPLES as f32
+            };
+            ui.tree.animate(*node, Prop::Opacity, k, motion::GLIDE);
+        }
+    }
+
+    /// The wheel over the chips: along the row when it overflows (`true`
+    /// if it moved). `lines` is the wheel's notches, positive away from
+    /// you (to the left).
+    pub fn wheel_chips(&mut self, ui: &mut Ui, lines: f32) -> bool {
+        let before = self.chips_slide;
+        self.slide_chips(ui, before - lines * CHIP_STEP);
+        (self.chips_slide - before).abs() > 0.01
+    }
+
+    /// The chips' window (clipped).
+    pub fn chips_window(&self) -> NodeId {
+        self.chips
+    }
+
+    /// Whether `p` (window DIPs) is over the chips' window.
+    pub fn over_chips(&self, ui: &Ui, p: Point) -> bool {
+        ui.tree.visible_rect(self.chips).contains(p)
+    }
+
+    /// The chip under `p` (window DIPs): its index and space.
+    pub fn chip_at(&self, ui: &Ui, p: Point) -> Option<(usize, String)> {
+        if !self.over_chips(ui, p) {
+            return None;
+        }
+        self.chip_nodes
+            .iter()
+            .enumerate()
+            .find(|(_, (_, n))| ui.tree.window_rect(*n).contains(p))
+            .map(|(i, (id, _))| (i, id.clone()))
+    }
+
+    /// The pointer is over chip `space` (or none): its name, at once,
+    /// above it (`SpaceStrip.label`), never while a chip is held.
+    pub fn name_chip(&mut self, ui: &mut Ui, space: Option<&str>) {
+        let space = space.filter(|_| self.held.is_none());
+        if space == self.named.as_deref() {
+            return;
+        }
+        let Some(id) = space else {
+            self.hide_bubble(ui);
+            return;
+        };
+        let (Some(node), Some(s)) = (
+            self.chip_node(id),
+            self.chips_drawn.iter().find(|s| s.id == id),
+        ) else {
+            self.hide_bubble(ui);
+            return;
+        };
+        let title = symbols::title(s.icon.as_deref(), &s.title);
+        ui.tree.set_text(self.bubble_text, &title);
+        let chip = ui.tree.window_rect(node);
+        let column = ui.tree.window_rect(self.side);
+        let width = column.w;
+        // Roughly half the label's width, so it stays in the column.
+        let half = title.chars().count().min(28) as f32 * 3.4 + 10.0;
+        let mid = chip.x + chip.w / 2.0 - column.x;
+        let x = mid.clamp(half, (width - half).max(half)) - width / 2.0;
+        let y = chip.y - column.y - BUBBLE_ABOVE - BUBBLE_HEIGHT / 2.0;
+        let was = self.named.is_some();
+        ui.tree.set_prop(self.bubble, Prop::X, x.round());
+        if was {
+            ui.tree.set_prop(self.bubble, Prop::Y, y.round());
+        } else {
+            ui.tree.set_prop(self.bubble, Prop::Y, (y + 3.0).round());
+            ui.tree
+                .animate(self.bubble, Prop::Y, y.round(), motion::QUICK);
+        }
+        ui.tree
+            .animate(self.bubble, Prop::Opacity, 1.0, motion::QUICK);
+        self.named = Some(id.to_string());
+    }
+
+    fn hide_bubble(&mut self, ui: &mut Ui) {
+        if self.named.take().is_some() {
+            ui.tree
+                .animate(self.bubble, Prop::Opacity, 0.0, motion::QUICK);
+        }
+    }
+
+    /// The chip being dragged, if one is.
+    pub fn held(&self) -> Option<&Held> {
+        self.held.as_ref()
+    }
+
+    /// Pick chip `id` up (it started at `from`).
+    pub fn hold_chip(&mut self, ui: &mut Ui, id: &str, from: usize) {
+        self.hide_bubble(ui);
+        self.held = Some(Held {
+            id: id.to_string(),
+            from,
+            travel: 0.0,
+        });
+        if let Some(node) = self.chip_node(id) {
+            ui.tree.edit(node, |n| {
+                n.look.shadow = Some(copper_win_ui::tokens::Shadow::new(0.16, 8.0, 2.0));
+            });
+        }
+    }
+
+    /// The held chip has gone `travel` from where it was picked up: where
+    /// it belongs now (`SpaceStrip.reorder`'s target), if not where it is.
+    pub fn drag_chip(&mut self, ui: &mut Ui, travel: f32) -> Option<(String, usize)> {
+        let h = self.held.as_mut()?;
+        h.travel = travel;
+        let (id, from) = (h.id.clone(), h.from);
+        let here = self.chip_nodes.iter().position(|(s, _)| *s == id)?;
+        self.place_held(ui);
+        let moved = (travel / CHIP_STEP).round() as isize;
+        let last = self.chip_nodes.len().saturating_sub(1) as isize;
+        let target = (from as isize + moved).clamp(0, last) as usize;
+        (target != here).then_some((id, target))
+    }
+
+    /// Let go of the held chip: it settles into its place.
+    pub fn drop_chip(&mut self, ui: &mut Ui) -> bool {
+        let Some(h) = self.held.take() else {
+            return false;
+        };
+        if let Some(node) = self.chip_node(&h.id) {
+            ui.tree.animate(node, Prop::X, 0.0, motion::SETTLE);
+            ui.tree.edit(node, |n| n.look.shadow = None);
+        }
+        true
+    }
+
+    /// The held chip under the pointer: offset from its slot by what the
+    /// pointer travelled less the slots it has already moved.
+    fn place_held(&self, ui: &mut Ui) {
+        let Some(h) = &self.held else {
+            return;
+        };
+        let Some(i) = self.chip_nodes.iter().position(|(s, _)| *s == h.id) else {
+            return;
+        };
+        let node = self.chip_nodes[i].1;
+        let x = h.travel - (i as f32 - h.from as f32) * CHIP_STEP;
+        ui.tree.set_prop(node, Prop::X, x);
     }
 }
 
@@ -882,6 +1226,34 @@ impl Column {
 /// doors, the plus and the two spacers either side of the chips.
 fn chip_room() -> f32 {
     metrics::SIDE - 2.0 * side::FOOT_PAD_H - 4.0 * side::FOOT_DOOR - 3.0 * 2.0 - 2.0 * (4.0 + 2.0)
+}
+
+/// A resting chip's mark: an emoji greyed (a picture of it, see
+/// `palette::emoji`), thinned to [`side::CHIP_RESTING`]; a symbol or a dot
+/// has no colour to take out. `true` when it is the grey picture.
+fn resting_mark(ui: &mut Ui, chip: NodeId, space: &SpaceView, ink: Swatch) -> bool {
+    if let symbols::Mark::Emoji(e) = symbols::mark(space.icon.as_deref(), &space.title)
+        && let Some(id) =
+            crate::palette::emoji::grey(ui, &e, CHIP_GLYPH, (CHIP_GLYPH * 0.9).round())
+    {
+        let holder = ui.tree.add(
+            chip,
+            Node::stack()
+                .absolute(copper_win_ui::Abs::FILL)
+                .align(Align::Center)
+                .justify(Justify::Center)
+                .role(Role::None),
+        );
+        ui.tree.add(
+            holder,
+            Node::image(id, CHIP_GLYPH)
+                .opacity(side::CHIP_RESTING)
+                .role(Role::None),
+        );
+        return true;
+    }
+    space_mark(ui, chip, space, CHIP_GLYPH, ink, side::CHIP_RESTING);
+    false
 }
 
 /// Draw `space`'s mark (`SpaceGlyph`, bare) into `parent`, `size` square:

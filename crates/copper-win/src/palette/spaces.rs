@@ -59,12 +59,51 @@ thread_local! {
     /// The profile names the profile menu offered, by item.
     static PROFILES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static NEW_SPACE_PENDING: Cell<bool> = const { Cell::new(false) };
+    /// A press on a chip: where it went down (window DIPs, x), the
+    /// chip's space and its place in the row.
+    static PRESS: RefCell<Option<(f32, String, usize)>> = const { RefCell::new(None) };
+    /// The space whose chip was dragged: the click the toolkit makes of
+    /// the release is not a click.
+    static DRAGGED: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Where the chips are (client pixels: left, top, right, bottom), when
+    /// it was read, and whether a name is up: a move far from them needs
+    /// no look at the window.
+    static ZONE: Cell<Option<([i32; 4], std::time::Instant)>> = const { Cell::new(None) };
+    static NAMING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Note where the chips are now (client pixels), a little wider.
+fn note_zone(ui: &copper_win_ui::win::Ui, st: &crate::chrome::State) {
+    let r = ui.tree.visible_rect(st.column.chips_window());
+    let k = ui.scale();
+    let px = |v: f32| (v * k).round() as i32;
+    let zone = [
+        px(r.x) - 4,
+        px(r.y) - 4,
+        px(r.x + r.w) + 4,
+        px(r.y + r.h) + 4,
+    ];
+    ZONE.with(|z| z.set(Some((zone, std::time::Instant::now()))));
+}
+
+/// Whether a move at (`x`, `y`) may be over the chips (or leaving them).
+fn near_chips(x: i32, y: i32) -> bool {
+    if NAMING.with(Cell::get) {
+        return true;
+    }
+    match ZONE.with(Cell::get) {
+        Some((z, at)) if at.elapsed() < Duration::from_millis(500) => {
+            x >= z[0] && x < z[2] && y >= z[1] && y < z[3]
+        }
+        _ => true,
+    }
 }
 
 /// A click on one of the column's spaces doors (the events keep every
 /// other column hit for themselves).
 pub fn column_hit(chrome: &Rc<Chrome>, shell: &Shell, h: Hit) {
     match h {
+        Hit::Space(id) if DRAGGED.with(|d| d.borrow_mut().take_if(|d| *d == id).is_some()) => {}
         Hit::Space(id) => {
             // Arc's rule: another space's chip takes you there; the one
             // you are in opens its page.
@@ -242,6 +281,210 @@ pub fn menu_chosen(shell: &Shell, menu: u32, chosen: u32) -> bool {
     }
     crate::settings::changed(shell, "spaces");
     true
+}
+
+/// The chips under the pointer (the toolkit has no drag, no hover and no
+/// wheel for a plain row, so they are read from the window's messages
+/// before it sees them): the hovered chip's name at once; a press that
+/// travels [`DRAG_FROM`] picks the chip up, the others make way a step at
+/// a time and the space moves with it (`SpaceStrip.reorder`); the wheel
+/// slides an overflowing row. Nothing is swallowed but the wheel over the
+/// chips, so the toolkit's own press and capture stay whole.
+///
+/// [`DRAG_FROM`]: crate::chrome::column::DRAG_FROM
+pub fn pointer(shell: &Shell) {
+    const WM_MOUSEMOVE: u32 = 0x0200;
+    const WM_LBUTTONDOWN: u32 = 0x0201;
+    const WM_LBUTTONUP: u32 = 0x0202;
+    const WM_MOUSEWHEEL: u32 = 0x020A;
+    const WM_MOUSEHWHEEL: u32 = 0x020E;
+    const WM_MOUSELEAVE: u32 = 0x02A3;
+    const MK_LBUTTON: usize = 0x0001;
+    const NOTCH: f32 = 120.0;
+    let weak = shell.downgrade();
+    let hwnd = shell.view().chrome().window().hwnd();
+    copper_win_rt::add_message_hook(move |m| {
+        if m.hwnd != hwnd.0 as isize
+            || !matches!(
+                m.message,
+                WM_MOUSEMOVE
+                    | WM_LBUTTONDOWN
+                    | WM_LBUTTONUP
+                    | WM_MOUSEWHEEL
+                    | WM_MOUSEHWHEEL
+                    | WM_MOUSELEAVE
+            )
+        {
+            return false;
+        }
+        let Some(shell) = weak.upgrade() else {
+            return false;
+        };
+        let chrome = shell.view().chrome().clone();
+        let words = m.lparam as usize;
+        let (mut x, mut y) = (
+            i32::from((words & 0xFFFF) as u16 as i16),
+            i32::from(((words >> 16) & 0xFFFF) as u16 as i16),
+        );
+        if matches!(m.message, WM_MOUSEWHEEL | WM_MOUSEHWHEEL) {
+            // The wheel says where on the screen.
+            let mut p = windows::Win32::Foundation::POINT { x, y };
+            // SAFETY: our own window and a live POINT.
+            if !unsafe { windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut p) }.as_bool() {
+                return false;
+            }
+            (x, y) = (p.x, p.y);
+        }
+        let to_dips = |ui: &copper_win_ui::win::Ui| {
+            let k = ui.scale().max(0.5);
+            Point::new(x as f32 / k, y as f32 / k)
+        };
+        match m.message {
+            WM_LBUTTONDOWN => {
+                DRAGGED.with(|d| d.borrow_mut().take());
+                let press = chrome
+                    .read(|ui, st| {
+                        // A chip still up from a release never seen.
+                        st.column.drop_chip(ui);
+                        let p = to_dips(ui);
+                        st.column.chip_at(ui, p).map(|(i, id)| (p.x, id, i))
+                    })
+                    .flatten();
+                PRESS.with(|s| *s.borrow_mut() = press);
+                false
+            }
+            WM_MOUSEMOVE if m.wparam & MK_LBUTTON != 0 => {
+                let Some((x0, id, from)) = PRESS.with(|s| s.borrow().clone()) else {
+                    return false;
+                };
+                let moved = chrome
+                    .read(|ui, st| {
+                        let travel = to_dips(ui).x - x0;
+                        if st.column.held().is_none() {
+                            if travel.abs() < crate::chrome::column::DRAG_FROM {
+                                return None;
+                            }
+                            st.column.hold_chip(ui, &id, from);
+                        }
+                        st.column.drag_chip(ui, travel)
+                    })
+                    .flatten();
+                if let Some((id, to)) = moved {
+                    // On the loop's next turn: moving a space reaches the
+                    // pages, which may run messages (the release among
+                    // them) where this hook does not see them.
+                    let weak = shell.downgrade();
+                    copper_win_rt::spawn_local(async move {
+                        if let Some(shell) = weak.upgrade() {
+                            shell.move_space(&id, to);
+                        }
+                    });
+                }
+                false
+            }
+            WM_MOUSEMOVE => {
+                // The button came up where this hook did not see it.
+                if PRESS.with(|s| s.borrow_mut().take()).is_some() {
+                    chrome.read(|ui, st| st.column.drop_chip(ui));
+                }
+                if !near_chips(x, y) {
+                    return false;
+                }
+                chrome.read(|ui, st| {
+                    note_zone(ui, st);
+                    let at = st.column.chip_at(ui, to_dips(ui)).map(|(_, id)| id);
+                    NAMING.with(|n| n.set(at.is_some()));
+                    st.column.name_chip(ui, at.as_deref());
+                });
+                false
+            }
+            WM_LBUTTONUP => {
+                PRESS.with(|s| s.borrow_mut().take());
+                let held = chrome
+                    .read(|ui, st| {
+                        let id = st.column.held().map(|h| h.id.clone());
+                        st.column.drop_chip(ui);
+                        id
+                    })
+                    .flatten();
+                if held.is_some() {
+                    DRAGGED.with(|d| *d.borrow_mut() = held);
+                }
+                false
+            }
+            WM_MOUSELEAVE => {
+                NAMING.with(|n| n.set(false));
+                chrome.read(|ui, st| st.column.name_chip(ui, None));
+                false
+            }
+            _ => {
+                let delta = f32::from((m.wparam >> 16) as u16 as i16) / NOTCH;
+                // Down the wheel, or tilted right: further along the row.
+                let lines = if m.message == WM_MOUSEHWHEEL {
+                    -delta
+                } else {
+                    delta
+                };
+                chrome
+                    .read(|ui, st| {
+                        st.column.over_chips(ui, to_dips(ui)) && {
+                            // The chip under the pointer is another one
+                            // now: its name waits for the next move.
+                            if st.column.wheel_chips(ui, lines) {
+                                st.column.name_chip(ui, None);
+                                NAMING.with(|n| n.set(false));
+                            }
+                            true
+                        }
+                    })
+                    .unwrap_or(false)
+            }
+        }
+    });
+}
+
+/// Keep Settings › Spaces true to the spaces: whenever the shell says a
+/// space was switched to, added, changed, reordered or removed, or a tab
+/// came or went (the page shows its count), the page redraws if it is up
+/// (`SpacesSettingsPage` observes `Spaces.shared` the same way). A burst
+/// of changes in one turn redraws once.
+pub fn watch(shell: &Shell) {
+    use copper_shell_core::control::ShellEvent;
+    let mut events = shell.hub().subscribe();
+    let weak = shell.downgrade();
+    copper_win_rt::spawn_local(async move {
+        let mut errors = 0u32;
+        loop {
+            let got = events.recv().await;
+            // A lag is one error and then events again; a hub that has
+            // gone is nothing but errors.
+            errors = if got.is_err() { errors + 1 } else { 0 };
+            if errors > 4 {
+                break;
+            }
+            let Some(s) = weak.upgrade() else { break };
+            let mut redraw = matches!(
+                got,
+                Ok(ShellEvent::SpaceSwitched(_)
+                    | ShellEvent::SpacesChanged
+                    | ShellEvent::TabOpened(_)
+                    | ShellEvent::TabClosed(_))
+            ) || got.is_err();
+            // Whatever else is already waiting belongs to the same turn.
+            while let Ok(e) = events.try_recv() {
+                redraw |= matches!(
+                    e,
+                    ShellEvent::SpaceSwitched(_)
+                        | ShellEvent::SpacesChanged
+                        | ShellEvent::TabOpened(_)
+                        | ShellEvent::TabClosed(_)
+                );
+            }
+            if redraw {
+                crate::settings::changed(&s, "spaces");
+            }
+        }
+    });
 }
 
 /// Into space `id` if not there already.

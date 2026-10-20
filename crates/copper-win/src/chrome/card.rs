@@ -102,6 +102,10 @@ pub struct Card {
     /// arriving closes it.
     auto: bool,
     rows: Vec<Drawn>,
+    /// What each row on show drew its picture and its aside from: with
+    /// the rows themselves, how a keystroke that changes nothing in the
+    /// list is told from one that does.
+    shown: Vec<(MarkKey, String)>,
     picked: Option<usize>,
     /// What was typed, without any completion offered after it.
     pub typed: String,
@@ -147,6 +151,28 @@ pub enum RowMark {
     Letter(String),
     Dot,
     None,
+}
+
+/// What a [`RowMark`] was drawn from (an icon by identity).
+#[derive(Clone, Debug, PartialEq)]
+enum MarkKey {
+    Icon(usize),
+    Glyph(char),
+    Letter(String),
+    Dot,
+    None,
+}
+
+impl MarkKey {
+    fn of(m: &RowMark) -> MarkKey {
+        match m {
+            RowMark::Icon(i) => MarkKey::Icon(std::rc::Rc::as_ptr(i) as usize),
+            RowMark::Glyph(c) => MarkKey::Glyph(*c),
+            RowMark::Letter(l) => MarkKey::Letter(l.clone()),
+            RowMark::Dot => MarkKey::Dot,
+            RowMark::None => MarkKey::None,
+        }
+    }
 }
 
 /// The space-delete question on show.
@@ -267,6 +293,7 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Card {
         open: false,
         auto: false,
         rows: Vec::new(),
+        shown: Vec::new(),
         picked: None,
         typed: String::new(),
         ending: None,
@@ -647,6 +674,7 @@ impl Card {
     fn clear_rows(&mut self, ui: &mut Ui) {
         ui.tree.clear_children(self.results);
         self.rows.clear();
+        self.shown.clear();
         self.picked = None;
         ui.tree.set_hidden(self.list, true);
         ui.tree.set_hidden(self.rule, true);
@@ -663,11 +691,34 @@ impl Card {
         mut mark: impl FnMut(&Row) -> RowMark,
         mut aside: impl FnMut(&Row) -> String,
     ) {
+        let plain = self.purpose == Purpose::Edit;
+        let marks: Vec<RowMark> = rows.iter().map(&mut mark).collect();
+        let asides: Vec<String> = rows
+            .iter()
+            .map(|r| if plain { String::new() } else { aside(r) })
+            .collect();
+        let shown: Vec<(MarkKey, String)> = marks
+            .iter()
+            .map(MarkKey::of)
+            .zip(asides.iter().cloned())
+            .collect();
+        // The same list as on show (typing on through a word often is):
+        // keep its nodes, only the highlight goes back to the default.
+        // Rebuilding would lay out every row's text again for nothing.
+        if !rows.is_empty()
+            && rows.len() == self.rows.len()
+            && shown == self.shown
+            && rows.iter().zip(&self.rows).all(|(r, d)| *r == d.row)
+        {
+            self.picked = default.filter(|&i| i < self.rows.len());
+            self.show_picked(ui);
+            ui.tree.scroll(self.list, |s| s.scroll_to(0.0, false));
+            return;
+        }
         self.clear_rows(ui);
         if rows.is_empty() {
             return;
         }
-        let plain = self.purpose == Purpose::Edit;
         ui.tree.set_hidden(self.list, false);
         ui.tree.set_hidden(self.rule, plain);
         let pad = if plain {
@@ -678,6 +729,8 @@ impl Card {
         let mut top = pad;
         let mut headings = 0usize;
         let mut section: Option<Section> = None;
+        let mut marks = marks.into_iter();
+        let mut asides = asides.into_iter();
         for row in rows {
             if !plain && Some(row.section) != section {
                 section = Some(row.section);
@@ -706,11 +759,11 @@ impl Card {
                     top += card::HEADING_HEIGHT + HEADING_BOTTOM + card::ROW_SPACING;
                 }
             }
-            let m = mark(&row);
+            let m = marks.next().unwrap_or(RowMark::None);
+            let a = asides.next().unwrap_or_default();
             let drawn = if plain {
                 self.add_plain_row(ui, row, m, top)
             } else {
-                let a = aside(&row);
                 self.add_row(ui, images, row, m, a, top)
             };
             top += if plain {
@@ -737,6 +790,7 @@ impl Card {
         ui.tree
             .edit(self.list, |n| n.style.height = Dim::Px(height.round()));
         ui.tree.scroll(self.list, |s| s.scroll_to(0.0, false));
+        self.shown = shown;
         self.picked = default.filter(|&i| i < self.rows.len());
         self.show_picked(ui);
     }

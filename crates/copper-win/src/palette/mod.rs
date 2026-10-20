@@ -14,9 +14,15 @@ pub mod rank;
 pub mod symbols;
 
 #[cfg(windows)]
+pub mod emoji;
+#[cfg(windows)]
 mod live;
 #[cfg(windows)]
 pub mod spaces;
+#[cfg(windows)]
+mod strip_edit;
 
 #[cfg(windows)]
 pub use live::*;
+#[cfg(windows)]
+pub use strip_edit::strip_field;
