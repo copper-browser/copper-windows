@@ -109,3 +109,5 @@ pub const TABS: char = '\u{E8A9}';
 pub const LOCK: char = '\u{E72E}';
 /// `number`: a two-step code in the list under a code box (the dial pad).
 pub const DIALPAD: char = '\u{E75F}';
+/// `sidebar.right`: the Agent sidebar (Segoe Fluent `DockRight`).
+pub const AGENT_SIDEBAR: char = '\u{E90D}';

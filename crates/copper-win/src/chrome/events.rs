@@ -147,7 +147,10 @@ fn click(chrome: &Rc<Chrome>, shell: &Shell, id: NodeId) {
             if crate::palette::click(shell, id) {
                 return;
             }
-            if !crate::panels::click(shell, id) && !crate::forms::click(shell, id) {
+            if !crate::panels::click(shell, id)
+                && !crate::forms::click(shell, id)
+                && !crate::addons::click(shell, id)
+            {
                 crate::find::click(shell, id);
             }
         }
