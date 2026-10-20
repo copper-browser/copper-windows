@@ -91,6 +91,26 @@ pub const LOCATION: char = '\u{E707}';
 pub const BELL: char = '\u{EA8F}';
 /// `eye.slash`: a private tab's mark in its row.
 pub const EYE_SLASH: char = '\u{ED1A}';
+/// `chevron.right`: a row that opens out.
+pub const CHEVRON_RIGHT: char = '\u{E76C}';
+/// `xmark.circle.fill`: clear a field.
+pub const CLEAR: char = '\u{EB90}';
+/// `return`: what Enter does in a list.
+pub const RETURN: char = '\u{E751}';
+/// `info.circle`: About.
+pub const INFO: char = '\u{E946}';
+/// `flask`: Labs (Windows has no flask; a light bulb is its "try this").
+pub const LABS: char = '\u{EA80}';
+/// `sparkles`: Intelligence.
+pub const INTELLIGENCE: char = '\u{E945}';
+/// `square.split.2x1`: Tabs.
+pub const TABS: char = '\u{E8A9}';
+/// `lock`: a 1Password account in the list under a sign-in box.
+pub const LOCK: char = '\u{E72E}';
+/// `number`: a two-step code in the list under a code box (the dial pad).
+pub const DIALPAD: char = '\u{E75F}';
+/// `sidebar.right`: the Agent sidebar (Segoe Fluent `DockRight`).
+pub const AGENT_SIDEBAR: char = '\u{E90D}';
 /// A person (Contact): the Personal canvas.
 pub const PERSON: char = '\u{E77B}';
 /// People: a shared canvas.

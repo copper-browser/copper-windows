@@ -19,14 +19,15 @@ copper-pagejs.workspace = true
 copper-shield.workspace = true
 copper-cloud.workspace = true
 copper-creds.workspace = true
+copper-import.workspace = true
 copper-mcp.workspace = true
 copper-shell-core.workspace = true
-copper-import.workspace = true
 copper-setup = { path = "../copper-setup" }
 # The toolkit's platform-free half (keys, layout, the node tree) builds and
 # tests everywhere; its window lives behind `cfg(windows)`.
 copper-win-ui.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
@@ -70,6 +71,7 @@ windows = { workspace = true, features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Input_Pointer",
     "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

@@ -128,3 +128,25 @@ fn buttons_say_their_words_once() {
     assert_eq!(t.get(inner).unwrap().a11y.role, copper_win_ui::Role::None);
     assert!(!t.get(inner).unwrap().flags.hit);
 }
+
+#[test]
+fn password_and_key_fields_hide_their_text_and_email_does_not() {
+    let secure = |id: FieldId| {
+        let (mut t, list) = tree();
+        let mut m = Mount::default();
+        let rows = vec![line(
+            "l",
+            "Field",
+            None,
+            vec![field(id, "x", Some(220.0), false)],
+        )];
+        m.sync(&mut t, list, &[card("card", rows)]);
+        match &t.get(m.node_of(id).unwrap()).unwrap().content {
+            Content::Field(f) => f.secure,
+            _ => panic!("not a field"),
+        }
+    };
+    assert!(secure(FieldId::Password));
+    assert!(secure(FieldId::Key));
+    assert!(!secure(FieldId::Email));
+}
