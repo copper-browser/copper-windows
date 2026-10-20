@@ -9,7 +9,9 @@ use crate::panels::plate::{self, Plate};
 use crate::panels::{self, Panel};
 use crate::platform::Shell;
 use copper_win_ui::win::Ui;
-use copper_win_ui::{Align, Insets, Justify, Node, NodeId, Role, Swatch, Token, Trim, Weight};
+use copper_win_ui::{
+    Align, Event, Insets, Justify, Node, NodeId, Role, Swatch, Token, Trim, Weight,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -27,6 +29,25 @@ pub trait Page: 'static {
     /// A control was used: `action` is the control's, `value` the switch's
     /// new state (`"on"`/`"off"`) or the option chosen.
     fn act(&self, shell: &Shell, action: &str, value: &str);
+    /// A page that draws itself: when `Some`, a refresh runs it with the
+    /// page's scroll list instead of clearing the list and drawing
+    /// [`Page::draw`]'s form. The closure owns the list's children (it may
+    /// patch what it drew last time rather than rebuild it).
+    #[allow(clippy::type_complexity)]
+    fn body(&self, _shell: &Shell) -> Option<Box<dyn FnOnce(&mut Ui, NodeId)>> {
+        None
+    }
+    /// A click Settings' own controls didn't take. `true` if it was the
+    /// page's.
+    fn click(&self, _shell: &Shell, _id: NodeId) -> bool {
+        false
+    }
+    /// A field event in the page. `true` if it was the page's.
+    fn field(&self, _shell: &Shell, _id: NodeId, _e: &Event) -> bool {
+        false
+    }
+    /// The page went off screen: another page was picked or Settings closed.
+    fn left(&self) {}
 }
 
 const RAIL: f32 = 210.0;
@@ -105,8 +126,26 @@ pub fn open(shell: &Shell, page: &str) {
         .find(|p| p.id() == page)
         .map(|p| p.id())
         .unwrap_or("general");
+    if id != *s.page.borrow()
+        && let Some(old) = s.current()
+    {
+        old.left();
+        let list = s.nodes.borrow().map(|n| n.list);
+        if let Some(list) = list {
+            shell
+                .view()
+                .chrome()
+                .read(move |ui, _| ui.tree.clear_children(list));
+        }
+    }
     *s.page.borrow_mut() = id;
     panels::show(shell, "settings");
+}
+
+/// The page Settings is showing, if Settings is on screen.
+pub fn showing(shell: &Shell) -> Option<&'static str> {
+    let s = get()?;
+    (shell.view().panels().showing() == Some("settings")).then(|| *s.page.borrow())
 }
 
 /// What page `id` shows changed: redraw it if it is on screen.
@@ -178,6 +217,8 @@ impl Panel for Settings {
             page,
             Node::scroll()
                 .grow(1.0)
+                // Taller than the page: scroll, don't spill past it.
+                .shrink(1.0)
                 .padding(Insets::new(32.0, 20.0, 32.0, 24.0))
                 .gap(26.0),
         );
@@ -198,7 +239,12 @@ impl Panel for Settings {
         let Some(page) = pages.iter().find(|p| p.id() == current).cloned() else {
             return;
         };
-        let form = page.draw(shell);
+        let body = page.body(shell);
+        let form = if body.is_none() {
+            page.draw(shell)
+        } else {
+            Form::default()
+        };
         let rail: Vec<(&'static str, &'static str, char)> = pages
             .iter()
             .map(|p| (p.id(), p.title(), p.glyph()))
@@ -213,8 +259,13 @@ impl Panel for Settings {
                 let b = rail_row(ui, nodes.rail, name, g, pid == current);
                 hits.push((b, Hit::Page(pid)));
             }
-            ui.tree.clear_children(nodes.list);
-            draw_form(ui, nodes.list, id, &form, &mut hits);
+            match body {
+                Some(draw) => draw(ui, nodes.list),
+                None => {
+                    ui.tree.clear_children(nodes.list);
+                    draw_form(ui, nodes.list, id, &form, &mut hits);
+                }
+            }
             hits
         });
         if let Some(made) = made {
@@ -224,10 +275,23 @@ impl Panel for Settings {
 
     fn click(&self, shell: &Shell, id: NodeId) -> bool {
         let Some(hit) = self.hits.borrow().get(&id).cloned() else {
-            return false;
+            return self.current().is_some_and(|p| p.click(shell, id));
         };
         match hit {
             Hit::Page(p) => {
+                if p != *self.page.borrow()
+                    && let Some(old) = self.current()
+                {
+                    old.left();
+                    // The list is the next page's now.
+                    let list = self.nodes.borrow().map(|n| n.list);
+                    if let Some(list) = list {
+                        shell
+                            .view()
+                            .chrome()
+                            .read(move |ui, _| ui.tree.clear_children(list));
+                    }
+                }
                 *self.page.borrow_mut() = p;
                 self.refresh(shell);
             }
@@ -242,9 +306,24 @@ impl Panel for Settings {
         true
     }
 
+    fn field(&self, shell: &Shell, id: NodeId, e: &Event) -> bool {
+        self.current().is_some_and(|p| p.field(shell, id, e))
+    }
+
     fn closed(&self) {
+        if let Some(p) = self.current() {
+            p.left();
+        }
         *self.nodes.borrow_mut() = None;
         self.hits.borrow_mut().clear();
+    }
+}
+
+impl Settings {
+    /// The page on screen.
+    fn current(&self) -> Option<Rc<dyn Page>> {
+        let id = *self.page.borrow();
+        self.pages.borrow().iter().find(|p| p.id() == id).cloned()
     }
 }
 

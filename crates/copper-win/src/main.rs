@@ -33,7 +33,6 @@ mod app;
 mod canvas;
 #[cfg(windows)]
 mod chrome;
-#[cfg(windows)]
 mod cloud;
 #[cfg(windows)]
 mod commands;
