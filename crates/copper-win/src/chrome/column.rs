@@ -8,6 +8,7 @@
 //! what its changes do.
 
 use super::build::{door, fill_mark, mark, tip};
+use super::doors;
 use super::glyph;
 use super::images::Images;
 use super::model::{Model, Nav, SpaceView};
@@ -93,6 +94,9 @@ impl Drawn {
 pub struct Column {
     pub side: NodeId,
     pub address: NodeId,
+    /// The downloads door inside the address (the Downloads panel draws
+    /// what it shows).
+    pub downloads: doors::DownloadsDoor,
     address_text: NodeId,
     back: NodeId,
     forward: NodeId,
@@ -270,6 +274,7 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
         Node::row()
             .height(side::ADDRESS_HEIGHT)
             .grow(1.0)
+            .shrink(1.0)
             .radius(side::ADDRESS_RADIUS)
             .fill(Token::Square)
             .hover_fill(Token::ColumnHover)
@@ -286,14 +291,18 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
                 crate::keys::shortcut("focus-field").unwrap_or_default()
             )),
     );
+    // The words give way to the downloads door (a long address would push
+    // it out of sight), ending in an ellipsis.
     let address_text = ui.tree.add(
         address,
         Node::text(PLACEHOLDER, side::ADDRESS_TEXT)
             .ink(Token::ColumnFaint)
             .trim(Trim::Middle)
             .grow(1.0)
+            .shrink(1.0)
             .role(Role::None),
     );
+    let downloads = doors::column_downloads(ui, address);
     targets.insert(address, Hit::Address);
 
     // The favourites: a grid, only while there are any.
@@ -439,8 +448,8 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
             .align(Align::Center)
             .radius(side::ROW_RADIUS)
             .hover_fill(Token::ColumnHover)
-            .button("New tab")
-            .tooltip(&tip("New tab", "new-tab"))
+            .button("New Tab")
+            .tooltip(&tip("New Tab", "new-tab"))
             .opacity(side::QUIET_REST),
     );
     ui.tree.add(
@@ -451,7 +460,7 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
     );
     ui.tree.add(
         new_tab,
-        Node::text("New tab", side::TITLE_SIZE)
+        Node::text("New Tab", side::TITLE_SIZE)
             .ink(Token::ColumnMuted)
             .grow(1.0)
             .role(Role::None),
@@ -566,6 +575,7 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
     Column {
         side: side_n,
         address,
+        downloads,
         address_text,
         back,
         forward,

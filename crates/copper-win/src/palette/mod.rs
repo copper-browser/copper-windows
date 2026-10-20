@@ -7,9 +7,6 @@
 //! talks to the window and is Windows only. The card itself is
 //! [`crate::chrome::card`].
 
-// The platform-free half is only called from the Windows half.
-#![cfg_attr(not(windows), allow(dead_code))]
-
 pub mod rank;
 pub mod symbols;
 

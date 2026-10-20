@@ -435,8 +435,8 @@ impl Hunt {
     }
 }
 
-/// The search field panels open with (`Hunt`). Returns the field.
-#[allow(dead_code)] // the earlier API, kept for Settings
+/// The search field alone, for a list that never clears it from a cross
+/// (Settings' site manager). Returns the field.
 pub fn hunt(ui: &mut Ui, parent: NodeId, prompt: &str) -> NodeId {
     search(ui, parent, prompt).field
 }

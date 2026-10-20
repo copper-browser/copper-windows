@@ -1,5 +1,6 @@
-//! The user's calendar for the panels' dates (`Today`, `12 October`):
-//! Windows' local time zone and the user's month names.
+//! The user's calendar for the panels' dates (`Today`, `12 October`) and
+//! times (`3:41 PM`): Windows' local time zone, the user's month names and
+//! time style.
 
 use super::from_wide;
 use copper_shell_core::format::{Calendar, Civil};
@@ -92,6 +93,39 @@ const ENGLISH: [&str; 12] = [
     "November",
     "December",
 ];
+
+/// The time of day in the user's short style (`When.clock`: `3:41 PM`,
+/// `15:41`), in Windows' local time zone.
+pub fn clock(unix: f64) -> String {
+    use windows::Win32::Globalization::{GetTimeFormatEx, TIME_NOSECONDS};
+    let Some(t) = WinCalendar::civil(unix) else {
+        return String::new();
+    };
+    let time = SYSTEMTIME {
+        wYear: t.year.clamp(1601, 30827) as u16,
+        wMonth: t.month as u16,
+        wDay: t.day as u16,
+        wHour: t.hour as u16,
+        wMinute: t.minute as u16,
+        ..Default::default()
+    };
+    let mut buf = [0u16; 32];
+    // SAFETY: the user's locale, a valid time, a buffer of its length.
+    let n = unsafe {
+        GetTimeFormatEx(
+            PCWSTR::null(),
+            TIME_NOSECONDS,
+            Some(&time),
+            PCWSTR::null(),
+            Some(&mut buf),
+        )
+    };
+    if n > 1 {
+        String::from_utf16_lossy(&buf[..n as usize - 1])
+    } else {
+        format!("{:02}:{:02}", t.hour, t.minute)
+    }
+}
 
 /// 1–366.
 pub fn day_of_year(year: i32, month: u32, day: u32) -> u32 {

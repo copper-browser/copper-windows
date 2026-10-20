@@ -42,11 +42,6 @@ mod panel;
 #[cfg(windows)]
 mod results;
 
-/// For a page registered after start-up (another worker's), alongside
-/// [`pages::all`]'s.
-#[cfg(windows)]
-#[allow(unused_imports)]
-pub use panel::add;
 #[cfg(windows)]
 pub use panel::{Page, changed, open, register, showing};
 
