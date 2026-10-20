@@ -39,8 +39,6 @@ pub mod history;
 mod host;
 #[cfg(windows)]
 pub mod plate;
-#[cfg(windows)]
-pub mod redress;
 
 // What they work out, platform-free (and tested on any host).
 mod ring;

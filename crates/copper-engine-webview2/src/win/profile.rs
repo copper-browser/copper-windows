@@ -34,6 +34,7 @@ use super::downloads::{Downloads, Job};
 use super::engine::EngineInner;
 use super::fetcher;
 use super::page::PageInner;
+use crate::appearance::{ColorScheme, Ground};
 use crate::convert;
 use crate::dnr::EXTENSION_NAME_PREFIX;
 use crate::filter::WebView2ContentFilter;
@@ -153,6 +154,7 @@ impl ProfileInner {
             self.engine.park.0,
             self.name.as_deref(),
             self.ephemeral,
+            self.engine.ground.get(),
         )
         .await?;
         self.saw(&wv);
@@ -171,6 +173,9 @@ impl ProfileInner {
             controller::configure_profile(&core, &self.download_dir());
             *self.core.borrow_mut() = Some(core.clone());
         }
+        // Every time: the scheme may have changed while no webview of
+        // this profile was open to take it.
+        controller::set_color_scheme(&core, self.engine.color_scheme.get());
         for tx in self.core_waiters.take() {
             tx.send(Ok(core.clone()));
         }
@@ -284,6 +289,32 @@ impl ProfileInner {
         self.filters.swept.set(false);
     }
 
+    /// The engine's ground changed: every open webview of this profile
+    /// shows the new one (a new one gets it when it is made).
+    pub fn ground_changed(&self, ground: Ground) {
+        let mut views: Vec<Wv> = self
+            .pages
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter_map(|p| p.wv())
+            .collect();
+        if let Spare::Ready(wv) = &*self.spare.borrow() {
+            views.push(wv.clone());
+        }
+        for wv in views {
+            controller::set_ground(&wv.ctl, ground);
+        }
+    }
+
+    /// The engine's colour scheme changed: the profile takes it now if a
+    /// webview of it is open, else with its next webview ([`Self::saw`]).
+    pub fn color_scheme_changed(&self, scheme: ColorScheme) {
+        if let Some(core) = self.live_profile() {
+            controller::set_color_scheme(&core, scheme);
+        }
+    }
+
     pub fn add_page(&self, page: &Rc<PageInner>) {
         let mut pages = self.pages.borrow_mut();
         pages.retain(|w| w.strong_count() > 0);
@@ -344,6 +375,15 @@ impl ProfileInner {
         });
     }
 
+    /// Where this profile's [`crate::filter::Installed`] record lives.
+    fn installed_record(&self) -> PathBuf {
+        self.engine
+            .paths
+            .cache_root
+            .join("content-filter-installs")
+            .join(format!("{}.json", self.id))
+    }
+
     async fn sync_filters(self: &Rc<Self>) -> Result<()> {
         let core = self.core().await?;
         let Ok(p7) = core.cast::<ICoreWebView2Profile7>() else {
@@ -357,14 +397,42 @@ impl ProfileInner {
         if self.filters.swept.get() && self.filters_in_step(&desired) {
             return Ok(());
         }
+        let t = Instant::now();
         let present = list_extensions(&p7).await?;
+        let listed = t.elapsed();
         if !self.filters.swept.replace(true) {
+            // The first pass of this run: what Chromium kept from the last
+            // run stays if the record says it is the build wanted now;
+            // everything else of Copper's goes.
+            let record = crate::filter::read_installed(&self.installed_record());
+            let mut kept = HashMap::new();
             for (ext, name) in &present {
-                if name.starts_with(EXTENSION_NAME_PREFIX) {
-                    remove_extension(ext).await;
+                if !name.starts_with(EXTENSION_NAME_PREFIX) {
+                    continue;
+                }
+                let ext_id = extension_id(ext);
+                let enabled = get_bool(|b| unsafe { ext.IsEnabled(b) }).unwrap_or(false);
+                let current = desired.iter().find(|(id, f)| {
+                    f.extension_name() == *name
+                        && record
+                            .get(*id)
+                            .is_some_and(|(e, v)| *e == ext_id && *v == f.version())
+                });
+                match current {
+                    Some((id, f)) if enabled => {
+                        kept.insert(id.clone(), (ext_id, f.version()));
+                    }
+                    _ => remove_extension(ext).await,
                 }
             }
-            self.filters.installed.borrow_mut().clear();
+            if !kept.is_empty() {
+                tracing::debug!(
+                    "profile {}: content filters kept from the last run: {:?}",
+                    self.id,
+                    kept.keys().collect::<Vec<_>>()
+                );
+            }
+            *self.filters.installed.borrow_mut() = kept;
         } else {
             let stale: Vec<(String, String)> = self
                 .filters
@@ -387,7 +455,14 @@ impl ProfileInner {
             if self.filters.installed.borrow().contains_key(&id) {
                 continue;
             }
-            match add_extension(&p7, f.dir()).await {
+            let added = Instant::now();
+            let r = add_extension(&p7, f.dir()).await;
+            tracing::debug!(
+                "profile {}: content filter {id} added in {:.0} ms",
+                self.id,
+                added.elapsed().as_secs_f64() * 1000.0
+            );
+            match r {
                 Ok(ext) => {
                     let ext_id = extension_id(&ext);
                     self.filters
@@ -398,11 +473,22 @@ impl ProfileInner {
                 Err(e) => tracing::warn!("content filter {id}: {e}"),
             }
         }
+        let record: crate::filter::Installed = self
+            .filters
+            .installed
+            .borrow()
+            .iter()
+            .map(|(id, v)| (id.clone(), v.clone()))
+            .collect();
+        crate::filter::write_installed(&self.installed_record(), &record);
         tracing::debug!(
-            "profile {}: content filters in step ({} installed, {} extension(s) found)",
+            "profile {}: content filters in step ({} installed, {} extension(s) found; \
+             {:.0} ms, {:.0} ms of it listing)",
             self.id,
             self.filters.installed.borrow().len(),
-            present.len()
+            present.len(),
+            t.elapsed().as_secs_f64() * 1000.0,
+            listed.as_secs_f64() * 1000.0
         );
         Ok(())
     }

@@ -191,7 +191,9 @@ pub fn trouble(s: &PageStatus) -> Trouble {
         "host name not resolved" => "No site at that address.",
         "disconnected" | "connection reset" => "No connection.",
         "timeout" => "The site took too long to answer.",
-        "cannot connect" | "server unreachable" => "The site refused the connection.",
+        "connection refused" | "cannot connect" | "server unreachable" => {
+            "The site refused the connection."
+        }
         e if e.starts_with("certificate") || e.starts_with("client certificate") => {
             "The connection isn't secure."
         }
@@ -225,6 +227,10 @@ mod tests {
         );
         assert_eq!(
             t("Cannot connect."),
+            Trouble::Failed("The site refused the connection.")
+        );
+        assert_eq!(
+            t("Connection refused."),
             Trouble::Failed("The site refused the connection.")
         );
         assert_eq!(

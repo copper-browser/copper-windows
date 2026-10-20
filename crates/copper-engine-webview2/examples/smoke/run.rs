@@ -42,7 +42,7 @@ const TWO_FRAMES: &str = "return await new Promise(r => \
 const USAGE: &str = "usage: smoke [URL] [--backstage] [--snapshot OUT.png] [--data DIR] \
     [--log FILE] [--scheme] [--lang de-DE,fr] [--bitmap OUT.png] [--file-chooser] \
     [--input-check] [--profile-check] [--context-menu-check] [--download-ask-check] \
-    [--nav-filter-check] [--sweep LIST] [--sweep-out DIR] [--profile ID] [--prewarm] [--hold MS] [--exit]";
+    [--nav-filter-check] [--world-check] [--sweep LIST] [--sweep-out DIR] [--profile ID] [--prewarm] [--hold MS] [--exit]";
 
 pub struct Args {
     pub url: Option<String>,
@@ -63,6 +63,7 @@ pub struct Args {
     pub context_menu_check: bool,
     pub download_ask_check: bool,
     pub nav_filter_check: bool,
+    pub world_check: bool,
     pub sweep: Option<Vec<String>>,
     pub sweep_out: Option<PathBuf>,
     pub hold: Duration,
@@ -83,6 +84,7 @@ impl Args {
             || self.context_menu_check
             || self.download_ask_check
             || self.nav_filter_check
+            || self.world_check
             || self.sweep.is_some()
     }
 
@@ -124,6 +126,7 @@ fn parse_args() -> Result<Args, String> {
         context_menu_check: false,
         download_ask_check: false,
         nav_filter_check: false,
+        world_check: false,
         sweep: None,
         sweep_out: None,
         hold: Duration::ZERO,
@@ -146,6 +149,7 @@ fn parse_args() -> Result<Args, String> {
             "--context-menu-check" => args.context_menu_check = true,
             "--download-ask-check" => args.download_ask_check = true,
             "--nav-filter-check" => args.nav_filter_check = true,
+            "--world-check" => args.world_check = true,
             "--exit" => args.exit = true,
             "--snapshot" => args.snapshot = Some(next(&a, &mut i)?.into()),
             "--data" => args.data = Some(next(&a, &mut i)?.into()),
@@ -448,6 +452,9 @@ async fn run(mut ctx: Ctx, args: Args) -> i32 {
     }
     if args.nav_filter_check {
         ok &= nav_check::nav_filter(&mut ctx).await;
+    }
+    if args.world_check {
+        ok &= crate::world_check::world_messages(&mut ctx).await;
     }
     if let Some(sites) = &args.sweep {
         let out = args.sweep_out.clone().unwrap_or_else(sweep::default_out);

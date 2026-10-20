@@ -16,7 +16,7 @@ use crate::sys;
 use copper_core::browser::TabId;
 use copper_core::settings::{Look, TabsPosition};
 use copper_engine::{DownloadState, Engine};
-use copper_engine_webview2::WebView2Page;
+use copper_engine_webview2::{ColorScheme, Ground, WebView2Page};
 use copper_shell_core::palette::complete::Purpose;
 use copper_shell_core::shell::pages::PageSlot;
 use copper_shell_core::{Question, Refresh, ShellView};
@@ -393,6 +393,10 @@ impl ShellView<Win> for WinView {
 
     fn refresh(&self, shell: &Shell, _what: &Refresh) {
         self.sync(shell);
+        // Windows' theme changed (`dark_changed`): the pages' ground follows.
+        shell
+            .engine()
+            .set_page_ground(page_ground(self.chrome.is_dark()));
     }
 
     fn set_layout(&self, shell: &Shell, position: TabsPosition) {
@@ -441,10 +445,23 @@ impl ShellView<Win> for WinView {
             Look::Dark => Appearance::Dark,
             Look::System => Appearance::System,
         };
+        // Pages follow the Look too: `prefers-color-scheme`, and the
+        // ground a webview shows until its page paints.
+        let engine = self.chrome.shell().map(|s| s.engine().clone());
+        if let Some(e) = &engine {
+            e.set_color_scheme(match look {
+                Look::Light => ColorScheme::Light,
+                Look::Dark => ColorScheme::Dark,
+                Look::System => ColorScheme::Auto,
+            });
+        }
         let chrome = self.chrome.clone();
         self.chrome.edit(move |ui, _| {
             ui.set_appearance(a);
             chrome.set_dark(ui.is_dark());
+            if let Some(e) = engine {
+                e.set_page_ground(page_ground(ui.is_dark()));
+            }
         });
     }
 
@@ -529,4 +546,11 @@ impl ShellView<Win> for WinView {
         let bytes = std::fs::read(path).ok()?;
         picture::icon(&bytes).map(Rc::new)
     }
+}
+
+/// The window's ground (`Design.swift` `Palette.NS.ground`), which a
+/// webview shows until its page paints.
+fn page_ground(dark: bool) -> Ground {
+    let c = copper_win_ui::tokens::palette::GROUND.get(dark);
+    Ground::from_unit(c.r, c.g, c.b)
 }

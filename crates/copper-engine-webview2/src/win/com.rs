@@ -378,6 +378,13 @@ pub(crate) mod add_remove {
         remove_WebMessageReceived
     );
     event!(
+        FrameDOMContentLoaded,
+        ICoreWebView2Frame2,
+        ICoreWebView2FrameDOMContentLoadedEventHandler,
+        add_DOMContentLoaded,
+        remove_DOMContentLoaded
+    );
+    event!(
         FrameDestroyed,
         ICoreWebView2Frame,
         ICoreWebView2FrameDestroyedEventHandler,

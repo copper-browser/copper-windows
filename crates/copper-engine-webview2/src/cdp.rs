@@ -114,6 +114,27 @@ pub(crate) fn binding_call(params: &JsonValue) -> Option<(String, String)> {
     ))
 }
 
+/// Frame ids from `Page.getFrameTree`, main frame first (breadth first),
+/// at most `limit`.
+pub(crate) fn frame_ids(tree: &JsonValue, out: &mut Vec<String>, limit: usize) {
+    let mut level: Vec<&JsonValue> = tree.get("frameTree").into_iter().collect();
+    while !level.is_empty() && out.len() < limit {
+        let mut next = Vec::new();
+        for node in level {
+            if out.len() >= limit {
+                return;
+            }
+            if let Some(id) = node.pointer("/frame/id").and_then(JsonValue::as_str) {
+                out.push(id.to_owned());
+            }
+            if let Some(kids) = node.get("childFrames").and_then(JsonValue::as_array) {
+                next.extend(kids.iter());
+            }
+        }
+        level = next;
+    }
+}
+
 /// The main frame's id from `Page.getFrameTree`.
 pub(crate) fn main_frame_id(tree: &JsonValue) -> Option<String> {
     tree.pointer("/frameTree/frame/id")
@@ -260,5 +281,15 @@ mod tests {
             main_frame_id(&json!({"frameTree": {"frame": {"id": "F1"}}})).as_deref(),
             Some("F1")
         );
+        let tree = json!({"frameTree": {"frame": {"id": "M"}, "childFrames": [
+            {"frame": {"id": "A"}, "childFrames": [{"frame": {"id": "A1"}}]},
+            {"frame": {"id": "B"}}
+        ]}});
+        let mut ids = Vec::new();
+        frame_ids(&tree, &mut ids, 10);
+        assert_eq!(ids, ["M", "A", "B", "A1"]);
+        let mut ids = Vec::new();
+        frame_ids(&tree, &mut ids, 2);
+        assert_eq!(ids, ["M", "A"]);
     }
 }

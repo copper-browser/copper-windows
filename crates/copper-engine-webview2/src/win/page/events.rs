@@ -18,10 +18,20 @@ use windows::core::Interface;
 
 use super::hosting::{MODIFIED_CLICK_WINDOW, accelerator_key, focus_changed};
 use super::{Life, PageInner, PendingPermission, WebView2Page, scheme, script};
-use crate::convert::{WEB_ERROR_CANCELED, crash_reason, permission_kind, web_error_name};
+use crate::convert::{
+    CONNECTION_REFUSED, WEB_ERROR_CANCELED, WEB_ERROR_UNKNOWN, crash_reason, knock_target,
+    permission_kind, refuses, web_error_name,
+};
+
+/// `COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED`.
+const WEB_ERROR_ABORTED: i32 = 9;
+/// How long a failed load's knock may take ([`PageInner::fail_after_knock`]).
+/// Windows answers a refused connection only after retrying it (about 2 s
+/// even on the loopback).
+const KNOCK_LIMIT: std::time::Duration = std::time::Duration::from_millis(2600);
 use crate::history::NativeHistory;
 use crate::hosting::{FocusExit, PageChange};
-use crate::util::png_size;
+use crate::util::{Either, png_size, race};
 use crate::win::com::{Tokens, get, get_bool, get_string, hs, read_stream};
 use crate::win::controller::{self, Wv};
 use crate::win::{cdp, downloads};
@@ -85,6 +95,7 @@ fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
                 p.deny_pending_permissions();
                 p.close_file_chooser(false);
                 p.set_progress(PROGRESS_COMMITTED);
+                script::bind_documents(&p);
                 p.emit(PageEvent::Load(LoadState::Committed { url }));
             }
             Ok(())
@@ -134,10 +145,12 @@ fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
         NavigationCompleted,
         NavigationCompletedEventHandler,
         move |_, a: Option<ICoreWebView2NavigationCompletedEventArgs>| {
-            if let (Some(p), Some(a)) = (pw.upgrade(), a)
-                && !p.completion_refused(&a)
-            {
-                p.nav_completed(&a);
+            if let (Some(p), Some(a)) = (pw.upgrade(), a) {
+                // Whatever became of it (refused too), the navigation is over.
+                p.document_ready();
+                if !p.completion_refused(&a) {
+                    p.nav_completed(&a);
+                }
             }
             Ok(())
         }
@@ -152,6 +165,8 @@ fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
             move |_, _| {
                 if let Some(p) = pw.upgrade() {
                     p.set_progress(PROGRESS_DOM_READY);
+                    p.document_ready();
+                    script::bind_documents(&p);
                 }
                 Ok(())
             }
@@ -551,6 +566,7 @@ impl PageInner {
     }
 
     fn nav_started(&self, url: Option<String>, redirected: bool) {
+        self.document_coming();
         self.status.borrow_mut().loading = true;
         self.schemes.navigation(url.clone());
         if redirected {
@@ -562,6 +578,8 @@ impl PageInner {
     }
 
     fn nav_completed(self: &Rc<Self>, a: &ICoreWebView2NavigationCompletedEventArgs) {
+        self.document_ready();
+        script::bind_documents(self);
         let ok = get_bool(|b| unsafe { a.IsSuccess(b) }).unwrap_or(false);
         let http = a
             .cast::<ICoreWebView2NavigationCompletedEventArgs2>()
@@ -591,16 +609,68 @@ impl PageInner {
             self.set_progress(1.0);
             self.emit(PageEvent::Load(LoadState::Finished { url }));
         } else {
+            tracing::debug!(status = status.0, http, "load failed: {url:?}");
             self.nav.borrow_mut().cancel_pending();
             self.clear_html_filter();
             self.status.borrow_mut().progress = 1.0;
-            self.emit(PageEvent::Load(LoadState::Failed {
-                url: url.unwrap_or_default(),
-                error: web_error_name(status.0).to_owned(),
-                cancelled: status.0 == WEB_ERROR_CANCELED,
-            }));
+            let knock = (status.0 == WEB_ERROR_UNKNOWN)
+                .then(|| url.as_deref().and_then(knock_target))
+                .flatten();
+            // Chromium's own error page for a load being knocked on ends
+            // "aborted": the knock answers for both.
+            let knocked =
+                status.0 == WEB_ERROR_ABORTED && url.is_some() && *self.knocking.borrow() == url;
+            match knock {
+                Some((host, port)) => self.fail_after_knock(url, host, port),
+                None if knocked => tracing::debug!("its knock answers for it"),
+                None => self.emit(PageEvent::Load(LoadState::Failed {
+                    url: url.unwrap_or_default(),
+                    error: web_error_name(status.0).to_owned(),
+                    cancelled: status.0 == WEB_ERROR_CANCELED,
+                })),
+            }
         }
         self.refresh_history();
+    }
+
+    /// Report a failed `UNKNOWN` load once a knock on `host:port` told
+    /// whether it was refused (WebView2 has no status for that).
+    fn fail_after_knock(self: &Rc<Self>, url: Option<String>, host: String, port: u16) {
+        let me = Rc::downgrade(self);
+        let generation = self.generation.get();
+        self.knocking.replace(url.clone());
+        copper_win_rt::spawn_local(async move {
+            let knock =
+                crate::win::worker::run("copper-knock", move || refuses(&host, port, KNOCK_LIMIT));
+            // Name lookup has no limit of its own.
+            let refused = match race(
+                knock,
+                copper_win_rt::sleep(KNOCK_LIMIT + std::time::Duration::from_millis(900)),
+            )
+            .await
+            {
+                Either::Left(v) => v.unwrap_or(false),
+                Either::Right(()) => false,
+            };
+            let Some(p) = me.upgrade() else { return };
+            if *p.knocking.borrow() == url {
+                p.knocking.replace(None);
+            }
+            // A newer load (or webview) took over meanwhile.
+            if p.generation.get() != generation || p.status.borrow().loading {
+                return;
+            }
+            let error = if refused {
+                CONNECTION_REFUSED
+            } else {
+                web_error_name(WEB_ERROR_UNKNOWN)
+            };
+            p.emit(PageEvent::Load(LoadState::Failed {
+                url: url.unwrap_or_default(),
+                error: error.to_owned(),
+                cancelled: false,
+            }));
+        });
     }
 
     /// Fold the webview's history into the page's URL stack.
@@ -824,6 +894,23 @@ impl PageInner {
             );
             if let Err(e) = r {
                 tracing::debug!("frame messages: {e}");
+            }
+            // A child document's isolated worlds need their bindings too.
+            let pw = w.clone();
+            let r = on!(
+                tokens,
+                f2,
+                FrameDOMContentLoaded,
+                FrameDOMContentLoadedEventHandler,
+                move |_, _| {
+                    if let Some(p) = pw.upgrade() {
+                        script::bind_documents(&p);
+                    }
+                    Ok(())
+                }
+            );
+            if let Err(e) = r {
+                tracing::debug!("frame documents: {e}");
             }
         }
         if let Ok(f7) = frame.cast::<ICoreWebView2Frame7>() {
