@@ -37,6 +37,7 @@ pub mod letter;
 pub mod menus;
 pub mod model;
 pub mod pagemenu;
+pub mod pane;
 pub mod permit;
 pub mod sheet;
 pub mod stage;

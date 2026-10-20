@@ -480,7 +480,6 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
             "bookmarks-door",
             Hit::Bookmarks,
         ),
-        (glyph::CANVAS, "New canvas", "new-canvas", Hit::Canvas),
     ] {
         let (d, _) = door(
             ui,
@@ -493,6 +492,7 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
         );
         targets.insert(d, hit);
     }
+    targets.insert(crate::canvas::door::mount(ui, foot), Hit::Canvas);
     ui.tree.add(foot, Node::new().grow(1.0).min_width(4.0));
     // The chips scroll sideways rather than shrink: the row is clipped and
     // slid so the current one stays in view.

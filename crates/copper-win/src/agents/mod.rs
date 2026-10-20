@@ -1,8 +1,12 @@
 //! The agents lane's Windows half (`AgentsApp`): the MCP server
 //! (copper-shell-core's `agents`, started here when `agent.json` says so),
 //! the engine's backstage for tabs an agent works in while the user looks
-//! at another, what the agent is doing said in a line, and passwords for
+//! at another, what the agent is doing said in a line, who is driving
+//! which tab ([`hands`], drawn by [`marks`]), and passwords for
 //! `browser_sign_in` / `browser_autofill`.
+
+mod hands;
+pub mod marks;
 
 use crate::chrome::glyph;
 use crate::commands::Command;
@@ -18,14 +22,14 @@ use std::rc::Rc;
 
 /// What the window does for the agents.
 #[derive(Default)]
-struct Hands {
+struct App {
     /// Tabs whose pages are lent to the backstage.
     held: RefCell<HashSet<TabId>>,
     /// Tabs an agent is working in right now.
     driving: RefCell<HashSet<TabId>>,
 }
 
-impl AgentsApp<Win> for Hands {
+impl AgentsApp<Win> for App {
     fn holds(&self, tab: &TabId) -> bool {
         self.held.borrow().contains(tab)
     }
@@ -105,10 +109,12 @@ impl AgentsApp<Win> for Hands {
             DriveEvent::RunFinished { .. } => self.driving.borrow_mut().clear(),
             _ => {}
         }
+        marks::event(event);
     }
 
     fn clear_marks(&self) {
         self.driving.borrow_mut().clear();
+        marks::clear();
     }
 
     fn sign_in(
@@ -149,7 +155,8 @@ fn let_go(shell: &Shell, tab: &TabId) {
 /// Start the lane (the MCP server listens when `agent.json` says so) and
 /// its commands.
 pub fn register(shell: &Shell) {
-    let server = agents::start::<Win>(shell, Rc::new(Hands::default()));
+    let server = agents::start::<Win>(shell, Rc::new(App::default()));
+    marks::install(shell);
     let r = shell.view().commands();
     let s = server.clone();
     r.add(Command::new(
@@ -166,7 +173,19 @@ pub fn register(shell: &Shell) {
             });
         },
     ));
-    r.add(Command::key("agent", |s| {
-        crate::settings::open(s, "agents")
-    }));
+    r.add(Command::new(
+        "agents-settings",
+        "Agents Settings",
+        glyph::AGENT,
+        |s| crate::settings::open(s, "agents"),
+    ));
+    // Ctrl+E: the Agent sidebar (an addon's page, or Copper's placeholder).
+    r.add(Command::key("agent", crate::addons::toggle));
+    // Settings › Agents follows the server (listening, port, token, Jev).
+    server.watch(|_| {
+        if let Some(s) = crate::platform::current() {
+            crate::settings::changed(&s, "agents");
+        }
+        true
+    });
 }
