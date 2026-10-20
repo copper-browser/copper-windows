@@ -250,7 +250,8 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Card {
         field_row,
         Node::field(PALETTE_PLACEHOLDER, card::FIELD_TEXT)
             .height(24.0)
-            .grow(1.0),
+            .grow(1.0)
+            .app_keys(),
     );
     ui.tree.edit(field, |n| {
         if let Some(f) = n.field_mut() {
@@ -1238,10 +1239,11 @@ fn plain_row_height() -> f32 {
     2.0 * plain::ROW_PAD_V + 16.0
 }
 
-/// The grey ending after the caret. The field draws it once the toolkit
-/// has a ghost suffix (`Ui::set_field_ghost`); until then the cards keep
-/// it to themselves, and Right/End/Tab still take it.
-fn set_ghost(_ui: &mut Ui, _field: NodeId, _rest: &str) {}
+/// The grey ending after the caret (`Ui::set_field_ghost`); Right/End/Tab
+/// take it (the field is `app_keys`, so they reach the palette).
+fn set_ghost(ui: &mut Ui, field: NodeId, rest: &str) {
+    ui.set_field_ghost(field, rest);
+}
 
 /// A row's picture when it has no icon: a glyph by kind.
 pub fn kind_glyph(kind: Kind) -> char {

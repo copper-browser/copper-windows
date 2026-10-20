@@ -336,6 +336,9 @@ fn key_event(chrome: &Rc<Chrome>, shell: &Shell, key: Key, mods: Mods, focused: 
             Key::Down => return crate::palette::step(shell, 1),
             Key::Up => return crate::palette::step(shell, -1),
             Key::Tab => return crate::palette::jump(shell, !mods.shift),
+            // Only at the very end of the text (the field is `app_keys`):
+            // take the inline completion (`Browser.acceptCompletion`).
+            Key::Right | Key::End if !mods.shift && crate::palette::accept(shell) => return,
             _ => {}
         }
     }
