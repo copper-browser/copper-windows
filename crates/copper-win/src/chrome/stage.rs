@@ -38,6 +38,8 @@ struct Pane {
 pub struct Stage {
     pub stage: NodeId,
     progress: NodeId,
+    /// Bumped by every change of load: a pending fade checks it.
+    progress_ticket: u64,
     hover: NodeId,
     hover_text: NodeId,
     panes: HashMap<TabId, Pane>,
@@ -55,6 +57,10 @@ pub enum Hit {
 }
 
 const PROGRESS_HEIGHT: f32 = 2.0;
+/// The hovered link's address: in from the foot and the side, and at most
+/// this wide.
+const HOVER_INSET: f32 = 8.0;
+const HOVER_WIDEST: f32 = 560.0;
 
 pub fn build(ui: &mut Ui, parent: NodeId) -> Stage {
     let stage = ui.tree.add(
@@ -81,34 +87,44 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Stage {
             .opacity(0.0)
             .role(Role::None),
     );
+    // The hovered link's address (a Linux / Windows addition: the Mac has
+    // none): 8 in from the foot and the side, 12 muted on the ground,
+    // 9 × 3 in, corners 7, a hairline and a small shadow; cut in the
+    // middle so the host and the end of the path both show; never in the
+    // pointer's way.
     let hover = ui.tree.add(
         stage,
         Node::row()
             .absolute(Abs {
-                left: Some(6.0),
+                left: Some(HOVER_INSET),
                 top: None,
                 right: None,
-                bottom: Some(6.0),
+                bottom: Some(HOVER_INSET),
             })
-            .height(24.0)
-            .max_width(560.0)
-            .padding(Insets::hv(9.0, 0.0))
+            .max_width(HOVER_WIDEST)
+            .padding(Insets::hv(9.0, 3.0))
             .align(Align::Center)
             .radius(7.0)
             .fill(Token::Ground)
             .stroke(Token::Hairline, 1.0)
-            .shadow(copper_win_ui::tokens::Shadow::new(0.08, 6.0, 1.0))
+            .shadow(copper_win_ui::tokens::Shadow::new(0.10, 3.0, 2.0))
             .layer()
+            .inert()
             .hidden(true)
             .role(Role::ToolTip),
     );
     let hover_text = ui.tree.add(
         hover,
-        Node::text("", 12.0).ink(Token::Muted).role(Role::None),
+        Node::text("", 12.0)
+            .ink(Token::Muted)
+            .trim(Trim::Middle)
+            .shrink(1.0)
+            .role(Role::None),
     );
     Stage {
         stage,
         progress,
+        progress_ticket: 0,
         hover,
         hover_text,
         panes: HashMap::new(),
@@ -184,13 +200,13 @@ impl Stage {
                 .text_align(TextAlign::Center)
                 .max_width(520.0),
         );
+        // `.buttonStyle(.plain)`: the words alone, no plate.
         let button = ui.tree.add(
             status,
             Node::row()
-                .height(26.0)
-                .padding(Insets::hv(10.0, 0.0))
-                .radius(7.0)
-                .hover_fill(Token::Hover)
+                .height(22.0)
+                .padding(Insets::hv(6.0, 0.0))
+                .radius(6.0)
                 .align(Align::Center)
                 .button("Try again"),
         );
@@ -304,25 +320,41 @@ impl Stage {
         }
     }
 
-    /// The line along the top: how far the shown page has come.
-    pub fn set_progress(&mut self, ui: &mut Ui, loading: bool, fraction: f64) {
+    /// The line along the top: how far the shown page has come (a Linux /
+    /// Windows addition). It starts at 0.08, runs to the end when the load
+    /// is done and goes 220 ms later — unless another load began.
+    /// Returns a ticket to [`Stage::progress_done`] after that wait.
+    pub fn set_progress(&mut self, ui: &mut Ui, loading: bool, fraction: f64) -> Option<u64> {
         let w = ui.tree.get(self.stage).map_or(0.0, |n| n.frame.w);
         let f = fraction.clamp(0.0, 1.0) as f32;
+        let mut ticket = None;
         if loading {
+            // A new load cancels the fade still waiting.
+            self.progress_ticket += 1;
             if !self.loading {
                 ui.tree.set_prop(self.progress, Prop::X, -w);
                 ui.tree.set_prop(self.progress, Prop::Opacity, 1.0);
             }
             // A little shows at once, so a slow start still says "coming".
-            let shown = f.max(0.08);
+            let shown = f.clamp(0.08, 1.0);
             ui.tree
                 .animate(self.progress, Prop::X, -(1.0 - shown) * w, motion::QUICK);
         } else if self.loading {
+            self.progress_ticket += 1;
             ui.tree.animate(self.progress, Prop::X, 0.0, motion::QUICK);
-            ui.tree
-                .animate(self.progress, Prop::Opacity, 0.0, motion::READING);
+            ticket = Some(self.progress_ticket);
         }
         self.loading = loading;
+        ticket
+    }
+
+    /// The wait after a finished load is over: the line goes, if no load
+    /// began since.
+    pub fn progress_done(&mut self, ui: &mut Ui, ticket: u64) {
+        if ticket == self.progress_ticket && !self.loading {
+            ui.tree
+                .animate(self.progress, Prop::Opacity, 0.0, motion::QUICK);
+        }
     }
 
     /// The hovered link's address at the foot of the page.
@@ -352,6 +384,11 @@ fn fill_status(ui: &mut Ui, p: &Pane, s: Option<&PageStatus>) {
             let label = label.to_string();
             ui.tree.edit(p.button, |n| n.a11y.name = label);
             ui.tree.set_hidden(p.button, false);
+            if ui.tree.get(p.status).is_some_and(|n| n.style.hidden) {
+                // In with `Motion.quick`.
+                ui.tree.set_prop(p.status, Prop::Opacity, 0.0);
+                ui.tree.animate(p.status, Prop::Opacity, 1.0, motion::QUICK);
+            }
             ui.tree.set_hidden(p.status, false);
             ui.tree.set_hidden(p.slot, true);
         }

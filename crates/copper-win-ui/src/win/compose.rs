@@ -16,7 +16,9 @@ use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
 use windows::Win32::Graphics::DirectComposition::{
-    IDCompositionTarget, IDCompositionVirtualSurface, IDCompositionVisual, IDCompositionVisual3,
+    IDCompositionAnimation, IDCompositionRotateTransform, IDCompositionTarget,
+    IDCompositionTransform3D, IDCompositionVirtualSurface, IDCompositionVisual,
+    IDCompositionVisual3,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -28,6 +30,7 @@ use super::gfx::Gfx;
 use super::paint::{Frame, Painter, bleed};
 use super::text::Fonts;
 use crate::geom::{Point, Rect};
+use crate::node::SPIN_PERIOD;
 use crate::theme::Theme;
 use crate::tree::{NodeId, Tree};
 
@@ -48,12 +51,18 @@ struct Applied {
     clip: Option<(f32, f32, f32, f32)>,
     kids_clip: Option<(f32, f32)>,
     kids_at: f32,
+    /// Turning ([`crate::node::Flags::spin`], shown) about `center`.
+    spin: bool,
+    center: (f32, f32),
 }
 
 struct Layer {
     visual: IDCompositionVisual3,
     kids: IDCompositionVisual3,
     slot: Option<IDCompositionVisual3>,
+    /// A spinning layer's turn: its rotation and the endless animation
+    /// driving the angle.
+    spin: Option<(IDCompositionRotateTransform, IDCompositionAnimation)>,
     surface: Option<IDCompositionVirtualSurface>,
     size: (u32, u32),
     bleed_px: u32,
@@ -159,6 +168,7 @@ impl Scene {
             .retain(|id, _| tree.contains(*id) && order.contains(id));
         for &id in &order {
             let is_slot = tree.get(id).is_some_and(|n| n.is_slot());
+            let spins = tree.get(id).is_some_and(|n| n.flags.spin);
             let parent = tree.parent(id).and_then(|p| tree.layer_of(p));
             if let Some(l) = self.layers.get_mut(&id) {
                 l.parent = parent;
@@ -187,12 +197,14 @@ impl Scene {
             } else {
                 None
             };
+            let spin = if spins { Some(turn(gfx)?) } else { None };
             self.layers.insert(
                 id,
                 Layer {
                     visual,
                     kids,
                     slot,
+                    spin,
                     surface: None,
                     size: (0, 0),
                     bleed_px: 0,
@@ -253,6 +265,9 @@ impl Scene {
             // parent layer (a parent layer's own opacity is inherited by the
             // visual tree).
             let mut opacity = n.transform.opacity;
+            if n.flags.reveal || n.flags.conceal {
+                opacity *= tree.shown_t(id);
+            }
             let mut clip: Option<Rect> = None;
             let mut cur = tree.parent(id);
             while let Some(c) = cur {
@@ -287,6 +302,8 @@ impl Scene {
                 }),
                 kids_clip: n.flags.clip.then(|| (px(w.w, s), px(w.h, s))),
                 kids_at: bleed_px,
+                spin: n.flags.spin && shown && opacity > 0.0,
+                center: (bleed_px + w.w * s / 2.0, bleed_px + w.h * s / 2.0),
             };
             if l.applied == Some(a) {
                 continue;
@@ -437,9 +454,24 @@ fn apply(l: &Layer, a: Applied, before: Option<Applied>) -> Result<()> {
             l.visual.SetOpacity2(a.opacity)?;
             l.visual.SetVisible(a.opacity > 0.0)?;
         }
-        if before.is_none_or(|b| b.scale != a.scale || b.anchor != a.anchor) {
-            let m = scale_about(a.scale, a.anchor.0, a.anchor.1);
-            l.visual.SetTransform2(&m)?;
+        match &l.spin {
+            // Turning while shown; a hidden spinner costs the compositor
+            // nothing.
+            Some((rotate, angle)) if a.spin => {
+                if before.is_none_or(|b| !b.spin || b.center != a.center) {
+                    rotate.SetCenterX2(a.center.0)?;
+                    rotate.SetCenterY2(a.center.1)?;
+                    rotate.SetAngle(angle)?;
+                    let t: IDCompositionTransform3D = rotate.cast()?;
+                    l.visual.SetTransform(&t)?;
+                }
+            }
+            _ => {
+                if before.is_none_or(|b| b.spin || b.scale != a.scale || b.anchor != a.anchor) {
+                    let m = scale_about(a.scale, a.anchor.0, a.anchor.1);
+                    l.visual.SetTransform2(&m)?;
+                }
+            }
         }
         if before.is_none_or(|b| b.clip != a.clip) {
             match a.clip {
@@ -473,6 +505,20 @@ fn apply(l: &Layer, a: Applied, before: Option<Applied>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A rotation whose angle runs 0→360° once every [`SPIN_PERIOD`], for
+/// ever (`.linear(duration:).repeatForever(autoreverses: false)`).
+fn turn(gfx: &Gfx) -> Result<(IDCompositionRotateTransform, IDCompositionAnimation)> {
+    let period = f64::from(SPIN_PERIOD);
+    // SAFETY: creating and scripting objects on the live device.
+    unsafe {
+        let rotate = gfx.dcomp.CreateRotateTransform()?;
+        let angle = gfx.dcomp.CreateAnimation()?;
+        angle.AddCubic(0.0, 0.0, 360.0 / SPIN_PERIOD, 0.0, 0.0)?;
+        angle.AddRepeat(period, period)?;
+        Ok((rotate, angle))
+    }
 }
 
 /// A 2-D scale by `s` about (`ax`, `ay`), as the 4×4 matrix visuals take.

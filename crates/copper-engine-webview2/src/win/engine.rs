@@ -12,18 +12,19 @@ use copper_engine::{
     ScriptId, UserScript,
 };
 
-use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+use windows::Win32::Foundation::{HWND, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 
 use super::backstage::WebView2Backstage;
 use super::env::{Env, EnvConfig};
 use super::page::{PageInner, WebView2Page};
 use super::profile::{ProfileInner, WebView2Profile};
+use super::save_dialog::{AskOwner, SaveQueue};
 use super::schemes::Schemes;
 use super::window::{OwnedWindow, park_window};
 use super::{com, paths};
 use crate::filter::{FilterStore, WebView2ContentFilter};
-use crate::util::webview2_profile_name;
+use crate::profile_home;
 
 /// Extra browser switches, space-separated (diagnostics; see `args.rs`).
 pub const ARGS_ENV: &str = "COPPER_WEBVIEW2_ARGS";
@@ -45,6 +46,12 @@ pub struct EngineConfig {
     /// Keep WebView2's own error page for failed loads (see
     /// [`WebView2Engine::set_builtin_error_page`]).
     pub builtin_error_page: bool,
+    /// The profile kept in WebView2's own default profile, which the browser
+    /// process sets up anyway, so a fresh install initializes one profile
+    /// rather than two (the first navigation is seconds sooner). It keeps
+    /// its named WebView2 profile if it already has one. Default: `default`,
+    /// the shell's shared profile; `None`: every profile is named.
+    pub main_profile: Option<ProfileId>,
 }
 
 impl Default for EngineConfig {
@@ -55,6 +62,7 @@ impl Default for EngineConfig {
             browser_folder: None,
             extra_arguments: Vec::new(),
             builtin_error_page: true,
+            main_profile: ProfileId::new("default").ok(),
         }
     }
 }
@@ -98,9 +106,16 @@ pub(crate) struct EngineInner {
     filters: FilterStore,
     pub scripts: EngineScripts,
     pub builtin_error_page: Cell<bool>,
+    /// See [`EngineConfig::main_profile`].
+    main_profile: Option<ProfileId>,
     pub backstage: WebView2Backstage,
     /// Custom-scheme handlers (`Engine::register_scheme`).
     pub schemes: Schemes,
+    /// Downloads ask where to save, with the dialog owned by this window
+    /// (`set_download_ask`); `None`: saved to the download folder.
+    pub download_ask: Cell<Option<AskOwner>>,
+    /// The Save As dialogs downloads ask with, one at a time.
+    pub save_queue: SaveQueue,
 }
 
 impl EngineInner {
@@ -163,8 +178,11 @@ impl WebView2Engine {
             filters,
             scripts: EngineScripts::default(),
             builtin_error_page: Cell::new(config.builtin_error_page),
+            main_profile: config.main_profile,
             backstage: WebView2Backstage::new(),
             schemes: Schemes::default(),
+            download_ask: Cell::new(None),
+            save_queue: SaveQueue::default(),
         });
         Ok(WebView2Engine { inner })
     }
@@ -200,6 +218,22 @@ impl WebView2Engine {
     /// Applies to pages made from now on.
     pub fn set_builtin_error_page(&self, enabled: bool) {
         self.inner.builtin_error_page.set(enabled);
+    }
+
+    /// Ask where to save every download before it writes anything (`true`),
+    /// or save it to its profile's download folder under a free name
+    /// (`false`, the default). Asking holds a starting download — a page's
+    /// or `Profile::download`'s — while the system Save As dialog, owned by
+    /// `owner` (disabled while it is open), offers the suggested name in the
+    /// profile's download folder; it runs on a thread of its own, so the UI
+    /// thread keeps running. Saved: the download goes to exactly that path
+    /// and reports `Started` and `Destination` as usual. Cancelled or
+    /// closed: it is cancelled before a byte is written (no file, no
+    /// partial file) and reports only `Failed { cancelled: true }`.
+    /// Applies to downloads starting from now on.
+    pub fn set_download_ask(&self, ask: bool, owner: HWND) {
+        let owner = ask.then_some(AskOwner(owner.0 as isize));
+        self.inner.download_ask.set(owner);
     }
 }
 
@@ -255,7 +289,8 @@ impl Engine for WebView2Engine {
         &self.inner.paths
     }
 
-    /// A WebView2 profile per id (`ControllerOptions.ProfileName`); an
+    /// A WebView2 profile per id (`ControllerOptions.ProfileName`, or
+    /// WebView2's default profile for [`EngineConfig::main_profile`]); an
     /// ephemeral one is InPrivate (nothing written to disk).
     fn profile(&self, id: &ProfileId, ephemeral: bool) -> Result<WebView2Profile> {
         let key = (id.clone(), ephemeral);
@@ -275,12 +310,22 @@ impl Engine for WebView2Engine {
             std::fs::create_dir_all(&dir)?;
             Some(dir)
         };
+        let udf = self.inner.env.user_data_dir();
+        let name = profile_home::webview2_profile(
+            id,
+            ephemeral,
+            self.inner.main_profile.as_ref(),
+            |name| profile_home::kept(&profile_home::named_profile_dir(udf, name)),
+        );
+        if name.is_none() {
+            tracing::debug!("profile {id}: in WebView2's default profile");
+        }
         let inner = ProfileInner::new(
             self.inner.clone(),
             id.clone(),
             ephemeral,
             data_dir,
-            webview2_profile_name(id.as_str()),
+            name,
             self.inner.paths.downloads_dir.clone(),
         );
         let mut cache = self.inner.profiles.borrow_mut();

@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetActiveWindow, GetFocus};
-use windows::Win32::UI::WindowsAndMessaging::{GetCaretBlinkTime, KillTimer, SetTimer};
+use windows::Win32::UI::WindowsAndMessaging::{GetCaretBlinkTime, IsChild, KillTimer, SetTimer};
 
 use super::clock::Clock;
 use super::compose::Scene;
@@ -43,6 +43,9 @@ pub(super) enum Command {
     SetPos(RECT),
     /// Give the window keyboard focus (UI Automation moved focus into it).
     FocusWindow,
+    /// Give the keyboard back to a child window (a page's) that had it
+    /// before a menu took it — unless something else has it by now.
+    FocusChild(HWND),
     Minimize,
     ToggleMaximize,
     Destroy,
@@ -57,6 +60,15 @@ pub(super) enum Capture {
     Node(NodeId),
     /// A press in a page.
     Slot(NodeId),
+}
+
+/// A press on a draggable node: where it began, and whether it has moved
+/// far enough to be a drag.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Drag {
+    pub source: NodeId,
+    pub from: Point,
+    pub started: bool,
 }
 
 /// A finger or pen panning a scroller.
@@ -89,6 +101,10 @@ pub struct Ui {
     pub(super) space: Option<SpaceTheme>,
     pub(super) backdrop: Backdrop,
     pub(super) mica: bool,
+    /// Filling the monitor: no caption buttons, no edges, nothing to drag.
+    pub(super) fullscreen: bool,
+    /// The window's ground is black (a page has the screen).
+    blackout: bool,
     pub(super) dpi: u32,
     pub(super) size: Size,
     pub(super) active: bool,
@@ -112,6 +128,10 @@ pub struct Ui {
     pub(super) tip_for: Option<NodeId>,
     pub(super) pan: Option<Pan>,
     pub(super) over_slot: Option<NodeId>,
+    /// The hovered target the app was last told of (`Event::Hover`).
+    pub(super) hover_sent: Option<NodeId>,
+    /// A press on a draggable node, and whether it became a drag.
+    pub(super) drag: Option<Drag>,
     pub(super) ime_on: bool,
     pub(super) uia: uia::Bridge,
     stats: FrameStats,
@@ -119,6 +139,9 @@ pub struct Ui {
     last_frame: Option<Instant>,
     pub(super) created: Instant,
     pub(super) shown: bool,
+    /// The child window (a page's) that had the keyboard when the open
+    /// menu took it; it gets it back when the menu closes.
+    menu_from: Option<HWND>,
 }
 
 /// What the window is made with.
@@ -162,6 +185,8 @@ impl Ui {
             space: None,
             backdrop: p.backdrop,
             mica,
+            fullscreen: false,
+            blackout: false,
             dpi,
             size: Size::ZERO,
             active: true,
@@ -183,6 +208,8 @@ impl Ui {
             tip_for: None,
             pan: None,
             over_slot: None,
+            hover_sent: None,
+            drag: None,
             ime_on: false,
             uia: uia::Bridge::new(p.host.clone(), p.hwnd),
             stats: FrameStats::new(),
@@ -190,6 +217,7 @@ impl Ui {
             last_frame: None,
             created: p.created,
             shown: false,
+            menu_from: None,
         };
         ui.apply_theme();
         ui.sync_client_size();
@@ -251,6 +279,27 @@ impl Ui {
         self.apply_theme();
     }
 
+    /// The window fills the monitor (the app sizes it): the caption
+    /// buttons go, and no edge resizes it nor any band drags it.
+    pub fn set_fullscreen(&mut self, on: bool) {
+        if self.fullscreen == on {
+            return;
+        }
+        self.fullscreen = on;
+        self.tree.set_hidden(self.caption.bar, on);
+    }
+
+    /// Black behind everything while a page has the screen, so what shows
+    /// of the window around the page as it goes in and out is not a pale
+    /// band (`App.swift` 292–294).
+    pub fn set_blackout(&mut self, on: bool) {
+        if self.blackout == on {
+            return;
+        }
+        self.blackout = on;
+        self.apply_theme();
+    }
+
     /// Colour the column for a space (`None`: the app's paper).
     pub fn set_space(&mut self, space: Option<SpaceTheme>) {
         if self.space == space {
@@ -274,7 +323,9 @@ impl Ui {
         };
         // Without the material (Windows 10, Mica off) the window's own
         // ground fills whatever the app leaves uncovered.
-        let ground = if self.mica {
+        let ground = if self.blackout {
+            crate::theme::Swatch::Fixed(crate::geom::Color::BLACK)
+        } else if self.mica {
             crate::theme::Swatch::Clear
         } else {
             crate::theme::Swatch::Token(crate::theme::Token::Ground)
@@ -320,6 +371,13 @@ impl Ui {
         if before == id {
             if let Some(i) = id {
                 self.tree.focus(Some(i), visible);
+                // The control kept its focus while a page took the
+                // keyboard by itself: the keyboard comes back too.
+                // SAFETY: plain reads of this thread's input state.
+                let (focus, active) = unsafe { (GetFocus(), GetActiveWindow()) };
+                if focus != self.hwnd && active == self.hwnd {
+                    self.commands.push(Command::FocusWindow);
+                }
             }
             return;
         }
@@ -338,7 +396,7 @@ impl Ui {
         if id.is_some() && focus != self.hwnd && active == self.hwnd {
             self.commands.push(Command::FocusWindow);
         }
-        let field = id.is_some_and(|i| self.tree.get(i).is_some_and(|n| n.field_ref().is_some()));
+        let field = id.is_some_and(|i| self.takes_ime(i));
         if field != self.ime_on {
             self.ime_on = field;
             ime::enable(self.hwnd, field);
@@ -377,6 +435,46 @@ impl Ui {
         self.fit_field(id);
     }
 
+    /// Set a field's grey completion (drawn after the text while the caret
+    /// is at its end; `""` takes it away). Not part of the text.
+    pub fn set_field_ghost(&mut self, id: NodeId, ghost: &str) {
+        let same = self
+            .tree
+            .get(id)
+            .and_then(|n| n.field_ref())
+            .is_none_or(|f| f.ghost == ghost);
+        if !same {
+            self.tree.with_field(id, |f| f.ghost = ghost.to_owned());
+        }
+    }
+
+    /// Make a field a password field (or not) after it was built.
+    pub fn set_field_secure(&mut self, id: NodeId, secure: bool) {
+        let same = self
+            .tree
+            .get(id)
+            .and_then(|n| n.field_ref())
+            .is_none_or(|f| f.secure == secure);
+        if same {
+            return;
+        }
+        self.tree.with_field(id, |f| {
+            f.edit.cancel_composition();
+            f.secure = secure;
+        });
+        if self.tree.focused() == Some(id) {
+            let ime = !secure;
+            if ime != self.ime_on {
+                if !ime {
+                    ime::cancel(self.hwnd);
+                }
+                self.ime_on = ime;
+                ime::enable(self.hwnd, ime);
+            }
+        }
+        self.fit_field(id);
+    }
+
     /// Change a field's editing state in place — its selection, an inline
     /// completion after the caret — and keep the caret in view. The text
     /// may change too; no [`Event::FieldChanged`] is sent for it.
@@ -394,6 +492,12 @@ impl Ui {
         super::clipboard::set(self.hwnd, text)
     }
 
+    /// The text on the clipboard (a Paste button); `None` if there is no
+    /// text or another program holds the clipboard.
+    pub fn clipboard_text(&self) -> Option<String> {
+        super::clipboard::get(self.hwnd)
+    }
+
     /// A field's text.
     pub fn field_text(&self, id: NodeId) -> Option<&str> {
         self.tree.get(id)?.field_ref().map(|f| f.edit.text())
@@ -403,13 +507,33 @@ impl Ui {
     /// [`Event::MenuChosen`] tagged `menu`.
     pub fn show_menu(&mut self, menu: u32, items: &Menu, at: Point) {
         self.hide_tip();
+        // A menu replacing a menu keeps the page it came from.
+        let carried = self.menu_from.take();
         self.close_menu();
         match MenuPopup::open(self, menu, items, at) {
             Ok(m) => {
                 self.uia.menu_opened(m.hwnd(), m.card());
                 self.menu = Some(m);
+                // The menu's keys come to this window: while a page holds
+                // the keyboard, Escape, the arrows and the letters would go
+                // to the page instead. It is handed back on close.
+                // SAFETY: plain reads of this thread's focus state.
+                let focus = unsafe { GetFocus() };
+                let page = (!focus.is_invalid()
+                    && focus != self.hwnd
+                    && unsafe { IsChild(self.hwnd, focus) }.as_bool())
+                .then_some(focus);
+                self.menu_from = carried.or(page);
+                if self.menu_from.is_some() && focus != self.hwnd {
+                    self.commands.push(Command::FocusWindow);
+                }
             }
-            Err(e) => self.recover(&e),
+            Err(e) => {
+                if let Some(h) = carried {
+                    self.commands.push(Command::FocusChild(h));
+                }
+                self.recover(&e);
+            }
         }
     }
 
@@ -424,6 +548,13 @@ impl Ui {
     pub(super) fn drop_menu(&mut self) -> Option<u32> {
         let m = self.menu.take()?;
         self.uia.menu_closed();
+        // Back to the page, if the keyboard is still where the menu put it
+        // and no control took it since.
+        if let Some(h) = self.menu_from.take()
+            && self.tree.focused().is_none()
+        {
+            self.commands.push(Command::FocusChild(h));
+        }
         let id = m.id;
         m.close(&mut self.fonts);
         Some(id)
@@ -447,6 +578,12 @@ impl Ui {
         if let Some((h, _)) = self.slots.remove(&id) {
             h.detach();
         }
+    }
+
+    /// Say `text` to a screen reader (a toast or other announcement),
+    /// without moving focus.
+    pub fn announce(&mut self, text: &str) {
+        self.uia.announce(text);
     }
 
     /// Register picture `id` for image nodes: premultiplied BGRA, `w`×`h`.

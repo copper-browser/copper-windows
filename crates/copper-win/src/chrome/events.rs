@@ -13,8 +13,8 @@ use crate::platform::Shell;
 use copper_core::browser::TabId;
 use copper_engine_webview2::WebView2Page;
 use copper_engine_webview2::hosting::{FocusExit, KeyEventKind, PageChange};
+use copper_shell_core::OpenTab;
 use copper_shell_core::palette::complete::Purpose;
-use copper_shell_core::{OpenTab, Question};
 use copper_win_ui::input::Key;
 use copper_win_ui::input::Mods;
 use copper_win_ui::win::Ui;
@@ -39,14 +39,22 @@ pub fn handle(chrome: &Rc<Chrome>, e: Event) {
         Event::ContextMenu { target, at } => context_menu(chrome, &shell, target, at),
         Event::MenuChosen { menu, item } => menu_chosen(chrome, &shell, menu, item),
         Event::MenuDismissed { .. } => {
-            chrome.edit(|_, st| st.menus.tab = None);
+            chrome.edit(|_, st| {
+                st.menus.tab = None;
+                super::pagemenu::dismissed(st);
+            });
         }
         Event::FieldChanged(id) if is_card_field(chrome, id) => crate::palette::changed(&shell),
         Event::FieldSubmit(id) if is_card_field(chrome, id) => {
             crate::palette::submit(&shell, alt_down())
         }
-        Event::FieldCancel(id) if is_card_field(chrome, id) => crate::palette::close(&shell),
+        Event::FieldCancel(id) if is_card_field(chrome, id) => crate::palette::cancel(&shell),
+        Event::FieldChanged(id) | Event::FieldSubmit(id) | Event::FieldCancel(id)
+            if crate::palette::strip_field(&shell, id, &e) => {}
         Event::FieldChanged(id) | Event::FieldSubmit(id) | Event::FieldCancel(id) => {
+            if super::letter::field_event(&shell, id, &e) {
+                return;
+            }
             crate::find::field_event(&shell, id, &e);
             crate::panels::field_event(&shell, id, &e);
         }
@@ -58,6 +66,10 @@ pub fn handle(chrome: &Rc<Chrome>, e: Event) {
             }
         }
         Event::Appearance { .. } => shell.dark_changed(),
+        // A link's address does not outlive the window's attention.
+        Event::Activated(false) => chrome.edit(|ui, st| st.stage.set_hover(ui, None)),
+        // Settings may have changed where downloads go.
+        Event::Activated(true) => shell.view().apply_download_ask(&shell),
         Event::CloseRequested => crate::app::quit(&shell),
         Event::Closed => copper_win_rt::quit(0),
         _ => {}
@@ -89,6 +101,9 @@ enum Clicked {
 }
 
 fn click(chrome: &Rc<Chrome>, shell: &Shell, id: NodeId) {
+    if super::welcome::click(shell, id) {
+        return;
+    }
     let Some(what) = chrome.read(|ui, st| {
         if let Some((a, yes)) = st.sheet.answered(ui, id) {
             return Clicked::Answer(a, yes);
@@ -129,6 +144,9 @@ fn click(chrome: &Rc<Chrome>, shell: &Shell, id: NodeId) {
         Clicked::Strip(h) => strip_click(shell, h),
         Clicked::Stage(StageHit::StatusButton(tab)) => shell.reload(&tab),
         Clicked::Other(id) => {
+            if crate::palette::click(shell, id) {
+                return;
+            }
             if !crate::panels::click(shell, id) && !crate::forms::click(shell, id) {
                 crate::find::click(shell, id);
             }
@@ -166,18 +184,12 @@ fn column_click(chrome: &Rc<Chrome>, shell: &Shell, h: ColumnHit) {
             crate::commands::run(shell, "settings");
         }
         ColumnHit::Bookmarks => {
-            crate::commands::run(shell, "show-bookmarks");
+            crate::commands::run(shell, "bookmarks-door");
         }
         ColumnHit::Canvas => {
             crate::commands::run(shell, "new-canvas");
         }
-        ColumnHit::Space(id) => {
-            shell.switch_space(&id);
-        }
-        ColumnHit::NewSpace => {
-            crate::commands::run(shell, "new-space");
-        }
-        ColumnHit::SpaceMenu => crate::palette::open(shell, Purpose::Palette, false),
+        h => crate::palette::spaces::column_hit(chrome, shell, h),
     }
 }
 
@@ -215,7 +227,11 @@ fn tab_at(chrome: &Chrome, id: NodeId) -> Option<TabId> {
 }
 
 fn context_menu(chrome: &Rc<Chrome>, shell: &Shell, target: Option<NodeId>, at: Point) {
+    if crate::palette::spaces::context_menu(chrome, shell, target, at) {
+        return;
+    }
     let Some(tab) = target.and_then(|t| tab_at(chrome, t)) else {
+        crate::panels::context_menu(shell, target, at);
         return;
     };
     let facts = {
@@ -236,8 +252,15 @@ fn context_menu(chrome: &Rc<Chrome>, shell: &Shell, target: Option<NodeId>, at: 
 }
 
 fn menu_chosen(chrome: &Rc<Chrome>, shell: &Shell, menu: u32, chosen: u32) {
+    if crate::palette::spaces::menu_chosen(shell, menu, chosen) {
+        return;
+    }
     if menu == crate::forms::PICKER_MENU {
         crate::forms::picked(chosen);
+        return;
+    }
+    if menu == super::pagemenu::PAGE_MENU {
+        super::pagemenu::chosen(shell, chosen);
         return;
     }
     if menu != menus::TAB_MENU {
@@ -254,6 +277,7 @@ fn menu_chosen(chrome: &Rc<Chrome>, shell: &Shell, menu: u32, chosen: u32) {
         item::UNPIN => {
             shell.unpin(&tab);
         }
+        item::CHANGE_LETTER => super::letter::open(shell, &tab),
         item::DUPLICATE => duplicate(shell, &tab),
         item::COPY_ADDRESS => {
             let url = shell.browser().tab(&tab).map(|t| t.url.clone());
@@ -294,51 +318,38 @@ pub fn duplicate(shell: &Shell, tab: &TabId) {
     }
 }
 
-/// Ask before deleting a space (its tabs go with it).
-pub fn ask_delete_space(shell: &Shell, id: &str) {
-    let name = shell
-        .browser()
-        .space(id)
-        .map(|s| super::model::title_of(&s.name))
-        .unwrap_or_default();
-    let weak = shell.downgrade();
-    let id = id.to_string();
-    copper_shell_core::ShellView::ask(
-        shell.view(),
-        shell,
-        Question {
-            title: format!("Delete {name}?"),
-            detail: Some("Its tabs are closed.".into()),
-            deny: "Cancel".into(),
-            allow: "Delete".into(),
-        },
-        Box::new(move |yes| {
-            if yes && let Some(s) = weak.upgrade() {
-                s.remove_space(&id, false);
-            }
-        }),
-    );
-}
-
 /// Keys the chrome's focused node did not use.
 fn key_event(chrome: &Rc<Chrome>, shell: &Shell, key: Key, mods: Mods, focused: Option<NodeId>) {
+    if super::welcome::key_event(shell, key, mods) {
+        return;
+    }
     let in_card = focused.is_some()
         && focused
             == chrome
                 .read(|_, st| st.card.is_open().then_some(st.card.field))
                 .flatten();
+    if in_card && crate::palette::key(shell, key, mods) {
+        return;
+    }
     if in_card && !mods.ctrl && !mods.alt {
         match key {
             Key::Down => return crate::palette::step(shell, 1),
             Key::Up => return crate::palette::step(shell, -1),
             Key::Tab => return crate::palette::jump(shell, !mods.shift),
+            // Only at the very end of the text (the field is `app_keys`):
+            // take the inline completion (`Browser.acceptCompletion`).
+            Key::Right | Key::End if !mods.shift && crate::palette::accept(shell) => return,
             _ => {}
         }
     }
     if crate::panels::key(shell, key, mods, focused) {
         return;
     }
-    if let Some(id) = keys::command(Chord::new(key, mods)) {
+    if crate::find::key(shell, key, mods, focused) {
+        return;
+    }
+    let chord = Chord::new(key, mods);
+    if let Some(id) = crate::panels::hidden::takes(shell, chord).or_else(|| keys::command(chord)) {
         crate::commands::run(shell, id);
     }
 }
@@ -346,6 +357,8 @@ fn key_event(chrome: &Rc<Chrome>, shell: &Shell, key: Key, mods: Mods, focused: 
 /// Wire a new page to the chrome: Copper's keys while the page has focus,
 /// Tab out of the page into the chrome, full screen and the status text.
 pub fn hook_page(shell: &Shell, tab: &TabId, page: &WebView2Page) {
+    super::permit::watch(shell, tab, page);
+    super::pagemenu::watch(shell, tab, page);
     let weak = shell.downgrade();
     page.on_accelerator_key(move |k| {
         if !matches!(k.kind, KeyEventKind::KeyDown | KeyEventKind::SystemKeyDown) {
@@ -362,7 +375,9 @@ pub fn hook_page(shell: &Shell, tab: &TabId, page: &WebView2Page) {
                 alt: k.alt,
             },
         );
-        let Some(id) = keys::page_takes(chord, shell.view().chrome().has_overlay()) else {
+        let Some(id) = crate::panels::hidden::takes(&shell, chord)
+            .or_else(|| keys::page_takes(chord, shell.view().chrome().has_overlay()))
+        else {
             return false;
         };
         // Run on the loop's next turn: never inside WebView2's callback.
@@ -395,11 +410,19 @@ pub fn hook_page(shell: &Shell, tab: &TabId, page: &WebView2Page) {
         while let Some(c) = changes.next().await {
             let Some(shell) = weak.upgrade() else { return };
             match c {
-                PageChange::Fullscreen(on) if shell.active_id().as_ref() == Some(&tab) => {
-                    shell.view().set_fullscreen(on, true);
-                }
+                PageChange::Fullscreen(on) => shell.view().page_fullscreen(&shell, &tab, on),
                 PageChange::Focus(on) => {
                     tracing::debug!(target: "copper::focus", tab = %tab.short(), on, "page focus");
+                    // A page that takes the keyboard by itself (a new
+                    // blank tab's first load) does not take it from the
+                    // open card: typing goes on into the card's field.
+                    if on {
+                        shell.view().chrome().edit(|ui, st| {
+                            if st.card.is_open() {
+                                ui.focus(Some(st.card.field));
+                            }
+                        });
+                    }
                 }
                 PageChange::History if shell.active_id().as_ref() == Some(&tab) => {
                     let nav = super::model::Model::nav_of(&shell);
@@ -423,7 +446,8 @@ pub fn apply_layout(ui: &mut Ui, st: &mut State) {
     let strip = !st.side && !st.immersed;
     ui.tree.set_hidden(st.column.side, !column);
     ui.tree.set_hidden(st.strip.strip, !strip);
-    ui.tree.set_hidden(st.ids.band, !side);
+    // The band is the caption buttons' room over the page.
+    ui.tree.set_hidden(st.ids.band, !side || st.full);
     ui.tree.set_hidden(st.ids.unfold, !(side && st.folded));
     let edge = if column { 1.0 } else { 0.0 };
     ui.tree.edit(st.ids.well, |n| n.style.padding.left = edge);

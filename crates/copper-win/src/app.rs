@@ -71,7 +71,11 @@ pub fn run(args: Vec<String>) -> i32 {
             handed(&s, &open);
         }
     });
+    shell.view().apply_download_ask(&shell);
     open_all(&shell, &open);
+    if crate::chrome::welcome::wanted(&shell, !open.is_empty()) {
+        crate::chrome::welcome::show(&shell);
+    }
     if let Some(path) = opts.screenshot.clone() {
         screenshot_then_quit(&shell, path);
     }
@@ -111,6 +115,7 @@ fn build(opts: Options) -> Shell {
     shell.view().chrome().attach(&shell);
     crate::actions::register(&shell);
     crate::features::register(&shell);
+    WinView::listen_downloads(&shell);
     shell.start();
     shell
 }

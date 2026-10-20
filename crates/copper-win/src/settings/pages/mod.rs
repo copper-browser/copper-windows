@@ -23,6 +23,7 @@ mod intelligence;
 mod labs;
 mod passwords;
 mod privacy;
+mod spaces;
 mod tabs;
 mod updates;
 mod voice;
@@ -32,6 +33,7 @@ pub fn all() -> Vec<Rc<dyn Page>> {
     vec![
         Rc::new(general::General),
         Rc::new(tabs::Tabs),
+        Rc::new(spaces::Spaces),
         Rc::new(downloads::Downloads),
         Rc::new(extensions::Extensions),
         Rc::new(intelligence::Intelligence),

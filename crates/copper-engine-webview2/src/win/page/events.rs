@@ -40,6 +40,8 @@ const PROGRESS_DOM_READY: f64 = 0.7;
 pub(super) fn wire(page: &Rc<PageInner>, wv: &Wv) -> WinResult {
     let old = std::mem::take(&mut *page.tokens.borrow_mut());
     drop(old);
+    // Navigation ids are the webview's own.
+    page.refused.borrow_mut().clear();
     let mut t = Tokens::default();
     let r = wire_into(page, wv, &mut t);
     *page.tokens.borrow_mut() = t;
@@ -61,7 +63,9 @@ fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
             if let (Some(p), Some(a)) = (pw.upgrade(), a) {
                 let url = get_string(|s| unsafe { a.Uri(s) }).ok();
                 let redirected = get_bool(|b| unsafe { a.IsRedirected(b) }).unwrap_or(false);
-                p.nav_started(url, redirected);
+                if p.navigation_allowed(&a, url.as_deref(), redirected) {
+                    p.nav_started(url, redirected);
+                }
             }
             Ok(())
         }
@@ -130,7 +134,9 @@ fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
         NavigationCompleted,
         NavigationCompletedEventHandler,
         move |_, a: Option<ICoreWebView2NavigationCompletedEventArgs>| {
-            if let (Some(p), Some(a)) = (pw.upgrade(), a) {
+            if let (Some(p), Some(a)) = (pw.upgrade(), a)
+                && !p.completion_refused(&a)
+            {
                 p.nav_completed(&a);
             }
             Ok(())
@@ -365,13 +371,15 @@ fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
             ContextMenuRequested,
             ContextMenuRequestedEventHandler,
             move |_, a: Option<ICoreWebView2ContextMenuRequestedEventArgs>| {
-                if let (Some(p), Some(a)) = (pw.upgrade(), a)
-                    && p.backstaged()
-                {
-                    unsafe { a.SetHandled(true)? };
-                    p.profile.engine.backstage.blocked();
+                match (pw.upgrade(), a) {
+                    (Some(p), Some(a)) if p.backstaged() => {
+                        unsafe { a.SetHandled(true)? };
+                        p.profile.engine.backstage.blocked();
+                        Ok(())
+                    }
+                    (Some(p), Some(a)) => p.context_menu_requested(&a),
+                    _ => Ok(()),
                 }
-                Ok(())
             }
         )?;
     }
@@ -415,14 +423,7 @@ fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
             move |_, a: Option<ICoreWebView2DownloadStartingEventArgs>| {
                 match (pw.upgrade(), a) {
                     (Some(p), Some(a)) => {
-                        let dir = p.profile.download_dir();
-                        downloads::take_over(
-                            &p.profile.downloads,
-                            &a,
-                            &dir,
-                            Some(Rc::downgrade(&p)),
-                            None,
-                        )
+                        downloads::take_over(&p.profile, &a, Some(Rc::downgrade(&p)), None, || {})
                     }
                     _ => Ok(()),
                 }
@@ -800,6 +801,8 @@ impl PageInner {
     }
 
     /// Route a child frame's page-world messages (and its children's).
+    /// The handlers go with [`FrameHandlers`] (see there for why a
+    /// destroyed frame's are never removed).
     fn frame_created(self: &Rc<Self>, frame: ICoreWebView2Frame) {
         let mut tokens = Tokens::default();
         let w = Rc::downgrade(self);
@@ -855,13 +858,12 @@ impl PageInner {
                 // there would release the handler that is running.
                 copper_win_rt::spawn_local(async move {
                     if let Some(p) = pw.upgrade() {
-                        // Its handlers are removed (WebView2 calls) after
-                        // the borrow ends.
-                        let removed: Vec<_> = {
+                        // Dropped (a WebView2 call) after the borrow ends.
+                        let removed: Vec<FrameHandlers> = {
                             let mut frames = p.frames.borrow_mut();
                             let (keep, removed) = std::mem::take(&mut *frames)
                                 .into_iter()
-                                .partition(|(f, _)| f != &gone);
+                                .partition(|h| h.frame != gone);
                             *frames = keep;
                             removed
                         };
@@ -874,7 +876,9 @@ impl PageInner {
         if let Err(e) = r {
             tracing::debug!("frame lifetime: {e}");
         }
-        self.frames.borrow_mut().push((frame, tokens));
+        self.frames
+            .borrow_mut()
+            .push(FrameHandlers { frame, tokens });
     }
 
     /// Answer the one request `load_html` registered a filter for; `false`
@@ -925,6 +929,39 @@ impl PageInner {
                     COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
                 );
             }
+        }
+    }
+}
+
+/// A child frame the page routes messages for, with the handlers it
+/// registered on it (`PageInner::frames`).
+///
+/// Dropping it removes the handlers only while the frame lives. Removing
+/// handlers from a destroyed frame is not merely useless: in WebView2
+/// (seen on runtime 155) `ICoreWebView2Frame7::remove_FrameCreated` for the
+/// frame's last `FrameChildFrameCreated` handler calls
+/// `EmbeddedBrowserWebViewFrameCore::UpdateHasFrameCreatedEventHandlers`,
+/// which `CHECK`s that the frame still exists, with no destroyed-frame
+/// guard (`add_FrameCreated` has one) — a breakpoint (`0x80000003`) that
+/// kills the *app* process. Pages that create and remove iframes (Google
+/// search, sign-in pages, ads) destroy frames all the time, and so does
+/// every navigation away from a page with iframes. A destroyed frame's
+/// handlers are released with the frame object instead.
+pub(crate) struct FrameHandlers {
+    pub frame: ICoreWebView2Frame,
+    tokens: Tokens,
+}
+
+impl Drop for FrameHandlers {
+    fn drop(&mut self) {
+        // `IsDestroyed` is true whenever the frame's link to the browser
+        // (what the CHECK tests) is gone; if it cannot be asked, the
+        // frame is treated as gone too.
+        let destroyed = get_bool(|b| unsafe { self.frame.IsDestroyed(b) }).unwrap_or(true);
+        if destroyed {
+            self.tokens.forget();
+        } else {
+            self.tokens.clear();
         }
     }
 }

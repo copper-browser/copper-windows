@@ -171,15 +171,23 @@ async fn wire(profile: &Rc<ProfileInner>, wv: &Wv) -> copper_engine::Result<Toke
         DownloadStartingEventHandler,
         move |_, args: Option<ICoreWebView2DownloadStartingEventArgs>| {
             if let (Some(p), Some(args)) = (me.upgrade(), args) {
-                let job = p.downloads.current.borrow_mut().take();
-                let (id, page) = match job {
-                    Some(j) => (Some(j.id), j.page),
+                let (id, page) = match &*p.downloads.current.borrow() {
+                    Some(j) => (Some(j.id), j.page.clone()),
                     None => (None, None),
                 };
-                take_over(&p.downloads, &args, &p.download_dir(), page, id)?;
-                // The next fetch navigates this webview: not while the
-                // navigation that became this download is still settling.
-                copper_win_rt::spawn_local(async move { pump(&p) });
+                // The fetch stays current (no next one navigates this
+                // webview) until its download has a destination, which
+                // may wait for the Save As dialog; the "not a download"
+                // timer of its navigation is stale from here.
+                p.fetcher.borrow_mut().generation += 1;
+                let me = p.clone();
+                take_over(&p, &args, page, id, move || {
+                    me.downloads.current.borrow_mut().take();
+                    // The next fetch navigates this webview: not while
+                    // the navigation that became this download is still
+                    // settling.
+                    copper_win_rt::spawn_local(async move { pump(&me) });
+                })?;
             }
             Ok(())
         }
@@ -232,9 +240,20 @@ async fn wire(profile: &Rc<ProfileInner>, wv: &Wv) -> copper_engine::Result<Toke
         move |params| {
             if let Some((method, reply)) = crate::cdp::force_download(&params) {
                 let view = view.clone();
+                let request = params.get("requestId").cloned();
                 copper_win_rt::spawn_local(async move {
                     if let Err(e) = cdp::call(&view, method, reply).await {
-                        tracing::debug!("{method}: {e}");
+                        tracing::warn!("fetch {method}: {e}");
+                        // A paused response left paused hangs the fetch
+                        // (and the queue behind it): let it through as is.
+                        if method == "Fetch.continueResponse"
+                            && let Some(id) = request
+                        {
+                            let plain = json!({ "requestId": id });
+                            if let Err(e) = cdp::call(&view, "Fetch.continueRequest", plain).await {
+                                tracing::warn!("fetch Fetch.continueRequest: {e}");
+                            }
+                        }
                     }
                 });
             }

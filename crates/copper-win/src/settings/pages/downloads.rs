@@ -6,7 +6,7 @@
 //! profile from the next download on ([`start`] puts it in place at
 //! launch).
 
-use super::{not_yet, redraw};
+use super::redraw;
 use crate::chrome::glyph;
 use crate::platform::Shell;
 use crate::settings::Page;
@@ -99,19 +99,29 @@ impl Page for Downloads {
         }
         sec.anchor("downloads.folder")
             .keywords(&["folder", "location", "path"]);
-        not_yet(
-            sec,
+        sec.switch(
             "Ask where to save each file",
-            "Not yet on Windows — every file goes to the folder above",
+            Some("A save panel for every download, starting in the folder above"),
+            "ask",
+            shell.settings().downloads_ask(),
         )
         .anchor("downloads.ask");
         f
     }
 
-    fn act(&self, shell: &Shell, action: &str, _value: &str) {
-        if action == "change" {
-            let (_, used) = folders(shell);
-            choose(shell, &used);
+    fn act(&self, shell: &Shell, action: &str, value: &str) {
+        match action {
+            "change" => {
+                let (_, used) = folders(shell);
+                choose(shell, &used);
+            }
+            "ask" => {
+                let ask = super::on(value);
+                shell.update_settings(|s| s.set(copper_core::settings::keys::DOWNLOADS_ASK, ask));
+                // The engine asks (or stops asking) from the next download.
+                shell.view().apply_download_ask(shell);
+            }
+            _ => {}
         }
     }
 }
