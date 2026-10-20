@@ -333,7 +333,7 @@ impl ShellView<Win> for WinView {
     }
 
     fn showing_downloads(&self) -> bool {
-        self.panels.showing() == Some("downloads")
+        matches!(self.panels.showing(), Some("downloads" | "downloads-list"))
     }
 
     fn hide_panel(&self) {
