@@ -629,6 +629,16 @@ pub fn deleted_text(deleted: usize, cut: bool) -> String {
     s
 }
 
+/// A delete stopped while deleting: what went before the stop (the rest of
+/// the matches stayed).
+pub fn stopped_text(deleted: usize) -> String {
+    format!(
+        "Stopped after deleting {} visit{} from the cloud",
+        group_digits(deleted),
+        if deleted == 1 { "" } else { "s" }
+    )
+}
+
 /// 1234567 → "1,234,567" (`formatted()`).
 pub fn group_digits(n: usize) -> String {
     let digits = n.to_string();

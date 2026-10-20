@@ -124,6 +124,9 @@ pub mod motion {
     };
     /// The live row's reading bar. `Side.swift` 708: `easeOut(duration: 0.15)`.
     pub const READING: Motion = Motion::ease_out(0.15);
+    /// The chrome leaving and coming back as a page takes the screen and
+    /// gives it back. `App.swift` 349: `easeOut(duration: 0.12)`.
+    pub const IMMERSE: Motion = Motion::ease_out(0.12);
     /// The folded column's grace before it goes back in. `Fold.swift` 45.
     pub const FOLD_GRACE: f32 = 0.3;
     /// How much of the left edge brings a folded column out. `Fold.swift` 43.

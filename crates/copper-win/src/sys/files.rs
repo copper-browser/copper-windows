@@ -1,13 +1,12 @@
-//! Downloads and the Windows shell: a file's own icon (as Explorer draws
-//! it), opening a file or folder, and showing a file selected in Explorer
-//! (the Mac's "Show in Finder").
-//!
-//! (`sys/shell.rs` is the home of shell hand-offs; `reveal` and `icon`
-//! belong there and live here until they move.)
+//! Files and the Windows shell: a file's own icon (as Explorer draws it,
+//! cached and fetched off the window's thread), opening a file or folder,
+//! and showing a file selected in Explorer (the Mac's "Show in Finder").
+//! The Downloads panel is the first user; anything that lists files may
+//! share it.
 
+use super::wide;
 use crate::picture::Picture;
 use crate::platform::Icon;
-use crate::sys::wide;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -101,7 +100,7 @@ pub fn warm(files: Vec<(Option<String>, String, bool)>, done: impl FnOnce() + 's
         return;
     }
     copper_win_rt::spawn_local(async move {
-        let got = super::off_thread(move || {
+        let got = super::work::off_thread(move || {
             // SAFETY: COM for this thread alone, as the shell asks.
             let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
             ask.into_iter()

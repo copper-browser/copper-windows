@@ -75,9 +75,6 @@ const ROW_SPACER: f32 = 14.0;
 const HEADING_BOTTOM: f32 = 2.0;
 /// The list's height before the window's is known.
 const LIST_FALLBACK: f32 = 480.0;
-/// The refusal: three tapering shivers over half a second, 7 DIPs out.
-const SHAKE: f32 = 7.0;
-const SHAKE_MOTION: Motion = Motion::spring(0.167, 0.18);
 /// The breath's own fill: next to nothing, so only its blur shows.
 const BREATH_FILL: f32 = 0.01;
 
@@ -920,7 +917,11 @@ impl Card {
     fn add_plain_row(&self, ui: &mut Ui, row: Row, m: RowMark, top: f32) -> Drawn {
         let node = ui.tree.add(
             self.results,
+            // As tall as the list's height counts it: a row left to its
+            // text's line height came out a DIP or two taller, the list
+            // overflowed by that much, and a lone row wore a scroll thumb.
             Node::row()
+                .height(plain_row_height())
                 .shrink(0.0)
                 .padding(Insets::hv(card::ROW_PAD, plain::ROW_PAD_V))
                 .gap(plain::ROW_GAP)
@@ -1074,8 +1075,12 @@ impl Card {
         self.place(ui);
     }
 
-    /// Return found no place to go: the field shivers and its edge goes
-    /// red until the next keystroke (`Omnibox` `Shake`).
+    /// Return found no place to go: the field shivers — the toolkit's
+    /// shared shake, three tapering there-and-backs 7 DIPs out over half a
+    /// second (`Design.swift` `Shake`, `Omnibox.swift` 90–100) — and its
+    /// edge goes red until the next keystroke. The field line shakes
+    /// rather than the whole card: on `Ctrl+L` it *is* the card, and the
+    /// launch/palette card's own offset holds it centred on the window.
     pub fn refuse(&mut self, ui: &mut Ui) {
         self.refused = true;
         if self.purpose == Purpose::Edit {
@@ -1083,8 +1088,7 @@ impl Card {
                 n.look.stroke = Swatch::Fixed(copper_win_ui::Color::rgba(1.0, 0.23, 0.19, 0.35));
             });
         }
-        ui.tree.set_prop(self.field_row, Prop::X, SHAKE);
-        ui.tree.animate(self.field_row, Prop::X, 0.0, SHAKE_MOTION);
+        ui.tree.shake(self.field_row);
     }
 
     /// The field changed: a refusal is forgotten.

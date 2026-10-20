@@ -200,9 +200,10 @@ pub fn register(shell: &Shell) {
         )
         .when(|s| crate::chrome::permit::has_choices(s, crate::chrome::permit::PERMIT)),
     ];
-    for c in cmds {
+    for c in cmds.into_iter().chain(crate::clear::commands()) {
         r.add(c);
     }
+    crate::cover::register(shell);
     for n in 1..=9usize {
         r.add(Command::key(&format!("select-tab-{n}"), move |s| {
             s.select_nth(if n == 9 { None } else { Some(n - 1) })

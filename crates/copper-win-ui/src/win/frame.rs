@@ -20,9 +20,9 @@ use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegG
 use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, IsZoomed, NCCALCSIZE_PARAMS, SM_CXPADDEDBORDER, SM_CYSIZEFRAME,
-    SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
-    WM_NCCALCSIZE,
+    DefWindowProcW, GWL_STYLE, GetWindowLongPtrW, IsZoomed, NCCALCSIZE_PARAMS, SM_CXPADDEDBORDER,
+    SM_CYSIZEFRAME, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    SystemParametersInfoW, WM_NCCALCSIZE, WS_THICKFRAME,
 };
 use windows::core::{BOOL, w};
 
@@ -122,8 +122,11 @@ pub fn nccalcsize(hwnd: HWND, wparam: WPARAM, lparam: LPARAM, dpi: u32) -> LRESU
         }
         params.rgrc[0].top = top;
         // A maximised window hangs its borders off the monitor; keep the
-        // client's top on screen.
-        if is_maximized(hwnd) {
+        // client's top on screen. Not once it has no frame at all (full
+        // screen keeps WS_MAXIMIZE): the inset would be a pale band of
+        // non-client across the top of the page.
+        let framed = GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_THICKFRAME.0 as isize != 0;
+        if framed && is_maximized(hwnd) {
             params.rgrc[0].top += border(dpi);
         }
         LRESULT(0)

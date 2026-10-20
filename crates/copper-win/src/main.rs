@@ -35,9 +35,13 @@ mod app;
 mod canvas;
 #[cfg(windows)]
 mod chrome;
+#[cfg(windows)]
+mod clear;
 mod cloud;
 #[cfg(windows)]
 mod commands;
+#[cfg(windows)]
+mod cover;
 #[cfg(windows)]
 mod features;
 #[cfg(windows)]
@@ -65,6 +69,8 @@ mod view;
 
 fn main() {
     perf::mark_process_start();
+    // The shared crates report this build's version (copper-win's, not theirs).
+    copper_core::version::set_app(env!("CARGO_PKG_VERSION"));
     #[cfg(windows)]
     {
         use copper_setup::Launch;

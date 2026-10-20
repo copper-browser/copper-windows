@@ -138,6 +138,8 @@ pub enum Act {
     // delete history on cloud
     Span(Span),
     DeleteHistory,
+    /// Stop the delete under way (shown while looking, as on the Mac).
+    StopDelete,
     // the log
     ToggleLog,
 }

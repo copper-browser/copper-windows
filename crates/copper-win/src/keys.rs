@@ -118,6 +118,7 @@ pub const BINDINGS: &[(&str, &[Chord])] = &[
     ("select-tab-8", &[c(Key::Digit(8))]),
     ("select-tab-9", &[c(Key::Digit(9))]),
     ("pin-tab", &[cs(l('D'))]),
+    ("clear-tabs", &[cs(l('K'))]),
     // The field and the palette.
     ("focus-field", &[c(l('L')), a(l('D')), k(Key::F(6))]),
     ("palette", &[c(l('K'))]),

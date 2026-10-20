@@ -140,22 +140,23 @@ pub fn ask_pill() -> Node {
         .align(Align::Center)
 }
 
-/// A capsule button: `primary` in ink, else quiet.
+/// A capsule button: `primary` in ink, else quiet — the plain muted
+/// words with no capsule round them (`App.swift` 553–557, 592–601), so
+/// they sit the row's 12 from the primary and the pill's own edge.
 pub fn capsule(label: &str, primary: bool) -> (Node, Node) {
     let b = Node::row()
-        .padding(Insets::hv(11.0, 5.0))
+        .padding(Insets::hv(if primary { 11.0 } else { 0.0 }, 5.0))
         .radius(CAPSULE)
         .align(Align::Center)
         .button(label);
-    let b = if primary {
-        b.fill(Token::Ink)
-    } else {
-        b.hover_fill(Token::Hover)
-    };
+    let b = if primary { b.fill(Token::Ink) } else { b };
     // `App.swift` sets both answers in 12 pt regular.
     let t = Node::text(label, 12.0)
         .ink(if primary { Token::Ground } else { Token::Muted })
         .role(Role::None);
+    // Pointing at a quiet answer darkens its words, the one sign Windows
+    // owes a button the Mac leaves plain.
+    let t = if primary { t } else { t.hover_ink(Token::Ink) };
     (b, t)
 }
 

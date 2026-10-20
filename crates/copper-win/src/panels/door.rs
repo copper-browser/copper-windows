@@ -1,36 +1,28 @@
-//! The doors panels hang from, mounted into the chrome at start-up: the
-//! downloads door (`DownloadsDoor`) at the end of the tab strip and inside
-//! the column's address, and the bookmarks door at the strip's far end
-//! (`TabBar.swift` 107-122; the column's foot has its own).
+//! What the doors panels hang from show, and what a click on one opens:
+//! the downloads door (`DownloadsDoor`) at the end of the tab strip and
+//! inside the column's address, and the bookmarks door at the strip's far
+//! end (`TabBar.swift` 107-122; the column's foot has its own). The chrome
+//! builds them with the strip and the column (`chrome/doors.rs`); this
+//! finds them there and draws into them.
 //!
 //! The downloads door is there only once something has been downloaded
 //! this session. It says what is happening at a glance: a ring filling
 //! while files arrive (dashes turning when a size is unknown), a check
 //! that pulses as the last one lands, a warning in orange when one
 //! failed, a dot until the list has been looked at.
-//!
-//! (The chrome can take these over as slots of its own; until then they
-//! are put in place here, after the chrome is built.)
 
 use super::ring::{self, Layer, Stroke};
-use crate::chrome::build::{door, tip};
+use crate::chrome::doors::DownloadsDoor;
 use crate::chrome::glyph;
 use crate::platform::Shell;
 use copper_core::downloads::DownloadState;
 use copper_shell_core::format;
 use copper_win_ui::tokens::motion;
 use copper_win_ui::win::Ui;
-use copper_win_ui::{Abs, Color, Node, NodeId, Prop, Role, Swatch, Token};
+use copper_win_ui::{Color, NodeId, Prop, Swatch, Token};
 use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
-/// The tab strip's doors.
-const STRIP: f32 = 26.0;
-/// The column address's door.
-const COLUMN: f32 = 24.0;
-/// The pictures the rings are drawn into (the panels' block of ids).
-const RING_STRIP: u32 = 0x7061_1001;
-const RING_COLUMN: u32 = 0x7061_1002;
 /// How long the check stays after the last download lands.
 const PULSE: Duration = Duration::from_millis(1200);
 /// The dashes turn once in this long.
@@ -45,7 +37,7 @@ const ORANGE: Color = Color {
     a: 0.9,
 };
 
-/// One downloads door's nodes.
+/// One downloads door: the chrome's nodes and what was last drawn in them.
 struct Door {
     door: NodeId,
     ring: NodeId,
@@ -56,6 +48,21 @@ struct Door {
     /// What its ring was last drawn as (at what scale).
     drawn: Option<(Vec<Layer>, f32)>,
     pulsing: bool,
+}
+
+impl From<DownloadsDoor> for Door {
+    fn from(d: DownloadsDoor) -> Door {
+        Door {
+            door: d.door,
+            ring: d.ring,
+            glyph: d.glyph,
+            dot: d.dot,
+            image: d.image,
+            size: d.size,
+            drawn: None,
+            pulsing: false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -97,34 +104,13 @@ enum Ring {
     Rest,
 }
 
-/// Put the doors in the chrome and follow the downloads.
+/// Find the chrome's doors and follow the downloads.
 pub fn mount(shell: &Shell) {
-    shell.view().chrome().edit(|ui, st| {
-        let strip = st.strip.strip;
-        // Before the caption buttons' corner, after the helm.
-        let at = ui.tree.children(strip).len().saturating_sub(1);
-        let strip_door = build(ui, strip, Some(at), STRIP, RING_STRIP);
-        let (bookmarks, _) = door(
-            ui,
-            strip,
-            glyph::BOOKMARK,
-            STRIP,
-            13.0,
-            "Bookmarks",
-            &bookmarks_tip(),
-        );
-        ui.tree.reorder(bookmarks, at + 1);
-        // The address's words give way to the door (a long address would
-        // push it out of sight), ending in an ellipsis.
-        ui.tree.edit(st.column.address, |n| n.style.shrink = 1.0);
-        if let Some(&words) = ui.tree.children(st.column.address).first() {
-            ui.tree.edit(words, |n| n.style.shrink = 1.0);
-        }
-        let column_door = build(ui, st.column.address, None, COLUMN, RING_COLUMN);
+    shell.view().chrome().edit(|_, st| {
         DOORS.with(|d| {
             let mut d = d.borrow_mut();
-            d.downloads = vec![strip_door, column_door];
-            d.bookmarks = Some(bookmarks);
+            d.downloads = vec![st.strip.downloads.into(), st.column.downloads.into()];
+            d.bookmarks = Some(st.strip.bookmarks);
         });
     });
     let weak = shell.downgrade();
@@ -133,68 +119,6 @@ pub fn mount(shell: &Shell) {
             changed(&s);
         }
     });
-}
-
-/// One downloads door, hidden.
-fn build(ui: &mut Ui, parent: NodeId, at: Option<usize>, size: f32, image: u32) -> Door {
-    let node = Node::stack()
-        .size(size, size)
-        .shrink(0.0)
-        .radius(size * 0.3)
-        .hover_fill(Token::ColumnHover)
-        .press_fill(Token::ColumnHover)
-        .selected_fill(Token::ColumnHover)
-        .align(copper_win_ui::Align::Center)
-        .justify(copper_win_ui::Justify::Center)
-        .hidden(true)
-        .button("Downloads")
-        .tooltip("Downloads");
-    let d = match at {
-        Some(i) => ui.tree.insert(parent, i, node),
-        None => ui.tree.add(parent, node),
-    };
-    let ring = ui.tree.add(
-        d,
-        Node::image(image, size)
-            .absolute(Abs::at(0.0, 0.0))
-            .hidden(true)
-            .role(Role::None),
-    );
-    let glyph = ui.tree.add(
-        d,
-        Node::glyph(
-            glyph::ARROW_DOWN,
-            if size < 26.0 { 9.5 } else { 10.0 },
-            size,
-        )
-        .ink(Token::Muted)
-        .role(Role::None),
-    );
-    let dot = ui.tree.add(
-        d,
-        Node::new()
-            .size(5.0, 5.0)
-            .radius(2.5)
-            .fill(Token::Ink)
-            .absolute(Abs {
-                left: None,
-                top: Some(2.0),
-                right: Some(2.0),
-                bottom: None,
-            })
-            .hidden(true)
-            .role(Role::None),
-    );
-    Door {
-        door: d,
-        ring,
-        glyph,
-        dot,
-        image,
-        size,
-        drawn: None,
-        pulsing: false,
-    }
 }
 
 /// The downloads changed: redraw the doors once, on the loop's next turn.
@@ -463,9 +387,4 @@ fn draw_ring(ui: &mut Ui, door: &mut Door, ring: Ring, phase: f32) {
     let p = ring::draw(door.size, diameter, scale, &layers);
     ui.set_image(door.image, p.bgra, p.w, p.h);
     door.drawn = Some((layers, scale));
-}
-
-/// The tooltip of the strip's bookmarks door, with its shortcut if any.
-fn bookmarks_tip() -> String {
-    tip("Bookmarks", "bookmarks-door")
 }

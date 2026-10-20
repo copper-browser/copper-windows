@@ -30,6 +30,7 @@ pub mod bring;
 pub mod build;
 pub mod card;
 pub mod column;
+pub mod doors;
 pub mod events;
 pub mod glyph;
 pub mod images;

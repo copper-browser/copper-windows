@@ -84,9 +84,13 @@ impl Passwords {
 
     /// Saved passwords: the list, offering and filling, the never list.
     fn saved(&self, shell: &Shell, f: &mut Form) {
-        let (save, fill) = {
+        let (save, fill, everything) = {
             let s = shell.settings();
-            (s.saves_passwords(), s.fills_passwords())
+            (
+                s.saves_passwords(),
+                s.fills_passwords(),
+                s.fills_everything(),
+            )
         };
         let kept = live::with(|l| l.kept.clone());
         let sec = f.section("Saved passwords");
@@ -139,10 +143,11 @@ impl Passwords {
             fill,
         )
         .anchor("passwords.fill");
-        not_yet(
-            sec,
+        sec.switch(
             "Fill addresses and cards",
-            "Not yet on Windows — the list under a box offers sign-ins and two-step codes, not identities or cards",
+            Some("Click into a checkout or address form and your Bitwarden and 1Password identities and cards hang from it"),
+            "everything",
+            everything,
         )
         .anchor("passwords.everything");
         not_yet(
@@ -307,6 +312,7 @@ impl Page for Passwords {
         match action {
             "save" => shell.update_settings(|s| s.set(keys::PASSWORDS_SAVE, on(value))),
             "fill" => shell.update_settings(|s| s.set(keys::PASSWORDS_FILL, on(value))),
+            "everything" => shell.update_settings(|s| s.set(keys::AUTOFILL_EVERYTHING, on(value))),
             "open" => crate::settings::manager::open(shell),
             "movein" => crate::settings::movein::open(shell),
             "keychain.retry" => live::look(shell),

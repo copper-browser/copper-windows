@@ -1,18 +1,20 @@
 //! What Copper asks of Windows itself, each in its own small module: who
 //! the user is and which languages they read, whether the machine is
 //! online, the user's calendar, the window's screenshot, opening things
-//! with the shell, the window's place on screen, Windows' privacy
-//! switches, and the few messages shown before there is a window to show
-//! them in.
+//! with the shell (and a file's icon), slow work off the window's thread,
+//! the window's place on screen, Windows' privacy switches, and the few
+//! messages shown before there is a window to show them in.
 
 pub mod calendar;
 pub mod dialog;
+pub mod files;
 pub mod network;
 pub mod privacy;
 pub mod screenshot;
 pub mod shell;
 pub mod user;
 pub mod window;
+pub mod work;
 
 /// `s` as a NUL-terminated UTF-16 string.
 pub fn wide(s: &str) -> Vec<u16> {

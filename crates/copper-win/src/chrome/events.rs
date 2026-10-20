@@ -154,6 +154,7 @@ fn click(chrome: &Rc<Chrome>, shell: &Shell, id: NodeId) {
                 && !crate::forms::click(shell, id)
                 && !crate::addons::click(shell, id)
                 && !crate::canvas::click(shell, id)
+                && !crate::clear::click(shell, id)
             {
                 crate::find::click(shell, id);
             }
@@ -363,7 +364,10 @@ fn key_event(chrome: &Rc<Chrome>, shell: &Shell, key: Key, mods: Mods, focused: 
         return;
     }
     let chord = Chord::new(key, mods);
-    if let Some(id) = crate::panels::hidden::takes(shell, chord).or_else(|| keys::command(chord)) {
+    if let Some(id) = crate::panels::hidden::takes(shell, chord)
+        .or_else(|| crate::clear::takes(shell, chord))
+        .or_else(|| keys::command(chord))
+    {
         crate::commands::run(shell, id);
     }
 }
@@ -390,6 +394,7 @@ pub fn hook_page(shell: &Shell, tab: &TabId, page: &WebView2Page) {
             },
         );
         let Some(id) = crate::panels::hidden::takes(&shell, chord)
+            .or_else(|| crate::clear::takes(&shell, chord))
             .or_else(|| keys::page_takes(chord, shell.view().chrome().has_overlay()))
         else {
             return false;
@@ -451,15 +456,37 @@ pub fn hook_page(shell: &Shell, tab: &TabId, page: &WebView2Page) {
     });
 }
 
+thread_local! {
+    /// Whether the parts were last laid out for a page that has the screen.
+    static LAID_IMMERSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Show and hide the parts for the layout: the column or the strip, the
 /// band over the page, the folded column's door; and nothing but the page
 /// while it is full screen.
+///
+/// A page taking the screen has it at once, on the black ground
+/// (`Ui::set_blackout`), so no pale band shows as the window grows; when
+/// it gives the screen back the column or strip fades back in over the
+/// Mac's `easeOut(duration: 0.12)` (`App.swift` 292–349).
 pub fn apply_layout(ui: &mut Ui, st: &mut State) {
     let side = st.side && !st.immersed;
     let column = side && !st.folded;
     let strip = !st.side && !st.immersed;
-    ui.tree.set_hidden(st.column.side, !column);
-    ui.tree.set_hidden(st.strip.strip, !strip);
+    let back = LAID_IMMERSED.with(|c| c.replace(st.immersed)) && !st.immersed;
+    for (part, shown) in [(st.column.side, column), (st.strip.strip, strip)] {
+        let was = ui.tree.get(part).is_some_and(|n| !n.style.hidden);
+        ui.tree.set_hidden(part, !shown);
+        if back && shown && !was {
+            ui.tree.set_prop(part, copper_win_ui::Prop::Opacity, 0.0);
+            ui.tree.animate(
+                part,
+                copper_win_ui::Prop::Opacity,
+                1.0,
+                copper_win_ui::tokens::motion::IMMERSE,
+            );
+        }
+    }
     // The band is the caption buttons' room over the page.
     ui.tree.set_hidden(st.ids.band, !side || st.full);
     ui.tree.set_hidden(st.ids.unfold, !(side && st.folded));

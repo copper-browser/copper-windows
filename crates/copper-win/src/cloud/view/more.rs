@@ -145,9 +145,8 @@ pub fn history(s: &Snap, st: &State) -> El {
                     ),
                     vec![field(FieldId::Site, "example.com", Some(170.0), false)],
                 ),
-                row(
-                    "go",
-                    vec![
+                row("go", {
+                    let mut kids = vec![
                         text(
                             "status",
                             &status,
@@ -155,15 +154,20 @@ pub fn history(s: &Snap, st: &State) -> El {
                             if bad { Tone::Red } else { Tone::Muted },
                         ),
                         spacer(),
-                        pill(
-                            "delete",
-                            "Delete history on cloud…",
-                            Act::DeleteHistory,
-                            PillLook::Red,
-                            !st.erasing && !bad,
-                        ),
-                    ],
-                ),
+                    ];
+                    // Looking through history here can be stopped (Mac).
+                    if st.erasing && st.looking {
+                        kids.push(quiet("stop", "Stop", Act::StopDelete));
+                    }
+                    kids.push(pill(
+                        "delete",
+                        "Delete history on cloud…",
+                        Act::DeleteHistory,
+                        PillLook::Red,
+                        !st.erasing && !bad,
+                    ));
+                    kids
+                }),
             ]
         }
         Some(false) => vec![line("unsupported", TITLE, Some(UNSUPPORTED), vec![])],
