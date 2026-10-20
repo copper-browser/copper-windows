@@ -551,13 +551,11 @@ pub fn expand(el: &El) -> Prim {
                 Some(w) => boxed.width(*w).shrink(0.0),
                 None => boxed.grow(1.0),
             };
-            let mut field = secure(
-                Node::field(placeholder, 12.0)
-                    .fill_height()
-                    .grow(1.0)
-                    .name(id.name()),
-                id.secure(),
-            );
+            let mut field = Node::field(placeholder, 12.0)
+                .fill_height()
+                .grow(1.0)
+                .name(id.name())
+                .secure(id.secure());
             field.a11y.help = placeholder.clone();
             let mut inner = Prim::new("field", field);
             inner.field = Some(*id);
@@ -741,14 +739,6 @@ fn quiet_inside(mut p: Prim) -> Prim {
     }
     p.kids = p.kids.into_iter().map(quiet_inside).collect();
     p
-}
-
-/// A field that hides what is typed, when `on`. The toolkit's secure field
-/// (`Node::secure`) arrives with the chrome toolkit's next merge; until it
-/// does a key or password field shows its text.
-fn secure(n: Node, on: bool) -> Node {
-    let _ = on;
-    n
 }
 
 #[cfg(test)]

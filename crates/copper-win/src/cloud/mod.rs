@@ -18,8 +18,6 @@ pub mod state;
 pub mod view;
 
 #[cfg(windows)]
-mod clip;
-#[cfg(windows)]
 mod join;
 #[cfg(windows)]
 pub mod page;

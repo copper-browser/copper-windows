@@ -235,7 +235,7 @@ fn paste(shell: &Shell) {
     let text = shell
         .view()
         .chrome()
-        .read(|ui, _| super::clip::text(ui.hwnd()))
+        .read(|ui, _| ui.clipboard_text())
         .flatten();
     tracing::debug!(
         target: "copper::cloud",
