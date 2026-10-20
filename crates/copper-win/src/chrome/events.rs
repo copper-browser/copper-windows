@@ -154,6 +154,7 @@ fn click(chrome: &Rc<Chrome>, shell: &Shell, id: NodeId) {
                 && !crate::forms::click(shell, id)
                 && !crate::addons::click(shell, id)
                 && !crate::canvas::click(shell, id)
+                && !crate::clear::click(shell, id)
             {
                 crate::find::click(shell, id);
             }
@@ -363,7 +364,10 @@ fn key_event(chrome: &Rc<Chrome>, shell: &Shell, key: Key, mods: Mods, focused: 
         return;
     }
     let chord = Chord::new(key, mods);
-    if let Some(id) = crate::panels::hidden::takes(shell, chord).or_else(|| keys::command(chord)) {
+    if let Some(id) = crate::panels::hidden::takes(shell, chord)
+        .or_else(|| crate::clear::takes(shell, chord))
+        .or_else(|| keys::command(chord))
+    {
         crate::commands::run(shell, id);
     }
 }
@@ -390,6 +394,7 @@ pub fn hook_page(shell: &Shell, tab: &TabId, page: &WebView2Page) {
             },
         );
         let Some(id) = crate::panels::hidden::takes(&shell, chord)
+            .or_else(|| crate::clear::takes(&shell, chord))
             .or_else(|| keys::page_takes(chord, shell.view().chrome().has_overlay()))
         else {
             return false;

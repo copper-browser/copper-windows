@@ -83,6 +83,11 @@ pub fn run(shell: &Shell, act: Act) {
         Act::RevokeCode => ask_revoke(shell),
         Act::Span(span) => with(|st| st.span = span),
         Act::DeleteHistory => ask_delete(shell),
+        Act::StopDelete => with(|st| {
+            if let Some(stop) = &st.erase_stop {
+                stop.stop();
+            }
+        }),
         Act::ToggleLog => with(|st| st.log_open = !st.log_open),
     }
     refresh(shell);
@@ -637,11 +642,13 @@ fn ask_delete(shell: &Shell) {
             }
             let Some(c) = cloud::get() else { return };
             let selector = model::selector(span, site.as_deref(), copper_core::date::now_unix());
+            let stop = copper_cloud::sync::delete::Stop::new();
             with(|st| {
                 st.erasing = true;
                 st.looking = selector.scans();
                 st.erase_result = None;
                 st.erase_problem = None;
+                st.erase_stop = Some(stop.clone());
             });
             if let Some(s) = w.upgrade() {
                 refresh(&s);
@@ -649,13 +656,19 @@ fn ask_delete(shell: &Shell) {
             let sync = c.sync.clone();
             let w = w.clone();
             cloud::run_then::<WinLoop, _, _>(
-                async move { sync.delete_history(&selector).await },
+                async move { sync.delete_history_until(&selector, &stop).await },
                 move |r| {
                     with(|st| {
                         st.erasing = false;
                         st.looking = false;
+                        st.erase_stop = None;
                         match r {
+                            Ok(o) if o.stopped => {
+                                st.erase_result = Some(model::stopped_text(o.deleted))
+                            }
                             Ok(o) => st.erase_result = Some(model::deleted_text(o.deleted, o.cut)),
+                            // Stopped before anything went: a result, not a problem (Mac).
+                            Err(f) if f.code == "stopped" => st.erase_result = Some(f.message),
                             Err(f) => st.erase_problem = Some(f.message),
                         }
                     });

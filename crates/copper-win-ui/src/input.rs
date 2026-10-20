@@ -200,7 +200,11 @@ fn field_key_inner(edit: &mut TextEdit, key: Key, mods: Mods, rtl: bool) -> Fiel
             ('C', false) => edit.copy().map_or(FieldKey::Moved, FieldKey::Copy),
             ('X', false) => edit.cut().map_or(FieldKey::Moved, FieldKey::Cut),
             ('V', false) => FieldKey::Paste,
-            ('Z', false) => edited(edit.undo()),
+            ('Z', false) => match edit.undo() {
+                true => FieldKey::Edited,
+                // Nothing to undo: Ctrl+Z is the app's (Clear's Undo).
+                false => FieldKey::Ignored,
+            },
             ('Y', false) | ('Z', true) => edited(edit.redo()),
             _ => FieldKey::Ignored,
         },
@@ -260,6 +264,16 @@ mod tests {
             FieldKey::Edited
         );
         assert_eq!(e.text(), "");
+    }
+
+    #[test]
+    fn nothing_to_undo_leaves_ctrl_z_to_the_app() {
+        let mut e = field("copper");
+        assert_eq!(
+            field_key(&mut e, Key::Letter('Z'), Mods::CTRL, false),
+            FieldKey::Ignored
+        );
+        assert_eq!(e.text(), "copper");
     }
 
     #[test]

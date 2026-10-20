@@ -273,6 +273,7 @@ impl Stage {
         }
         self.shown = tab.cloned();
         self.set_hover(ui, None);
+        crate::cover::shown(ui, tab);
     }
 
     /// Take `tab`'s page off its (hidden) pane so the backstage can hold

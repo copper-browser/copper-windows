@@ -43,6 +43,24 @@ impl Platform for Win {
     fn user_name() -> String {
         crate::sys::user::name()
     }
+
+    /// `GlobalMemoryStatusEx`: physical memory, total and available.
+    fn memory() -> Option<(u64, u64)> {
+        use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        let mut m = MEMORYSTATUSEX {
+            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: `m` is a properly sized MEMORYSTATUSEX with dwLength set.
+        unsafe { GlobalMemoryStatusEx(&mut m) }.ok()?;
+        Some((m.ullTotalPhys, m.ullAvailPhys))
+    }
+
+    /// The frame WebView2 kept when the page was last hidden: a hidden
+    /// page is not drawn, so there is nothing newer to take.
+    fn kept_picture(page: &copper_engine_webview2::WebView2Page) -> Option<(Vec<u8>, u32, u32)> {
+        page.cover().map(|c| (c.jpeg, c.width, c.height))
+    }
 }
 
 /// copper-win-rt's loop: one message loop on the UI thread, futures woken

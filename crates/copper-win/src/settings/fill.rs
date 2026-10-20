@@ -86,7 +86,7 @@ pub fn row_lines(r: &Row) -> (String, String) {
     };
     let under = match r.kind {
         RowKind::Code => format!("Two-step code · {}", c.host),
-        RowKind::Login => c.host.clone(),
+        RowKind::Login | RowKind::Identity | RowKind::Card => c.host.clone(),
     };
     (user, under)
 }
@@ -112,7 +112,7 @@ pub fn footer(rows: &[Row], pending: Pending) -> String {
             Source::OnePassword => op = true,
             Source::Keychain => {}
         }
-        if r.kind != RowKind::Code {
+        if r.kind == RowKind::Login {
             codes_only = false;
         }
     }

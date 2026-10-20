@@ -45,6 +45,8 @@ pub struct Model {
     pub spaces: Vec<SpaceView>,
     /// The column's colour; `None` for paper.
     pub tint: Option<Tint>,
+    /// How many rows Clear would close (`crate::clear`).
+    pub clearable: usize,
 }
 
 impl Model {
@@ -95,6 +97,7 @@ impl Model {
             space,
             spaces,
             tint,
+            clearable: shell.clearable_tabs().len(),
         }
     }
 }
