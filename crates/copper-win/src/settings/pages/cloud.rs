@@ -1,52 +1,49 @@
-//! Cloud: where this PC stands with Copper Cloud.
+//! Cloud: connect to a Copper Cloud, sign in, choose what syncs — the page
+//! itself is [`crate::cloud::page`]'s, which draws into Settings' list.
 
 use crate::chrome::glyph;
 use crate::platform::Shell;
 use crate::settings::Page;
 use crate::settings::form::Form;
+use copper_win_ui::win::Ui;
+use copper_win_ui::{Event, NodeId};
 
 /// Cloud: where this PC stands with Copper Cloud.
 pub(super) struct Cloud;
 
 impl Page for Cloud {
     fn id(&self) -> &'static str {
-        "cloud"
+        crate::cloud::page::ID
     }
     fn title(&self) -> &'static str {
         "Cloud"
     }
     fn blurb(&self) -> &'static str {
-        "Connect, sign in, then choose what follows you between computers."
+        "Connect, sign in, then choose what follows you between devices."
     }
     fn glyph(&self) -> char {
         glyph::CLOUD
     }
 
     fn draw(&self, _shell: &Shell) -> Form {
-        let (state, detail) = match copper_shell_core::cloud::get() {
-            None => ("Off", "This build of Copper has no cloud".to_string()),
-            Some(c) if !c.client.is_linked() => (
-                "Not connected",
-                "Run `copper cloud link <code>` with the code from your administrator".to_string(),
-            ),
-            Some(c) if !c.client.is_signed_in() => (
-                "Connected",
-                "Run `copper cloud login` to sign in".to_string(),
-            ),
-            Some(c) => {
-                let who = c.client.account().map(|a| a.email).unwrap_or_default();
-                let on = c.sync.is_on();
-                (
-                    if on { "Syncing" } else { "Signed in" },
-                    format!("As {who} on {}", c.client.device_name()),
-                )
-            }
-        };
-        let mut f = Form::default();
-        f.section("Copper Cloud")
-            .value("Status", Some(&detail), state);
-        f
+        Form::default()
     }
 
     fn act(&self, _shell: &Shell, _action: &str, _value: &str) {}
+
+    fn body(&self, shell: &Shell) -> Option<Box<dyn FnOnce(&mut Ui, NodeId)>> {
+        crate::cloud::page::body(shell)
+    }
+
+    fn click(&self, shell: &Shell, id: NodeId) -> bool {
+        crate::cloud::page::click(shell, id)
+    }
+
+    fn field(&self, shell: &Shell, id: NodeId, e: &Event) -> bool {
+        crate::cloud::page::field(shell, id, e)
+    }
+
+    fn left(&self) {
+        crate::cloud::page::left();
+    }
 }

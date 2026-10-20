@@ -160,6 +160,9 @@ fn handed(shell: &Shell, open: &[String]) {
 /// Open the command line's addresses, the first in front.
 fn open_all(shell: &Shell, open: &[String]) {
     for (i, address) in open.iter().enumerate() {
+        if crate::cloud::open_link(shell, address) {
+            continue;
+        }
         let url = args::command_line_url(address).or_else(|| shell.destination(address));
         if let Some(url) = url {
             shell.open(
