@@ -51,6 +51,9 @@ pub enum Prop {
     Hover,
     /// The eased press state (0–1).
     Press,
+    /// How far through a refusal shake (0–1): it sways `translate.x`
+    /// (see [`Tree::shake`]).
+    Shake,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -77,6 +80,14 @@ struct Slot {
     queued_paint: bool,
 }
 
+/// Where a shake `travel` (0–1) through puts its node: three
+/// there-and-backs, tapering to nothing, so it settles rather than stopping
+/// mid-swing (`Design.swift` 246–250).
+pub fn shake_offset(travel: f32) -> f32 {
+    let decay = 1.0 - travel;
+    (travel * std::f32::consts::PI * 6.0).sin() * motion::SHAKE_TRAVEL * decay
+}
+
 /// What lies under a point.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Pick {
@@ -99,6 +110,9 @@ pub struct Tree {
     last_size: Size,
     dirty_layers: Vec<NodeId>,
     visuals_dirty: bool,
+    /// Some layer was ever made with [`Flags::conceal`](crate::node::Flags)
+    /// (hover then re-reads the visuals too).
+    concealed_layers: bool,
     structure_rev: u32,
     hover_chain: Vec<NodeId>,
     hovered: Option<NodeId>,
@@ -119,6 +133,9 @@ impl Tree {
     // — structure —
 
     fn alloc(&mut self, mut node: Node, parent: Option<NodeId>) -> NodeId {
+        if node.flags.conceal && node.flags.layer {
+            self.concealed_layers = true;
+        }
         if node.scroll.is_some() {
             node.flags.layer = true;
         }
@@ -362,6 +379,24 @@ impl Tree {
     /// a target lights its target ancestors too, so a revealed button stays
     /// shown while the pointer is on it.
     pub fn reveal_t(&self, id: NodeId) -> f32 {
+        self.hover_above(id)
+    }
+
+    /// How far a node is shown by its [`reveal`](crate::node::Flags::reveal)
+    /// and [`conceal`](crate::node::Flags::conceal) flags (1 when neither).
+    pub fn shown_t(&self, id: NodeId) -> f32 {
+        let Some(n) = self.get(id) else { return 1.0 };
+        let mut t = 1.0;
+        if n.flags.reveal {
+            t *= self.hover_above(id);
+        }
+        if n.flags.conceal {
+            t *= 1.0 - self.hover_above(id);
+        }
+        t
+    }
+
+    fn hover_above(&self, id: NodeId) -> f32 {
         let mut cur = self.parent(id);
         while let Some(c) = cur {
             match self.get(c) {
@@ -708,7 +743,7 @@ impl Tree {
     /// window position of `id`'s parent's content box.
     fn topmost(&self, id: NodeId, origin: Point, p: Point) -> Option<NodeId> {
         let n = self.get(id)?;
-        if n.style.hidden || n.transform.opacity <= 0.01 {
+        if n.style.hidden || n.flags.inert || n.transform.opacity <= 0.01 {
             return None;
         }
         let frame = n.frame.offset(origin).offset(n.transform.translate);
@@ -927,6 +962,7 @@ impl Tree {
             },
             Prop::Hover => n.state.hover_t,
             Prop::Press => n.state.press_t,
+            Prop::Shake => n.state.shake_t,
         }
     }
 
@@ -944,17 +980,29 @@ impl Tree {
             Prop::Height => n.style.height = crate::layout::Dim::Px(v),
             Prop::Hover => n.state.hover_t = v,
             Prop::Press => n.state.press_t = v,
+            Prop::Shake => {
+                n.state.shake_t = v;
+                n.transform.translate.x = shake_offset(v);
+            }
         }
         match prop {
-            Prop::X | Prop::Y | Prop::Opacity | Prop::Scale if layer => self.visuals_dirty = true,
-            Prop::X | Prop::Y | Prop::Opacity | Prop::Scale => {
+            Prop::X | Prop::Y | Prop::Opacity | Prop::Scale | Prop::Shake if layer => {
+                self.visuals_dirty = true
+            }
+            Prop::X | Prop::Y | Prop::Opacity | Prop::Scale | Prop::Shake => {
                 if let Some(p) = self.parent(id) {
                     self.mark_paint(p);
                 }
                 self.mark_paint(id);
             }
             Prop::Width | Prop::Height => self.layout_dirty = true,
-            Prop::Hover | Prop::Press => self.mark_paint(id),
+            Prop::Hover | Prop::Press => {
+                self.mark_paint(id);
+                // A concealed layer below fades through its visual.
+                if self.concealed_layers {
+                    self.visuals_dirty = true;
+                }
+            }
         }
         if matches!(prop, Prop::Opacity) {
             self.a11y_rev = self.a11y_rev.wrapping_add(1);
@@ -985,6 +1033,19 @@ impl Tree {
         let mut value = Animated::new(from);
         value.set(to, how);
         self.anims.push(PropAnim { id, prop, value });
+    }
+
+    /// Shake `id` side to side: the "not that" of a field that cannot go
+    /// where it was asked (`Design.swift` `Shake`, `easeOut(duration: 0.5)`).
+    /// Under reduced motion it does not move.
+    pub fn shake(&mut self, id: NodeId) {
+        self.set_prop(id, Prop::Shake, 0.0);
+        self.animate(
+            id,
+            Prop::Shake,
+            1.0,
+            Motion::ease_out(motion::SHAKE_SECONDS),
+        );
     }
 
     /// The value a property is heading for.
@@ -1161,6 +1222,22 @@ mod tests {
         t.take_dirty_layers(&mut out);
         assert!(out.is_empty());
         assert!(t.take_visuals_dirty());
+    }
+
+    #[test]
+    fn a_shake_sways_and_settles_home() {
+        let mut t = Tree::new();
+        let root = t.add_root(Node::stack());
+        let a = t.add(root, Node::new().layer());
+        t.shake(a);
+        let mut widest = 0.0f32;
+        while t.step(1.0 / 120.0) {
+            widest = widest.max(t.get(a).unwrap().transform.translate.x.abs());
+        }
+        assert!(widest > 3.0 && widest <= 7.0, "{widest}");
+        assert!(t.get(a).unwrap().transform.translate.x.abs() < 1e-4);
+        assert_eq!(shake_offset(0.0), 0.0);
+        assert!(shake_offset(1.0).abs() < 1e-6);
     }
 
     #[test]

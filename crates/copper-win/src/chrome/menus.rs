@@ -17,12 +17,15 @@ pub mod item {
     pub const CLOSE_OTHERS: u32 = 6;
     pub const SAVE: u32 = 7;
     pub const UNSAVE: u32 = 8;
+    pub const CHANGE_LETTER: u32 = 9;
 }
 
 /// What the open menu is about.
 #[derive(Default)]
 pub struct Menus {
     pub tab: Option<TabId>,
+    /// The page menu's request, while it is open (`super::pagemenu`).
+    pub page: Option<super::pagemenu::Pending>,
 }
 
 /// What the tab menu needs to know about its tab.
@@ -38,7 +41,8 @@ pub struct TabFacts {
 pub fn tab_menu(t: TabFacts) -> Menu {
     let mut m = Menu::new();
     m = if t.pinned {
-        m.item(item::UNPIN, "&Unpin")
+        m.item(item::CHANGE_LETTER, "Change &Letter")
+            .item(item::UNPIN, "&Unpin")
     } else {
         let m = m.item(item::PIN, "&Pin");
         if t.blank { m.disabled() } else { m }

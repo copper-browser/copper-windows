@@ -14,8 +14,8 @@ use windows::Win32::UI::Input::Pointer::GetPointerType;
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, GetSystemMetrics, HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON,
     HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZENS, IDC_SIZEWE,
-    KillTimer, LoadCursorW, POINTER_INPUT_TYPE, PT_PEN, PT_TOUCH, SM_CXDOUBLECLK,
-    SPI_GETWHEELSCROLLLINES, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetCursor, SetTimer,
+    KillTimer, LoadCursorW, POINTER_INPUT_TYPE, PT_PEN, PT_TOUCH, SM_CXDOUBLECLK, SM_CXDRAG,
+    SM_CYDRAG, SPI_GETWHEELSCROLLLINES, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetCursor, SetTimer,
     SystemParametersInfoW, WA_INACTIVE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_CAPTURECHANGED, WM_CHAR,
     WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_IME_CHAR, WM_IME_COMPOSITION,
     WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KILLFOCUS,
@@ -29,12 +29,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::clock::WM_FRAME;
 use super::slot::{SlotMouse, SlotPointer};
-use super::ui::{Capture, Command, Pan, TIMER_CARET, TIMER_TIP, Ui};
+use super::ui::{Capture, Command, Drag, Pan, TIMER_CARET, TIMER_TIP, Ui};
 use super::{clipboard, frame, ime, keys};
 use crate::chrome::CaptionButton;
 use crate::event::Event;
 use crate::geom::Point;
-use crate::input::{FieldKey, Key, field_key};
+use crate::input::{FieldKey, FieldKeys, Key, field_key_with};
 use crate::node::Cursor;
 use crate::tokens::motion;
 use crate::tree::NodeId;
@@ -84,6 +84,22 @@ impl Ui {
         self.tree.get(id).is_some_and(|n| n.field_ref().is_some())
     }
 
+    /// A field the IME may write in (not a password).
+    pub(super) fn takes_ime(&self, id: NodeId) -> bool {
+        self.tree
+            .get(id)
+            .and_then(|n| n.field_ref())
+            .is_some_and(|f| !f.secure)
+    }
+
+    /// A field whose Tab keys are the app's ([`crate::node::Field::app_keys`]).
+    fn app_tab(&self, id: NodeId) -> bool {
+        self.tree
+            .get(id)
+            .and_then(|n| n.field_ref())
+            .is_some_and(|f| f.app_keys)
+    }
+
     /// Handle a main-window message; `None` runs the default procedure.
     pub(super) fn message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         let r = LRESULT(0);
@@ -120,10 +136,15 @@ impl Ui {
                 self.commands.push(Command::SetPos(rect));
                 Some(r)
             }
-            WM_NCMOUSEMOVE => self.nc_move(wp),
+            WM_NCMOUSEMOVE => {
+                let r = self.nc_move(wp);
+                self.note_hover();
+                r
+            }
             WM_NCMOUSELEAVE => {
                 self.nc_tracking = false;
                 self.nc_leave();
+                self.note_hover();
                 None
             }
             WM_NCLBUTTONDOWN | WM_NCRBUTTONDOWN => {
@@ -156,11 +177,13 @@ impl Ui {
             WM_NCLBUTTONDBLCLK => self.nc_button(wp.0 as u32).map(|_| r),
             WM_MOUSEMOVE => {
                 self.mouse_move(wp, lp);
+                self.note_hover();
                 Some(r)
             }
             WM_MOUSELEAVE => {
                 self.tracking = false;
                 self.mouse_leave();
+                self.note_hover();
                 Some(r)
             }
             WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_RBUTTONDOWN | WM_MBUTTONDOWN
@@ -179,6 +202,13 @@ impl Ui {
                 }
             }
             WM_CAPTURECHANGED => {
+                if lp.0 != self.hwnd.0 as isize
+                    && let Some(d) = self.drag.take()
+                    && d.started
+                {
+                    self.events
+                        .push_back(Event::DragCancel { source: d.source });
+                }
                 if lp.0 != self.hwnd.0 as isize && self.capture != Capture::None {
                     if let Capture::Node(_) = self.capture {
                         self.tree.release(None);
@@ -200,7 +230,11 @@ impl Ui {
             | WM_POINTERLEAVE => self.pointer(msg, wp, lp),
             WM_KEYDOWN | WM_SYSKEYDOWN => self.key_down(msg, wp),
             WM_CHAR => {
-                self.char(wp.0 as u16);
+                // An open menu has the keys (its letters choose); the
+                // field behind it does not type them too.
+                if self.menu.is_none() {
+                    self.char(wp.0 as u16);
+                }
                 Some(r)
             }
             WM_IME_STARTCOMPOSITION => {
@@ -209,7 +243,7 @@ impl Ui {
                 Some(r)
             }
             WM_IME_COMPOSITION => {
-                let id = self.tree.focused().filter(|&i| self.is_field(i))?;
+                let id = self.tree.focused().filter(|&i| self.takes_ime(i))?;
                 self.ime_composition(id, lp);
                 Some(r)
             }
@@ -237,7 +271,7 @@ impl Ui {
                 self.focused_window = true;
                 if let Some(id) = self.tree.focused() {
                     self.tree.mark_paint(id);
-                    let field = self.is_field(id);
+                    let field = self.takes_ime(id);
                     self.ime_on = field;
                     ime::enable(self.hwnd, field);
                 } else {
@@ -359,6 +393,9 @@ impl Ui {
         if def.0 != HTCLIENT as isize {
             return def;
         }
+        if self.fullscreen {
+            return LRESULT(HTCLIENT as isize);
+        }
         let c = self.screen_to_client(lp);
         let border = frame::border(self.dpi);
         let w = (self.size.w * self.scale()).round() as i32;
@@ -435,6 +472,10 @@ impl Ui {
             }
             Capture::Node(id) if self.is_field(id) => {
                 self.field_drag(id, p);
+                return;
+            }
+            Capture::Node(_) if self.drag.is_some() => {
+                self.drag_move(p);
                 return;
             }
             _ => {}
@@ -524,6 +565,14 @@ impl Ui {
         }
         let target = pick.target;
         self.tree.press(target);
+        self.drag = target
+            .filter(|&t| !self.is_field(t))
+            .and_then(|t| self.draggable_of(t))
+            .map(|source| Drag {
+                source,
+                from: p,
+                started: false,
+            });
         if let Some(t) = target {
             // SAFETY: capturing for our own window.
             unsafe { SetCapture(self.hwnd) };
@@ -581,6 +630,81 @@ impl Ui {
         self.fonts.field_hit(id, f, x, r.w, r.h)
     }
 
+    /// Tell the app when the hovered target changed.
+    fn note_hover(&mut self) {
+        let now = self.tree.hovered();
+        if now != self.hover_sent {
+            self.hover_sent = now;
+            self.events.push_back(Event::Hover(now));
+        }
+    }
+
+    /// The draggable node a press on `target` would drag: it, or its
+    /// nearest draggable ancestor.
+    fn draggable_of(&self, target: NodeId) -> Option<NodeId> {
+        let mut cur = Some(target);
+        while let Some(c) = cur {
+            if self.tree.get(c).is_some_and(|n| n.flags.draggable) {
+                return Some(c);
+            }
+            cur = self.tree.parent(c);
+        }
+        None
+    }
+
+    /// The pointer moved with a draggable node pressed: past the system's
+    /// drag threshold it is a drag, and every move after says where.
+    fn drag_move(&mut self, p: Point) {
+        let Some(mut d) = self.drag else {
+            return;
+        };
+        if !d.started {
+            // SAFETY: plain system queries (physical pixels at the
+            // window's scale).
+            let (cx, cy) = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
+            let s = self.scale();
+            let (tx, ty) = (cx.max(1) as f32 / s, cy.max(1) as f32 / s);
+            if (p.x - d.from.x).abs() < tx && (p.y - d.from.y).abs() < ty {
+                return;
+            }
+            d.started = true;
+            self.drag = Some(d);
+            // No click at the end of a drag: the press is let go of now.
+            self.tree.release(None);
+            self.hide_tip();
+            self.events.push_back(Event::DragStart {
+                source: d.source,
+                at: p,
+            });
+        }
+        let pick = self.tree.pointer_move(p);
+        self.events.push_back(Event::DragMove {
+            source: d.source,
+            target: pick.target,
+            at: p,
+        });
+    }
+
+    /// Escape during a drag: it ends where it began.
+    fn cancel_drag(&mut self) -> bool {
+        let Some(d) = self.drag.take() else {
+            return false;
+        };
+        if let Capture::Node(_) = self.capture {
+            self.capture = Capture::None;
+            self.tree.release(None);
+            // SAFETY: releasing our own capture.
+            unsafe {
+                let _ = ReleaseCapture();
+            }
+        }
+        if d.started {
+            self.events
+                .push_back(Event::DragCancel { source: d.source });
+        }
+        d.started
+    }
+
     fn field_drag(&mut self, id: NodeId, p: Point) {
         let pos = self.field_pos(id, p);
         if self
@@ -612,12 +736,22 @@ impl Ui {
                 true
             }
             Capture::Node(_) if msg == WM_LBUTTONUP => {
+                let drag = self.drag.take();
                 self.capture = Capture::None;
                 // SAFETY: as above.
                 unsafe {
                     let _ = ReleaseCapture();
                 }
                 let target = self.tree.pick(p).target;
+                if let Some(d) = drag.filter(|d| d.started) {
+                    self.tree.release(None);
+                    self.events.push_back(Event::Drop {
+                        source: d.source,
+                        target,
+                        at: p,
+                    });
+                    return false;
+                }
                 if let Some(id) = self.tree.release(target)
                     && self.caption.which(id).is_none()
                     && !self.is_field(id)
@@ -858,6 +992,9 @@ impl Ui {
         self.hide_tip();
         let key = keys::key(vk);
         let mods = keys::mods();
+        if key == Key::Escape && self.drag.is_some_and(|d| d.started) && self.cancel_drag() {
+            return Some(LRESULT(0));
+        }
         if self.menu.is_some() {
             self.menu_key(key);
             return Some(LRESULT(0));
@@ -866,14 +1003,19 @@ impl Ui {
         if let Some(id) = focused.filter(|&i| self.is_field(i))
             && !mods.alt
         {
-            let rtl = self
+            let how = self
                 .tree
                 .get(id)
                 .and_then(|n| n.field_ref())
-                .is_some_and(|f| f.edit.is_rtl());
+                .map(|f| FieldKeys {
+                    rtl: f.edit.is_rtl(),
+                    secure: f.secure,
+                    app_keys: f.app_keys,
+                })
+                .unwrap_or_default();
             let out = self
                 .tree
-                .with_field(id, |f| field_key(&mut f.edit, key, mods, rtl))
+                .with_field(id, |f| field_key_with(&mut f.edit, key, mods, how))
                 .unwrap_or(FieldKey::Ignored);
             match out {
                 FieldKey::Ignored => {}
@@ -913,7 +1055,7 @@ impl Ui {
             }
         }
         match key {
-            Key::Tab if !mods.ctrl && !mods.alt => {
+            Key::Tab if !mods.ctrl && !mods.alt && !focused.is_some_and(|i| self.app_tab(i)) => {
                 let next = self.tree.next_focus(!mods.shift);
                 if next.is_some() {
                     self.set_focus(next, true);

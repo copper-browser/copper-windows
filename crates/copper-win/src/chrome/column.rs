@@ -47,12 +47,16 @@ pub enum Hit {
     SpaceMark,
 }
 
-/// One tab's row.
+/// One tab's row (`Side.swift` 596–668): the mark, a private tab's
+/// `eye.slash`, the title, and at the end one 15-square place shared by the
+/// close cross (while hovered), the loading ring, and the speaker.
 struct Row {
     node: NodeId,
     mark: NodeId,
+    shy: NodeId,
     label: NodeId,
     close: NodeId,
+    ring: NodeId,
     audio: NodeId,
     drawn: Drawn,
 }
@@ -1308,6 +1312,15 @@ fn new_row(ui: &mut Ui, list: NodeId, t: &TabView<Icon>, icon: Option<u32>) -> R
             .role(Role::ListItem),
     );
     let m = mark(ui, node, icon, &t.letter, side::MARK);
+    // A private tab says so before its title: `eye.slash`, 9, the title's
+    // ink at 0.7 (`Side.swift` 614–617).
+    let shy = ui.tree.add(
+        node,
+        Node::glyph(glyph::EYE_SLASH, 9.0, 11.0)
+            .ink(Swatch::Fade(Token::ColumnInk, 0.7))
+            .hidden(true)
+            .role(Role::None),
+    );
     let label = ui.tree.add(
         node,
         Node::text(&t.label, side::TITLE_SIZE)
@@ -1315,15 +1328,34 @@ fn new_row(ui: &mut Ui, list: NodeId, t: &TabView<Icon>, icon: Option<u32>) -> R
             .grow(1.0)
             .role(Role::None),
     );
-    let audio = ui.tree.add(
+    // The end's one place: the cross over the ring over the speaker.
+    let end = ui.tree.add(
         node,
-        Node::glyph(glyph::AUDIO, side::CLOSE_GLYPH + 1.0, side::CLOSE)
+        Node::stack()
+            .size(side::CLOSE, side::CLOSE)
+            .shrink(0.0)
+            .align(Align::Center)
+            .justify(Justify::Center),
+    );
+    let audio = ui.tree.add(
+        end,
+        Node::glyph(glyph::AUDIO, side::CLOSE_GLYPH, side::CLOSE)
             .ink(Token::ColumnMuted)
+            .conceal()
+            .hidden(true)
+            .role(Role::None),
+    );
+    // `Ring`: 10 across, 1.4 thick, muted at 0.7, one turn every 0.85 s.
+    let ring = ui.tree.add(
+        end,
+        Node::ring(10.0, 1.4)
+            .ink(Swatch::Fade(Token::ColumnMuted, 0.7))
+            .conceal()
             .hidden(true)
             .role(Role::None),
     );
     let close = ui.tree.add(
-        node,
+        end,
         Node::stack()
             .size(side::CLOSE, side::CLOSE)
             .shrink(0.0)
@@ -1344,8 +1376,10 @@ fn new_row(ui: &mut Ui, list: NodeId, t: &TabView<Icon>, icon: Option<u32>) -> R
     let mut r = Row {
         node,
         mark: m,
+        shy,
         label,
         close,
+        ring,
         audio,
         drawn: d.clone(),
     };
@@ -1366,8 +1400,10 @@ fn update_row(ui: &mut Ui, r: &mut Row, d: &Drawn, icon: Option<u32>) {
     style_row(ui, r, d);
 }
 
-/// The row's state: live (semibold, selected), loading (a quieter mark),
-/// playing audio, crashed.
+/// The row's state: live (semibold, selected, its mark at full strength),
+/// private, loading (the ring), playing audio (the speaker, unless the
+/// ring is turning), stopped. A sleeping tab is not dimmed (`Side.swift`
+/// 723–728).
 fn style_row(ui: &mut Ui, r: &mut Row, d: &Drawn) {
     ui.tree.set_weight(
         r.label,
@@ -1378,15 +1414,11 @@ fn style_row(ui: &mut Ui, r: &mut Row, d: &Drawn) {
         },
     );
     ui.tree.set_selected(r.node, d.live);
-    let mark_alpha = if d.loading {
-        0.45
-    } else if d.live {
-        1.0
-    } else {
-        side::MARK_RESTING
-    };
+    let mark_alpha = if d.live { 1.0 } else { side::MARK_RESTING };
     ui.tree.set_prop(r.mark, Prop::Opacity, mark_alpha);
-    ui.tree.set_hidden(r.audio, !d.audio);
+    ui.tree.set_hidden(r.shy, !d.private);
+    ui.tree.set_hidden(r.ring, !d.loading);
+    ui.tree.set_hidden(r.audio, !d.audio || d.loading);
     let ink = if d.crashed {
         Swatch::Token(Token::ColumnMuted)
     } else {

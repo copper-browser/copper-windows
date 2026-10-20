@@ -26,10 +26,10 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, GetDpiForWindow,
     MDT_EFFECTIVE_DPI, SetProcessDpiAwarenessContext,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetCursorPos,
-    GetWindowLongPtrW, IDC_ARROW, LoadCursorW, MINMAXINFO, RegisterClassExW, SW_MAXIMIZE,
+    GetWindowLongPtrW, IDC_ARROW, IsChild, LoadCursorW, MINMAXINFO, RegisterClassExW, SW_MAXIMIZE,
     SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
     ShowWindow, WM_DPICHANGED, WM_GETMINMAXINFO, WM_GETOBJECT, WM_NCCALCSIZE, WM_NCCREATE,
@@ -307,6 +307,12 @@ fn run_command(hwnd: HWND, c: Command) {
             }
             Command::FocusWindow => {
                 let _ = SetFocus(Some(hwnd));
+            }
+            Command::FocusChild(child) => {
+                // Only from this window: a click elsewhere since then wins.
+                if GetFocus() == hwnd && IsChild(hwnd, child).as_bool() {
+                    let _ = SetFocus(Some(child));
+                }
             }
             Command::Destroy => {
                 let _ = DestroyWindow(hwnd);

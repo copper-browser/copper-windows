@@ -168,6 +168,23 @@ pub fn tint_of(space: &copper_core::session::Space) -> Option<Tint> {
     })
 }
 
+/// The column's tint while a private tab is picked: copper-shell-core's
+/// quiet violet-grey (`colour::Theme::private`, the Linux build's), on the
+/// column and strip only. A Windows extension: the Mac marks a private
+/// tab with `eye.slash` alone.
+pub fn private_tint() -> Tint {
+    let t = colour::Theme::private();
+    Tint {
+        color: t
+            .colors
+            .first()
+            .copied()
+            .map(rgb)
+            .unwrap_or(Color::grey(0.5)),
+        intensity: t.intensity as f32,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
