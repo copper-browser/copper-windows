@@ -108,15 +108,15 @@ pub const BINDINGS: &[(&str, &[Chord])] = &[
     ("reopen-tab", &[cs(l('T'))]),
     ("next-tab", &[c(Key::Tab), c(Key::PageDown)]),
     ("previous-tab", &[cs(Key::Tab), c(Key::PageUp)]),
-    ("select-tab-1", &[c(Key::Digit(1)), a(Key::Digit(1))]),
-    ("select-tab-2", &[c(Key::Digit(2)), a(Key::Digit(2))]),
-    ("select-tab-3", &[c(Key::Digit(3)), a(Key::Digit(3))]),
-    ("select-tab-4", &[c(Key::Digit(4)), a(Key::Digit(4))]),
-    ("select-tab-5", &[c(Key::Digit(5)), a(Key::Digit(5))]),
-    ("select-tab-6", &[c(Key::Digit(6)), a(Key::Digit(6))]),
-    ("select-tab-7", &[c(Key::Digit(7)), a(Key::Digit(7))]),
-    ("select-tab-8", &[c(Key::Digit(8)), a(Key::Digit(8))]),
-    ("select-tab-9", &[c(Key::Digit(9)), a(Key::Digit(9))]),
+    ("select-tab-1", &[c(Key::Digit(1))]),
+    ("select-tab-2", &[c(Key::Digit(2))]),
+    ("select-tab-3", &[c(Key::Digit(3))]),
+    ("select-tab-4", &[c(Key::Digit(4))]),
+    ("select-tab-5", &[c(Key::Digit(5))]),
+    ("select-tab-6", &[c(Key::Digit(6))]),
+    ("select-tab-7", &[c(Key::Digit(7))]),
+    ("select-tab-8", &[c(Key::Digit(8))]),
+    ("select-tab-9", &[c(Key::Digit(9))]),
     ("pin-tab", &[cs(l('D'))]),
     // The field and the palette.
     ("focus-field", &[c(l('L')), a(l('D')), k(Key::F(6))]),
@@ -128,6 +128,7 @@ pub const BINDINGS: &[(&str, &[Chord])] = &[
         &[c(l('R')), k(Key::F(5)), k(Key::Other(VK_BROWSER_REFRESH))],
     ),
     ("hard-reload", &[cs(l('R')), s(Key::F(5)), c(Key::F(5))]),
+    ("pause-media", &[cs(l('M'))]),
     (
         "back",
         &[
@@ -161,15 +162,27 @@ pub const BINDINGS: &[(&str, &[Chord])] = &[
     ),
     ("zoom-reset", &[c(Key::Digit(0)), c(Key::Other(VK_NUMPAD0))]),
     ("inspector", &[cs(l('I')), k(Key::F(12))]),
-    ("bookmark-page", &[c(l('D'))]),
+    ("bookmark-page", &[cs(l('B'))]),
     ("hide-anything", &[cs(l('H'))]),
     ("reader", &[ca(l('R'))]),
     // Panels.
-    ("show-history", &[c(l('Y'))]),
-    ("show-downloads", &[cs(l('Y'))]),
+    ("show-history", &[c(l('H'))]),
+    ("show-downloads", &[cs(l('J'))]),
+    ("show-hidden", &[cs(l('U'))]),
     // Spaces.
     ("next-space", &[ca(Key::Right)]),
     ("previous-space", &[ca(Key::Left)]),
+    // The Mac's ⌃1…⌃9 and ⌃N: Alt here (never Ctrl+Alt, which is AltGr).
+    ("space-1", &[a(Key::Digit(1))]),
+    ("space-2", &[a(Key::Digit(2))]),
+    ("space-3", &[a(Key::Digit(3))]),
+    ("space-4", &[a(Key::Digit(4))]),
+    ("space-5", &[a(Key::Digit(5))]),
+    ("space-6", &[a(Key::Digit(6))]),
+    ("space-7", &[a(Key::Digit(7))]),
+    ("space-8", &[a(Key::Digit(8))]),
+    ("space-9", &[a(Key::Digit(9))]),
+    ("new-space", &[a(l('N'))]),
     // Agents.
     ("agent", &[c(l('E'))]),
     // Window.
@@ -316,9 +329,20 @@ mod tests {
         assert_eq!(t(Key::Right, false, false, true), Some("forward"));
         assert_eq!(t(Key::Letter('F'), true, false, false), Some("find"));
         assert_eq!(
-            t(Key::Letter('D'), true, false, false),
+            t(Key::Letter('B'), true, true, false),
             Some("bookmark-page")
         );
+        assert_eq!(
+            t(Key::Letter('H'), true, false, false),
+            Some("show-history")
+        );
+        assert_eq!(
+            t(Key::Letter('J'), true, true, false),
+            Some("show-downloads")
+        );
+        assert_eq!(t(Key::Letter('U'), true, true, false), Some("show-hidden"));
+        // Ctrl+Y is Redo in Windows text fields and pages.
+        assert_eq!(t(Key::Letter('Y'), true, false, false), None);
         assert_eq!(
             t(Key::Other(VK_OEM_COMMA), true, false, false),
             Some("settings")
@@ -331,6 +355,19 @@ mod tests {
         );
         assert_eq!(t(Key::F(11), false, false, false), Some("fullscreen"));
         assert_eq!(t(Key::Escape, false, false, false), Some("escape"));
+    }
+
+    #[test]
+    fn spaces_take_alt_and_tabs_take_ctrl() {
+        let t = |k, ctrl, shift, alt| command(chord(k, ctrl, shift, alt));
+        assert_eq!(t(Key::Digit(1), false, false, true), Some("space-1"));
+        assert_eq!(t(Key::Digit(9), false, false, true), Some("space-9"));
+        assert_eq!(t(Key::Digit(3), true, false, false), Some("select-tab-3"));
+        assert_eq!(t(Key::Letter('N'), false, false, true), Some("new-space"));
+        assert_eq!(t(Key::Right, true, false, true), Some("next-space"));
+        assert_eq!(t(Key::Left, true, false, true), Some("previous-space"));
+        assert_eq!(shortcut("space-2").as_deref(), Some("Alt+2"));
+        assert_eq!(shortcut("new-space").as_deref(), Some("Alt+N"));
     }
 
     #[test]

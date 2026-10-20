@@ -222,8 +222,9 @@ impl Painter {
             return;
         }
         let mut opacity = if is_root { 1.0 } else { n.transform.opacity };
-        if n.flags.reveal {
-            opacity *= tree.reveal_t(id);
+        // A layer's own reveal / conceal is its visual's opacity.
+        if !is_root && (n.flags.reveal || n.flags.conceal) {
+            opacity *= tree.shown_t(id);
         }
         let faded = opacity < 0.999;
         if faded {
@@ -496,8 +497,35 @@ impl Painter {
                     }
                 }
             }
+            Content::Ring(ring) => {
+                let (ink, hover, ht) = n.ink_now();
+                let c = mixed(f.theme, ink, hover, ht, None, 0.0);
+                self.ring(f, r, *ring, c);
+            }
             Content::None | Content::Slot => {}
         }
+    }
+
+    /// An open ring inscribed in `r` ([`Content::Ring`]).
+    fn ring(&mut self, f: &mut Frame, r: Rect, ring: crate::node::Ring, c: Color) {
+        if c.a <= 0.0 || r.is_empty() {
+            return;
+        }
+        let d = r.w.min(r.h);
+        let Some(g) = self.shapes.arc(f.gfx, d, ring.width, ring.trim) else {
+            return;
+        };
+        let Some(style) = self.shapes.round_caps(f.gfx) else {
+            return;
+        };
+        let Some(brush) = self.brush(f, c) else {
+            return;
+        };
+        let at = Point::new(r.x + (r.w - d) / 2.0, r.y + (r.h - d) / 2.0);
+        self.with_offset(f, at, |dc| {
+            // SAFETY: drawing on the live context.
+            unsafe { dc.DrawGeometry(&g, &brush, ring.width, &style) };
+        });
     }
 
     fn text(&mut self, f: &mut Frame, layout: &IDWriteTextLayout, at: Point, c: Color, clip: bool) {
@@ -556,8 +584,8 @@ impl Painter {
                         b
                     }
                 };
-                let a = f.fonts.field_utf16(id, shift(sel.start));
-                let b = f.fonts.field_utf16(id, shift(sel.end));
+                let a = f.fonts.field_utf16(id, field.shown_byte(shift(sel.start)));
+                let b = f.fonts.field_utf16(id, field.shown_byte(shift(sel.end)));
                 let mut rects = std::mem::take(&mut self.rects);
                 fl.range_rects(a..b, &mut rects);
                 let c = if focused {
@@ -581,8 +609,10 @@ impl Painter {
                         Some(cl) => (cl.range.clone(), cl.target),
                         None => (0..comp.text.len(), false),
                     };
-                    let a = f.fonts.field_utf16(id, start + range.start);
-                    let b = f.fonts.field_utf16(id, start + range.end);
+                    let a = f
+                        .fonts
+                        .field_utf16(id, field.shown_byte(start + range.start));
+                    let b = f.fonts.field_utf16(id, field.shown_byte(start + range.end));
                     fl.range_rects(a..b, &mut rects);
                     let thick = if target { 2.0 * px.max(0.5) } else { px };
                     for q in &rects {
@@ -597,6 +627,14 @@ impl Painter {
                     }
                 }
                 self.rects = rects;
+            }
+            if field.shows_ghost()
+                && let Some(g) = f.fonts.ghost_layout(id, field, r.h)
+            {
+                // Right after the text: where the caret stands at its end.
+                let (x, _, _) = fl.caret();
+                let c = f.theme.color(field.placeholder_ink);
+                self.text(f, &g, Point::new(origin.x + x, origin.y), c, true);
             }
             if show_caret && !edit.has_selection() {
                 let (x, top, h) = fl.caret();

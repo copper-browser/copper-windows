@@ -27,6 +27,10 @@ pub struct SpaceView {
     pub letter: String,
     pub color: Color,
     pub current: bool,
+    /// Its icon as stored: an emoji, or `sf:<symbol>` (`palette::symbols`).
+    pub icon: Option<String>,
+    /// How many loose tabs it holds.
+    pub count: usize,
 }
 
 /// Everything the column and the strip draw.
@@ -64,6 +68,8 @@ impl Model {
                 letter: s.letter(),
                 color: chip_color(s),
                 current: s.id == current,
+                icon: s.icon.clone(),
+                count: b.row(&s.id).len(),
             })
             .collect();
         let space = spaces
@@ -76,6 +82,8 @@ impl Model {
                 letter: "S".into(),
                 color: Color::grey(0.5),
                 current: true,
+                icon: None,
+                count: 0,
             });
         let tint = tint_of(b.current_space());
         drop(b);
@@ -161,6 +169,23 @@ pub fn tint_of(space: &copper_core::session::Space) -> Option<Tint> {
         color: rgb(c),
         intensity: t.intensity as f32,
     })
+}
+
+/// The column's tint while a private tab is picked: copper-shell-core's
+/// quiet violet-grey (`colour::Theme::private`, the Linux build's), on the
+/// column and strip only. A Windows extension: the Mac marks a private
+/// tab with `eye.slash` alone.
+pub fn private_tint() -> Tint {
+    let t = colour::Theme::private();
+    Tint {
+        color: t
+            .colors
+            .first()
+            .copied()
+            .map(rgb)
+            .unwrap_or(Color::grey(0.5)),
+        intensity: t.intensity as f32,
+    }
 }
 
 #[cfg(test)]

@@ -83,6 +83,72 @@ pub struct Field {
     pub caret_on: bool,
     /// Bumped on every text or composition change.
     pub revision: u32,
+    /// A password: drawn as one `●` per character, never copied or cut,
+    /// no IME, `IsPassword` to UI Automation. The text itself is real.
+    pub secure: bool,
+    /// The app takes Tab / Shift+Tab (no focus traversal) and Right / End
+    /// at the end of the text, as `Event::Key` (the palette's groups and
+    /// inline completion).
+    pub app_keys: bool,
+    /// Grey completion drawn right after the text while the caret is at its
+    /// end (no selection, no composition); not part of the text.
+    pub ghost: String,
+}
+
+impl Field {
+    /// The string drawn — the text with the composition spliced in, masked
+    /// when secure — with the caret and the composition's range in it.
+    pub fn shown(&self) -> (String, usize, Option<std::ops::Range<usize>>) {
+        let (display, caret, comp) = self.edit.display();
+        if !self.secure {
+            return (display, caret, comp);
+        }
+        let at = |b| crate::edit::masked_byte(&display, b);
+        (
+            crate::edit::mask(&display),
+            at(caret),
+            comp.map(|r| at(r.start)..at(r.end)),
+        )
+    }
+
+    /// A byte offset of [`TextEdit::display`] as the same place in
+    /// [`Field::shown`].
+    pub fn shown_byte(&self, display_byte: usize) -> usize {
+        if self.secure {
+            crate::edit::masked_byte(&self.edit.display().0, display_byte)
+        } else {
+            display_byte
+        }
+    }
+
+    /// A byte offset of [`Field::shown`] as the same place in
+    /// [`TextEdit::display`].
+    pub fn display_byte(&self, shown_byte: usize) -> usize {
+        if self.secure {
+            crate::edit::unmasked_byte(&self.edit.display().0, shown_byte)
+        } else {
+            shown_byte
+        }
+    }
+
+    /// Whether the ghost completion shows now.
+    pub fn shows_ghost(&self) -> bool {
+        !self.ghost.is_empty()
+            && !self.edit.text().is_empty()
+            && self.edit.composition().is_none()
+            && !self.edit.has_selection()
+            && self.edit.caret() == self.edit.text().len()
+    }
+
+    /// What UI Automation reads as the field's value: the text, or its
+    /// mask for a password.
+    pub fn spoken(&self) -> String {
+        if self.secure {
+            crate::edit::mask(self.edit.text())
+        } else {
+            self.edit.text().to_owned()
+        }
+    }
 }
 
 /// What a node shows besides its background.
@@ -96,7 +162,22 @@ pub enum Content {
     Image(u32),
     /// A page's visual (see the backend's `WebSlot`).
     Slot,
+    /// An open circle in the node's ink (a loading spinner, `Ring`).
+    Ring(Ring),
 }
+
+/// An arc of the circle inscribed in the node: from the top, clockwise,
+/// `trim` of the way round, `width` thick with round ends (SwiftUI's
+/// `Circle().trim(from: 0, to: trim).stroke(lineWidth:lineCap: .round)`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ring {
+    pub trim: f32,
+    pub width: f32,
+}
+
+/// One turn of a spinning node ([`Flags::spin`]), in seconds (`Ring`'s
+/// `.linear(duration: 0.85).repeatForever`).
+pub const SPIN_PERIOD: f32 = 0.85;
 
 /// What the pointer shows over a node.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -231,6 +312,19 @@ pub struct Flags {
     /// Drawn only while the nearest pointer target above it is hovered,
     /// fading in and out with it (a row's close cross).
     pub reveal: bool,
+    /// A press here that moves past the drag threshold becomes a drag
+    /// (`Event::DragStart` … `Event::Drop`) instead of a click.
+    pub draggable: bool,
+    /// The opposite of [`Flags::reveal`]: drawn only while the nearest
+    /// pointer target above is *not* hovered (what a row's close cross
+    /// stands in for: its spinner, its speaker).
+    pub conceal: bool,
+    /// Turns round its centre for ever, once every [`SPIN_PERIOD`], in the
+    /// compositor (no redraws). Layers only; while it is shown.
+    pub spin: bool,
+    /// Never under the pointer, nor anything in it: the pointer goes to
+    /// what lies beneath (a page under the hovered link's address).
+    pub inert: bool,
 }
 
 /// Live interaction state (set by the tree, read by paint).
@@ -244,6 +338,8 @@ pub struct State {
     /// Hover and press, eased (0–1): what paint mixes by.
     pub hover_t: f32,
     pub press_t: f32,
+    /// How far through a shake (`Prop::Shake`).
+    pub shake_t: f32,
 }
 
 /// Render-only transform of a layer, animated without relayout or redraw.
@@ -349,6 +445,9 @@ impl Node {
             scroll_x: 0.0,
             caret_on: true,
             revision: 0,
+            secure: false,
+            app_keys: false,
+            ghost: String::new(),
         }));
         n.flags.hit = true;
         n.flags.focusable = true;
@@ -386,6 +485,17 @@ impl Node {
     pub fn image(id: u32, size: f32) -> Node {
         let mut n = Node::new().size(size, size);
         n.content = Content::Image(id);
+        n
+    }
+
+    /// A spinner: a `size`-wide open ring, `width` thick, turning (the
+    /// Mac's `Ring`: trimmed to 0.78, one turn every 0.85 s). Ink it with
+    /// [`Node::ink`].
+    pub fn ring(size: f32, width: f32) -> Node {
+        let mut n = Node::new().size(size, size).shrink(0.0);
+        n.content = Content::Ring(Ring { trim: 0.78, width });
+        n.flags.layer = true;
+        n.flags.spin = true;
         n
     }
 
@@ -532,6 +642,28 @@ impl Node {
         }
         self
     }
+    /// The colour of a field's placeholder.
+    pub fn placeholder_ink(mut self, s: impl Into<Swatch>) -> Node {
+        if let Content::Field(f) = &mut self.content {
+            f.placeholder_ink = s.into();
+        }
+        self
+    }
+    /// A field that hides its text (passwords); see [`Field::secure`].
+    pub fn secure(mut self, on: bool) -> Node {
+        if let Content::Field(f) = &mut self.content {
+            f.secure = on;
+        }
+        self
+    }
+    /// A field whose Tab and end-of-text Right/End are the app's; see
+    /// [`Field::app_keys`].
+    pub fn app_keys(mut self) -> Node {
+        if let Content::Field(f) = &mut self.content {
+            f.app_keys = true;
+        }
+        self
+    }
     pub fn trim(mut self, tr: Trim) -> Node {
         if let Content::Text(t) = &mut self.content {
             t.trim = tr;
@@ -568,10 +700,26 @@ impl Node {
         self.flags.drag = true;
         self
     }
+    /// Pressed and moved, this node is dragged: see [`Flags::draggable`].
+    pub fn draggable(mut self) -> Node {
+        self.flags.draggable = true;
+        self
+    }
     /// Show only while the pointer is over the nearest pointer target
     /// above: see [`Flags::reveal`].
     pub fn reveal(mut self) -> Node {
         self.flags.reveal = true;
+        self
+    }
+    /// Hide while the pointer is over the nearest pointer target above:
+    /// see [`Flags::conceal`].
+    pub fn conceal(mut self) -> Node {
+        self.flags.conceal = true;
+        self
+    }
+    /// Let the pointer through: see [`Flags::inert`].
+    pub fn inert(mut self) -> Node {
+        self.flags.inert = true;
         self
     }
     pub fn modal(mut self) -> Node {

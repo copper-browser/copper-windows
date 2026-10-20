@@ -122,6 +122,29 @@ impl Bridge {
         }
     }
 
+    /// Say `text` to a screen reader without moving focus (a toast): a
+    /// notification from the window's root, the newest replacing any
+    /// still queued.
+    pub fn announce(&mut self, text: &str) {
+        if !listening() {
+            return;
+        }
+        let Some(root) = self.root(Space::Main) else {
+            return;
+        };
+        // SAFETY: raising a notification on our own provider; the BSTRs
+        // outlive the call.
+        unsafe {
+            let _ = UiaRaiseNotificationEvent(
+                &root,
+                NotificationKind_Other,
+                NotificationProcessing_ImportantMostRecent,
+                &BSTR::from(text),
+                &BSTR::from("copper.announcement"),
+            );
+        }
+    }
+
     /// `id` was invoked (click, Enter, Space).
     pub fn invoked(&mut self, tree: &Tree, id: NodeId) {
         if listening() && accessible(tree, id) {
@@ -405,11 +428,11 @@ impl IRawElementProviderSimple_Impl for Element_Impl {
                 UIA_IsOffscreenPropertyId => {
                     VARIANT::from(!t.is_shown(self.id) || t.visible_rect(self.id).is_empty())
                 }
-                UIA_IsPasswordPropertyId => VARIANT::from(false),
+                UIA_IsPasswordPropertyId => VARIANT::from(n.field_ref().is_some_and(|f| f.secure)),
                 UIA_FrameworkIdPropertyId => VARIANT::from("Copper"),
                 UIA_IsInvokePatternAvailablePropertyId => VARIANT::from(invokable(t, self.id)),
                 UIA_ValueValuePropertyId => match n.field_ref() {
-                    Some(f) => VARIANT::from(f.edit.text()),
+                    Some(f) => VARIANT::from(f.spoken().as_str()),
                     None => VARIANT::default(),
                 },
                 _ => VARIANT::default(),
@@ -560,8 +583,8 @@ impl IValueProvider_Impl for Element_Impl {
             let text = t
                 .get(self.id)
                 .and_then(|n| n.field_ref())
-                .map_or("", |f| f.edit.text());
-            Ok(BSTR::from(text))
+                .map_or_else(String::new, |f| f.spoken());
+            Ok(BSTR::from(text.as_str()))
         })
     }
 

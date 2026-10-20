@@ -25,6 +25,7 @@ pub fn register(shell: &Shell) {
     crate::panels::register(shell);
     crate::settings::register(shell);
     crate::find::register(shell);
+    crate::palette::register(shell);
     page_commands(shell);
     shell.on_page_created(page_created);
     let pages: Vec<(TabId, WebView2Page)> = shell
@@ -94,6 +95,9 @@ pub fn page_created(shell: &Shell, id: &TabId, page: &WebView2Page) {
             match ev {
                 PageEvent::ScriptMessage { name, body } if name == curtain::HANDLER => {
                     curtain::message(&shell, &tab, &body);
+                    // WebView2's user sheets reach new documents only:
+                    // the page on screen is told itself.
+                    crate::panels::redress::picked(&shell, &tab);
                 }
                 PageEvent::Load(LoadState::Committed { .. }) => {
                     curtain::navigated(&shell, &tab);

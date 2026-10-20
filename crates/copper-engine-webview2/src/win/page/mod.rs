@@ -9,17 +9,22 @@
 //!
 //! Submodules: `events` (WebView2 events → `PageEvent`s), `script` (worlds,
 //! shims, user scripts, eval), `hosting` (CONTRACT §2), `input` (CDP input),
-//! `capture` (snapshots, find, covers), `life` (suspend, sleep, history).
+//! `capture` (snapshots, find, covers), `life` (suspend, sleep, history),
+//! `context_menu` (app-rendered menus), `nav_filter` (the navigation filter).
 
 mod capture;
 mod chooser;
+mod context_menu;
 mod events;
 mod hosting;
 mod input;
 mod life;
+mod nav_filter;
 mod scheme;
 mod script;
 mod view;
+
+pub use context_menu::ContextMenuReply;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -31,7 +36,7 @@ use copper_engine::{
 };
 use copper_win_rt::oneshot;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    COREWEBVIEW2_PERMISSION_STATE_DENY, ICoreWebView2_8, ICoreWebView2Deferral, ICoreWebView2Frame,
+    COREWEBVIEW2_PERMISSION_STATE_DENY, ICoreWebView2_8, ICoreWebView2Deferral,
     ICoreWebView2PermissionRequestedEventArgs,
 };
 use windows::core::Interface;
@@ -42,6 +47,9 @@ use super::profile::ProfileInner;
 use crate::filter::WebView2ContentFilter;
 use crate::history::NavStack;
 use crate::hosting::{Cover, PageChange};
+use crate::navigation::Refused;
+use context_menu::ContextMenuHandler;
+use nav_filter::NavigationFilter;
 
 /// Where the page's webview is.
 pub(crate) enum Life {
@@ -119,7 +127,7 @@ pub(crate) struct PageInner {
     pub html: RefCell<Option<(String, String)>>,
     /// Live child frames (for page-world message routing), with their
     /// handlers.
-    pub frames: RefCell<Vec<(ICoreWebView2Frame, Tokens)>>,
+    pub frames: RefCell<Vec<events::FrameHandlers>>,
     /// Made by `new_related`: waits to become a popup's webview.
     pub related: bool,
     /// Process-unique identity (`PageView::page_id`).
@@ -130,6 +138,12 @@ pub(crate) struct PageInner {
     pub chooser: chooser::PageChooser,
     /// `set_trusted_input(false)`: every input action from script.
     pub script_input: Cell<bool>,
+    /// `set_context_menu_handler`: the app renders context menus.
+    pub context_menu: RefCell<Option<ContextMenuHandler>>,
+    /// `set_navigation_filter`.
+    pub nav_filter: RefCell<Option<NavigationFilter>>,
+    /// Navigations the filter refused on the current webview.
+    pub refused: RefCell<Refused>,
 }
 
 /// Next `PageId` (never 0, never reused within a run).
@@ -195,6 +209,9 @@ impl WebView2Page {
             schemes: scheme::PageSchemes::default(),
             chooser: chooser::PageChooser::default(),
             script_input: Cell::new(false),
+            context_menu: RefCell::default(),
+            nav_filter: RefCell::default(),
+            refused: RefCell::default(),
         });
         profile.add_page(&inner);
         profile.engine.scripts.register(&inner);

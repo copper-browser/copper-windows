@@ -91,9 +91,63 @@ pub enum FieldKey {
     Cancel,
 }
 
+/// How a field takes keys besides plain editing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FieldKeys {
+    /// The paragraph reads right to left: Left and Right swap their
+    /// logical meaning.
+    pub rtl: bool,
+    /// A password: Copy and Cut do nothing (Paste still works).
+    pub secure: bool,
+    /// Right / End with no modifier at the very end of the text (no
+    /// selection) are the app's ([`FieldKey::Ignored`]).
+    pub app_keys: bool,
+}
+
 /// Apply `key` to the field. `rtl`: the paragraph reads right to left, so
 /// Left and Right swap their logical meaning.
 pub fn field_key(edit: &mut TextEdit, key: Key, mods: Mods, rtl: bool) -> FieldKey {
+    field_key_with(
+        edit,
+        key,
+        mods,
+        FieldKeys {
+            rtl,
+            ..FieldKeys::default()
+        },
+    )
+}
+
+/// [`field_key`] for a field with the extra behaviour of `how`.
+pub fn field_key_with(edit: &mut TextEdit, key: Key, mods: Mods, how: FieldKeys) -> FieldKey {
+    if how.secure {
+        let clip = match key {
+            Key::Letter('C' | 'X') => mods.ctrl && !mods.shift && !mods.alt,
+            Key::Insert => mods.ctrl && !mods.shift,
+            Key::Delete => mods.shift && !mods.ctrl,
+            _ => false,
+        };
+        if clip && edit.composition().is_none() {
+            // Shift+Delete still deletes; nothing reaches the clipboard.
+            return match key {
+                Key::Delete => edited(edit.delete(false)),
+                _ => FieldKey::Moved,
+            };
+        }
+    }
+    if how.app_keys
+        && mods == Mods::NONE
+        && edit.composition().is_none()
+        && !edit.has_selection()
+        && edit.caret() == edit.text().len()
+        && (key == Key::End || (key == Key::Right && !how.rtl))
+    {
+        return FieldKey::Ignored;
+    }
+    field_key_inner(edit, key, mods, how.rtl)
+}
+
+fn field_key_inner(edit: &mut TextEdit, key: Key, mods: Mods, rtl: bool) -> FieldKey {
     if mods.alt {
         return FieldKey::Ignored;
     }
@@ -244,6 +298,69 @@ mod tests {
         assert_eq!(
             field_key(&mut e, Key::Enter, Mods::NONE, false),
             FieldKey::Ignored
+        );
+    }
+
+    #[test]
+    fn secure_fields_never_reach_the_clipboard() {
+        let how = FieldKeys {
+            secure: true,
+            ..FieldKeys::default()
+        };
+        let mut e = field("hunter2");
+        e.select_all();
+        assert_eq!(
+            field_key_with(&mut e, Key::Letter('C'), Mods::CTRL, how),
+            FieldKey::Moved
+        );
+        assert_eq!(
+            field_key_with(&mut e, Key::Letter('X'), Mods::CTRL, how),
+            FieldKey::Moved
+        );
+        assert_eq!(e.text(), "hunter2");
+        assert_eq!(
+            field_key_with(&mut e, Key::Insert, Mods::CTRL, how),
+            FieldKey::Moved
+        );
+        assert_eq!(
+            field_key_with(&mut e, Key::Letter('V'), Mods::CTRL, how),
+            FieldKey::Paste
+        );
+        assert_eq!(
+            field_key_with(&mut e, Key::Delete, Mods::SHIFT, how),
+            FieldKey::Edited
+        );
+        assert_eq!(e.text(), "");
+    }
+
+    #[test]
+    fn app_keys_take_the_end_of_the_text() {
+        let how = FieldKeys {
+            app_keys: true,
+            ..FieldKeys::default()
+        };
+        let mut e = field("cop");
+        assert_eq!(
+            field_key_with(&mut e, Key::Right, Mods::NONE, how),
+            FieldKey::Ignored
+        );
+        assert_eq!(
+            field_key_with(&mut e, Key::End, Mods::NONE, how),
+            FieldKey::Ignored
+        );
+        assert_eq!(
+            field_key_with(&mut e, Key::Right, Mods::SHIFT, how),
+            FieldKey::Moved
+        );
+        e.home(false);
+        assert_eq!(
+            field_key_with(&mut e, Key::Right, Mods::NONE, how),
+            FieldKey::Moved
+        );
+        e.select_all();
+        assert_eq!(
+            field_key_with(&mut e, Key::End, Mods::NONE, how),
+            FieldKey::Moved
         );
     }
 
