@@ -26,13 +26,12 @@ impl Page for Tabs {
     }
 
     fn draw(&self, shell: &Shell) -> Form {
-        let (side, letters, sleeps) = {
+        // The shell's answer, not the stored one: with nothing stored yet
+        // the tabs are down the side.
+        let side = shell.tabs_position() == TabsPosition::Left;
+        let (letters, sleeps) = {
             let s = shell.settings();
-            (
-                s.tabs_position() == TabsPosition::Left,
-                s.glyph() == Glyph::Letters,
-                s.sleeps_tabs(),
-            )
+            (s.glyph() == Glyph::Letters, s.sleeps_tabs())
         };
         let mut f = Form::default();
         f.section("Layout")

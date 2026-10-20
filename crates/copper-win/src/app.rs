@@ -214,7 +214,12 @@ fn init_logging(logs: &std::path::Path) {
         )
     });
     let _ = std::fs::create_dir_all(logs);
-    let file = std::fs::File::create(logs.join("copper.log"));
+    // Only the window that won the claim gets here (a launch that hands its
+    // address over has returned already). The last run's log is kept beside
+    // the new one, so a crash is still readable after the restart.
+    let log = logs.join("copper.log");
+    let _ = std::fs::rename(&log, logs.join("copper.previous.log"));
+    let file = std::fs::File::create(&log);
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(false);
