@@ -1,4 +1,5 @@
-//! The account list under a sign-in or code box (`Accounts.swift`): it
+//! The account list under a sign-in or code box — or the vaults'
+//! identities and cards under an address or card box (`Accounts.swift`): it
 //! hangs 6 below the box's left edge, as wide as the box within 240–360,
 //! six 44-high rows and then a scroll, and a footer saying where the rows
 //! come from. It follows the box as the page scrolls or zooms, turns up
@@ -122,10 +123,17 @@ fn abs(at: Rect) -> Abs {
     }
 }
 
-/// A row's mark: where it is from, or that it is a code.
+/// Segoe Fluent Icons `ContactInfo` and `PaymentCard` (the Mac's
+/// `person.text.rectangle` and `creditcard`).
+const CONTACT: char = '\u{E779}';
+const CARD: char = '\u{E8C7}';
+
+/// A row's mark: where it is from, that it is a code, an identity or a card.
 fn mark(r: &Row) -> char {
     match (r.kind, r.credential.source) {
         (RowKind::Code, _) => glyph::DIALPAD,
+        (RowKind::Identity, _) => CONTACT,
+        (RowKind::Card, _) => CARD,
         (_, Source::Keychain) => glyph::KEY,
         (_, Source::Bitwarden) => glyph::SHIELD,
         (_, Source::OnePassword) => glyph::LOCK,
@@ -200,7 +208,11 @@ fn build(ui: &mut Ui, at: Rect, rows: &[Row], footer: &str) -> (NodeId, Vec<Node
             .clip()
             .hit()
             .role(Role::List)
-            .name("Accounts"),
+            .name(match rows.first().map(|r| r.kind) {
+                Some(RowKind::Identity) => "Addresses",
+                Some(RowKind::Card) => "Cards",
+                _ => "Accounts",
+            }),
     );
     let list = if rows.len() > fill::ROWS_SHOWN {
         ui.tree
@@ -351,5 +363,49 @@ pub fn pick_at(i: usize) {
     }
     if let Some(forms) = forms::get::<WinForms>() {
         forms.pick(&tab, row);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use copper_creds::credential::{AutofillCard, AutofillIdentity};
+
+    #[test]
+    fn identity_and_card_rows_look_like_the_mac() {
+        let who = Row::identity(&AutofillIdentity {
+            id: "bw-1".into(),
+            name: "Home".into(),
+            first_name: "Ana".into(),
+            city: "Springfield".into(),
+            ..Default::default()
+        });
+        let card = Row::card(&AutofillCard {
+            id: "op:2".into(),
+            name: "Travel".into(),
+            brand: "Visa".into(),
+            number: "4111111111111234".into(),
+            cardholder_name: "Ana Lima".into(),
+            ..Default::default()
+        });
+        assert_eq!(mark(&who), CONTACT);
+        assert_eq!(mark(&card), CARD);
+        assert_eq!(
+            fill::row_lines(&who),
+            ("Ana".to_string(), "Springfield".to_string())
+        );
+        assert_eq!(
+            fill::row_lines(&card),
+            ("Visa •••• 1234".to_string(), "Ana Lima".to_string())
+        );
+        let none = Pending::default();
+        assert_eq!(
+            fill::footer(std::slice::from_ref(&who), none),
+            "From Bitwarden"
+        );
+        assert_eq!(
+            fill::footer(&[who, card], none),
+            "From Bitwarden and 1Password"
+        );
     }
 }

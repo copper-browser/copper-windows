@@ -321,6 +321,14 @@ fn history_delete() {
         "Deleted 1,234 visits from the cloud"
     );
     assert!(deleted_text(2, true).contains("only the oldest 500,000 were looked through"));
+    assert_eq!(
+        stopped_text(5000),
+        "Stopped after deleting 5,000 visits from the cloud"
+    );
+    assert_eq!(
+        stopped_text(1),
+        "Stopped after deleting 1 visit from the cloud"
+    );
     assert_eq!(group_digits(0), "0");
     assert_eq!(group_digits(999), "999");
     assert_eq!(group_digits(1000), "1,000");

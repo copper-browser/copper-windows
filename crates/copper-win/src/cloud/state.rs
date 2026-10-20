@@ -118,6 +118,8 @@ pub struct State {
     pub looking: bool,
     pub erase_result: Option<String>,
     pub erase_problem: Option<String>,
+    /// The switch of the delete under way (Stop presses it).
+    pub erase_stop: Option<copper_cloud::sync::delete::Stop>,
     /// `GET /v1/info` was asked this showing (answered or not).
     pub info_asked: bool,
     /// `GET /v1/info` is on its way.

@@ -503,6 +503,49 @@ fn history_delete_states() {
     );
 }
 
+/// The quiet button labelled `label` anywhere in `els`.
+fn quiet_act<'a>(els: &'a [El], label: &str) -> Option<&'a Act> {
+    let mut found = None;
+    for e in els {
+        e.walk(&mut |e| {
+            if let Kind::Quiet { label: l, act, .. } = &e.kind
+                && l == label
+            {
+                found = Some(act);
+            }
+        });
+    }
+    found
+}
+
+#[test]
+fn looking_through_history_can_be_stopped() {
+    let mut s = signed_in();
+    s.deletes_history = Some(true);
+    assert!(quiet_act(&page(&s, &State::default()), "Stop").is_none());
+    let looking = State {
+        site: "x.com".into(),
+        erasing: true,
+        looking: true,
+        ..State::default()
+    };
+    let p = page(&s, &looking);
+    assert!(has(&p, "Looking through your history on this device…"));
+    assert_eq!(quiet_act(&p, "Stop"), Some(&Act::StopDelete));
+    assert_eq!(
+        pill(&p, "Delete history on cloud…").map(|p| p.2),
+        Some(false)
+    );
+    // A window is one request: nothing to stop (the Mac shows no Stop).
+    let window = State {
+        erasing: true,
+        ..State::default()
+    };
+    let p = page(&s, &window);
+    assert!(has(&p, "Deleting…"));
+    assert!(quiet_act(&p, "Stop").is_none());
+}
+
 #[test]
 fn details_and_log_unfold() {
     let s = Snap {
