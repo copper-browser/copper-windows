@@ -47,6 +47,8 @@ pub struct Model {
     pub tint: Option<Tint>,
     /// How many rows Clear would close (`crate::clear`).
     pub clearable: usize,
+    /// `groups.json`: the folders Saved and Today rows are filed in.
+    pub groups: Vec<copper_core::groups::TabGroup>,
 }
 
 impl Model {
@@ -98,6 +100,7 @@ impl Model {
             spaces,
             tint,
             clearable: shell.clearable_tabs().len(),
+            groups: copper_shell_core::agents::groups::all(shell),
         }
     }
 }
@@ -159,19 +162,45 @@ fn chip_color(space: &copper_core::session::Space) -> Color {
         .unwrap_or(Color::grey(0.5))
 }
 
-/// The column's tint for a space: a space never given a colour or a theme
-/// is the app's paper (what the Mac draws under the default space);
-/// otherwise its theme's first colour at its intensity.
+/// The column's tint for a space: `Space.look` — its theme, else its hue,
+/// else Copper's own (the Mac's default column; its picture is not drawn
+/// here) — flattened the way `SpaceTheme.toned` does: the mean of its stops,
+/// its intensity and tone, and the hue of its most saturated stop.
 pub fn tint_of(space: &copper_core::session::Space) -> Option<Tint> {
-    if space.theme.is_none() && space.hue.is_none() {
-        return None;
+    Some(tint(&colour::Theme::of(space)))
+}
+
+/// A shared-crate theme as the toolkit's tint.
+fn tint(t: &colour::Theme) -> Tint {
+    let stops = &t.colors;
+    let mean = match stops.len() {
+        0 => colour::Rgb::grey(0.62),
+        1 => stops[0],
+        n => {
+            // The trapezoid over evenly spaced stops (`SpaceTheme.toned`).
+            let k = (n - 1) as f64;
+            let (mut r, mut g, mut b) = (0.0, 0.0, 0.0);
+            for (i, s) in stops.iter().enumerate() {
+                let w = if i == 0 || i == n - 1 { 0.5 } else { 1.0 } / k;
+                r += s.r * w;
+                g += s.g * w;
+                b += s.b * w;
+            }
+            colour::Rgb::new(r, g, b)
+        }
+    };
+    let mut each = [rgb(mean); 3];
+    for (slot, c) in each.iter_mut().zip(stops) {
+        *slot = rgb(*c);
     }
-    let t = colour::Theme::of(space);
-    let c = t.colors.first().copied()?;
-    Some(Tint {
-        color: rgb(c),
+    Tint {
+        color: rgb(mean),
         intensity: t.intensity as f32,
-    })
+        tone: t.tone as f32,
+        hue: t.hue_of().map(|h| h as f32),
+        stops: each,
+        count: stops.len().clamp(1, 3) as u8,
+    }
 }
 
 /// The column's tint while a private tab is picked: copper-shell-core's
@@ -179,16 +208,7 @@ pub fn tint_of(space: &copper_core::session::Space) -> Option<Tint> {
 /// column and strip only. A Windows extension: the Mac marks a private
 /// tab with `eye.slash` alone.
 pub fn private_tint() -> Tint {
-    let t = colour::Theme::private();
-    Tint {
-        color: t
-            .colors
-            .first()
-            .copied()
-            .map(rgb)
-            .unwrap_or(Color::grey(0.5)),
-        intensity: t.intensity as f32,
-    }
+    tint(&colour::Theme::private())
 }
 
 #[cfg(test)]
@@ -204,5 +224,32 @@ mod tests {
         assert_eq!(shown_host("", "about:blank"), "");
         assert_eq!(shown_host("", "file:///C:/x.html"), "file:///C:/x.html");
         assert_eq!(title_of("  "), "Space");
+    }
+
+    #[test]
+    fn spaces_wear_their_whole_theme() {
+        use copper_core::session::{ColorStop, Space, SpaceTheme};
+        // No theme, no hue: Copper's own column, not paper.
+        let home = Space::new("Home");
+        let t = tint_of(&home).unwrap();
+        assert!((t.intensity - 0.45).abs() < 1e-6 && t.hue.is_some());
+        // A gradient is its mean, and its hue the fullest stop's.
+        let stop = |r, g, b| ColorStop {
+            r,
+            g,
+            b,
+            ..Default::default()
+        };
+        let mut s = Space::new("Exowatt");
+        s.theme = Some(SpaceTheme {
+            colors: vec![stop(1.0, 0.0, 0.0), stop(0.0, 0.0, 1.0)],
+            intensity: Some(0.6),
+            tone: Some(-0.5),
+            ..Default::default()
+        });
+        let t = tint_of(&s).unwrap();
+        assert!((t.color.r - 0.5).abs() < 1e-6 && (t.color.b - 0.5).abs() < 1e-6);
+        assert!((t.tone + 0.5).abs() < 1e-6);
+        assert!(t.hue.is_some());
     }
 }

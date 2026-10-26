@@ -55,7 +55,8 @@ pub fn detail(snap: &Snapshot, chosen: Source) -> String {
     let locked = match chosen {
         Source::Bitwarden => snap.bw_locked(),
         Source::OnePassword => snap.op_locked(),
-        Source::Keychain => false,
+        // BotPass is read-only here: never a save target on Windows yet.
+        Source::Keychain | Source::BotPass => false,
     };
     if locked {
         format!("{name} is locked — saves go to Credential Manager until it opens")
@@ -73,7 +74,7 @@ pub fn shown(shell: &Shell, snap: &Snapshot) -> bool {
 pub fn draw(shell: &Shell, sec: &mut Section, snap: &Snapshot) {
     let chosen = forms::chosen_backend(shell);
     let value = match chosen {
-        Source::Keychain => "keychain",
+        Source::Keychain | Source::BotPass => "keychain",
         Source::Bitwarden => "bitwarden",
         Source::OnePassword => "onepassword",
     };

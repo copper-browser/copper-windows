@@ -958,21 +958,30 @@ fn commands(shell: &Shell) -> Vec<rank::Cmd> {
     out
 }
 
-/// The pictures for the rows: an open tab's icon, a place's letter.
+/// The pictures for the rows: an open tab's icon, else the site's kept one
+/// (asked for once when there is none, `Shell::want_mark`), else a letter.
 fn marks(shell: &Shell, rows: &[Row]) -> HashMap<String, RowMark> {
     let icons = shell.favicons().borrow();
+    let kept = |row: &Row| -> Option<RowMark> {
+        let url = row.url.as_deref()?;
+        let hit = shell.cached_icon(url);
+        if hit.is_none() {
+            shell.want_mark(url);
+        }
+        hit.map(RowMark::Icon)
+    };
     rows.iter()
         .filter_map(|row| {
             let mark = match &row.action {
                 Action::Switch(id) => match icons.get(id) {
                     Some(i) => RowMark::Icon(i.clone()),
-                    None => RowMark::Letter(letter(row)?),
+                    None => kept(row).or_else(|| letter(row).map(RowMark::Letter))?,
                 },
                 Action::Go(_) if matches!(row.kind, Kind::Visited | Kind::Bookmark) => {
                     if row.section == rank::Section::Plain {
                         return None;
                     }
-                    RowMark::Letter(letter(row)?)
+                    kept(row).or_else(|| letter(row).map(RowMark::Letter))?
                 }
                 _ => return None,
             };

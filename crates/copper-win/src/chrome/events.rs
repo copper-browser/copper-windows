@@ -195,6 +195,7 @@ fn column_click(chrome: &Rc<Chrome>, shell: &Shell, h: ColumnHit) {
             crate::commands::run(shell, "bookmarks-door");
         }
         ColumnHit::Canvas => crate::canvas::door::toggle(shell),
+        ColumnHit::Folder(id) => copper_shell_core::agents::groups::toggle(shell, &id),
         h => crate::palette::spaces::column_hit(chrome, shell, h),
     }
 }

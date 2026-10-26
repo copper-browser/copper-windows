@@ -223,6 +223,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "copper-botpass"
+version = "0.4.1"
+dependencies = [
+ "copper-cloud",
+ "copper-core",
+ "copper-creds",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "copper-cloud"
 version = "0.4.1"
 dependencies = [
@@ -378,6 +394,7 @@ name = "copper-shell-core"
 version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
+ "copper-botpass",
  "copper-cloud",
  "copper-core",
  "copper-creds",
@@ -385,6 +402,7 @@ dependencies = [
  "copper-mcp",
  "copper-pagejs",
  "copper-shield",
+ "png",
  "reqwest",
  "serde",
  "serde_json",

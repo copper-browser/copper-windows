@@ -14,14 +14,17 @@ use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_GRADIENT_STOP,
+    D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_ANTIALIAS_MODE_ALIASED, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_OPTIONS_NONE,
-    D2D1_BITMAP_PROPERTIES1, D2D1_DRAW_TEXT_OPTIONS, D2D1_DRAW_TEXT_OPTIONS_CLIP,
-    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, D2D1_INTERPOLATION_MODE_LINEAR,
-    D2D1_LAYER_OPTIONS1_NONE, D2D1_LAYER_PARAMETERS1, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
-    ID2D1Bitmap1, ID2D1DeviceContext, ID2D1Geometry, ID2D1SolidColorBrush,
+    D2D1_BITMAP_PROPERTIES1, D2D1_BRUSH_PROPERTIES, D2D1_BUFFER_PRECISION_8BPC_UNORM,
+    D2D1_COLOR_INTERPOLATION_MODE_STRAIGHT, D2D1_COLOR_SPACE_SRGB, D2D1_DRAW_TEXT_OPTIONS,
+    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT, D2D1_EXTEND_MODE_CLAMP,
+    D2D1_INTERPOLATION_MODE_LINEAR, D2D1_LAYER_OPTIONS1_NONE, D2D1_LAYER_PARAMETERS1,
+    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, ID2D1Bitmap1,
+    ID2D1DeviceContext, ID2D1Geometry, ID2D1GradientStopCollection, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::IDWriteTextLayout;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -308,7 +311,13 @@ impl Painter {
             if let Some(s) = n.look.shadow {
                 self.shadow(f, r, radius, s, ink, fill.a);
             }
-            self.fill_shape(f, r, radius, fill);
+            let gradient = (n.look.fill == Swatch::Token(Token::ColumnGround))
+                .then(|| f.theme.space.and_then(|t| t.grounds(f.theme.dark)))
+                .flatten();
+            match gradient {
+                Some(stops) if radius <= 0.0 => self.fill_gradient(f, r, &stops, fill.a),
+                _ => self.fill_shape(f, r, radius, fill),
+            }
         }
         if n.look.stroke_width > 0.0 {
             let c = f.theme.color(n.look.stroke);
@@ -356,6 +365,61 @@ impl Painter {
             f.dc.SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
             f.dc.FillOpacityMask(&baked.bitmap, &brush, Some(&dest), None);
             f.dc.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        }
+    }
+
+    /// A space's gradient over the window's ground (`ThemeBackdrop`): its
+    /// stops evenly along a run from the top-leading corner down to the
+    /// bottom, leaning as far right as a column is wide for its height, so
+    /// the column shows the whole run the way the Mac's does; past the end
+    /// the last stop holds.
+    fn fill_gradient(&mut self, f: &mut Frame, r: Rect, stops: &[Color], alpha: f32) {
+        let n = stops.len();
+        if n < 2 || r.is_empty() {
+            return;
+        }
+        let gs: Vec<D2D1_GRADIENT_STOP> = stops
+            .iter()
+            .enumerate()
+            .map(|(i, c)| D2D1_GRADIENT_STOP {
+                position: i as f32 / (n - 1) as f32,
+                color: color_f(*c),
+            })
+            .collect();
+        // SAFETY: brush creation and drawing on the live context.
+        unsafe {
+            let Ok(collection) = f.dc.CreateGradientStopCollection(
+                &gs,
+                D2D1_COLOR_SPACE_SRGB,
+                D2D1_COLOR_SPACE_SRGB,
+                D2D1_BUFFER_PRECISION_8BPC_UNORM,
+                D2D1_EXTEND_MODE_CLAMP,
+                D2D1_COLOR_INTERPOLATION_MODE_STRAIGHT,
+            ) else {
+                return;
+            };
+            let Ok(collection) =
+                windows_core::Interface::cast::<ID2D1GradientStopCollection>(&collection)
+            else {
+                return;
+            };
+            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                startPoint: Vector2 { X: r.x, Y: r.y },
+                endPoint: Vector2 {
+                    X: r.x + r.h * 0.21,
+                    Y: r.bottom(),
+                },
+            };
+            let bp = D2D1_BRUSH_PROPERTIES {
+                opacity: alpha,
+                transform: Matrix3x2::identity(),
+            };
+            let Ok(brush) =
+                f.dc.CreateLinearGradientBrush(&props, Some(&bp), &collection)
+            else {
+                return;
+            };
+            f.dc.FillRectangle(&d2r(r), &brush);
         }
     }
 

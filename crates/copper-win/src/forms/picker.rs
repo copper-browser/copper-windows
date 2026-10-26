@@ -137,6 +137,7 @@ fn mark(r: &Row) -> char {
         (_, Source::Keychain) => glyph::KEY,
         (_, Source::Bitwarden) => glyph::SHIELD,
         (_, Source::OnePassword) => glyph::LOCK,
+        (_, Source::BotPass) => glyph::KEY,
     }
 }
 
