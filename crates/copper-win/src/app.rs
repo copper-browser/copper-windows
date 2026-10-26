@@ -269,6 +269,7 @@ fn build(opts: Options) -> Shell {
     WinView::listen_downloads(&shell);
     shell.start();
     crate::signins::take_in(&shell);
+    crate::freeze::start(&shell);
     shell
 }
 

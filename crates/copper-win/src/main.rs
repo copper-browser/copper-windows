@@ -51,6 +51,8 @@ mod forms;
 #[cfg(windows)]
 mod frame;
 #[cfg(windows)]
+mod freeze;
+#[cfg(windows)]
 mod instance;
 mod palette;
 mod panels;
