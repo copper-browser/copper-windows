@@ -483,12 +483,22 @@ impl Shadow {
     }
 }
 
-/// A space's theme, as far as the column needs it: one colour and how
-/// strongly it washes the column (`Fork/SpaceTheme.swift`).
+/// A space's theme, as far as the column needs it: one colour standing for
+/// all its stops (their mean, as `SpaceTheme.toned` takes it), how strongly
+/// it washes the column, its tone, and the hue the space is known by — the
+/// most saturated stop's (`Fork/SpaceTheme.swift`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     pub color: Color,
     pub intensity: f32,
+    /// -1…1: towards black or white (`SpaceTheme.tone`).
+    pub tone: f32,
+    /// The space's hue, or none for a grey.
+    pub hue: Option<f32>,
+    /// Its stops as they are, for a gradient (`count` of them used; one is
+    /// a flat column).
+    pub stops: [Color; 3],
+    pub count: u8,
 }
 
 impl Theme {
@@ -496,33 +506,68 @@ impl Theme {
     pub const PLAIN: Theme = Theme {
         color: Color::rgb(0.62, 0.62, 0.64),
         intensity: 0.34,
+        tone: 0.0,
+        hue: None,
+        stops: [Color::rgb(0.62, 0.62, 0.64); 3],
+        count: 1,
     };
     /// Copper's own column, the default a space wears.
     /// `Fork/SpaceTheme.swift` 210 (the picture over it is left out).
     pub const COPPER: Theme = Theme {
         color: Color::rgb(0.90, 0.76, 0.67),
         intensity: 0.45,
+        tone: 0.0,
+        // The hue of (0.90, 0.76, 0.67).
+        hue: Some(0.0652),
+        stops: [Color::rgb(0.90, 0.76, 0.67); 3],
+        count: 1,
     };
 
     /// The column's own colour. In the light: pulled from white by the
     /// intensity, then dimmed; in the dark: the same hue, deep and quiet.
     /// `Fork/SpaceTheme.swift` 222–228.
     pub fn ground(&self, dark: bool) -> Color {
-        if dark {
-            let (h, s, _) = to_hsb(self.color);
+        self.ground_of(self.color, dark)
+    }
+
+    /// The column's colour at each stop, top-leading to bottom-trailing
+    /// (`SpaceTheme.grounds`, toned): what a gradient column runs through.
+    /// `None` for a flat one.
+    pub fn grounds(&self, dark: bool) -> Option<Vec<Color>> {
+        let n = (self.count as usize).min(3);
+        (n > 1).then(|| {
+            self.stops[..n]
+                .iter()
+                .map(|c| self.ground_of(*c, dark))
+                .collect()
+        })
+    }
+
+    fn ground_of(&self, color: Color, dark: bool) -> Color {
+        let c = if dark {
+            let (h, s, _) = to_hsb(color);
             Color::hsb(h, (s * 0.8).min(1.0), 0.17 + 0.09 * self.intensity)
         } else {
             let t = 0.8 * self.intensity;
-            let c = Color::WHITE.mix(self.color, t);
+            let c = Color::WHITE.mix(color, t);
             Color::rgb(c.r * 0.96, c.g * 0.96, c.b * 0.96)
+        };
+        // `SpaceTheme.toned`: the tone's black or white, 0.7 of the way at most.
+        if self.tone.abs() <= 0.005 {
+            return c;
         }
+        let toward = if self.tone < 0.0 {
+            Color::BLACK
+        } else {
+            Color::WHITE
+        };
+        c.mix(toward, self.tone.abs() * 0.7)
     }
 
     /// The hue the space is known by, or none for a grey.
     /// `Fork/SpaceTheme.swift` 214–217.
     pub fn hue(&self) -> Option<f32> {
-        let (h, s, _) = to_hsb(self.color);
-        (s > 0.12).then_some(h)
+        self.hue
     }
 }
 

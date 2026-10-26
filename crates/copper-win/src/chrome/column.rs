@@ -16,6 +16,7 @@ use crate::palette::symbols;
 use crate::platform::Icon;
 use copper_core::browser::TabId;
 use copper_shell_core::TabView;
+use copper_shell_core::folders::{self, FolderRow};
 use copper_win_ui::tokens::{metrics, motion, side};
 use copper_win_ui::win::Ui;
 use copper_win_ui::{
@@ -46,6 +47,8 @@ pub enum Hit {
     SpaceMenu,
     /// The header's mark: Settings › Spaces.
     SpaceMark,
+    /// A folder's line: open it or shut it.
+    Folder(String),
 }
 
 /// One tab's row (`Side.swift` 596–668): the mark, a private tab's
@@ -60,7 +63,18 @@ struct Row {
     ring: NodeId,
     audio: NodeId,
     drawn: Drawn,
+    /// How many folders in it sits (`Folders.step` each).
+    depth: usize,
 }
+
+/// A folder's line (`GroupHead`): its node and what it shows.
+struct Head {
+    node: NodeId,
+    drawn: FolderRow,
+}
+
+/// One step in per folder (`Folders.step`).
+const FOLDER_STEP: f32 = 20.0;
 
 /// What a row last drew, to redraw only what changed.
 #[derive(Clone, Debug, PartialEq)]
@@ -137,6 +151,8 @@ pub struct Column {
     /// The space the rows were last drawn for, to slide on a switch.
     band_space: Option<String>,
     rows: HashMap<TabId, Row>,
+    /// Folder lines, by block and folder (`saved:<id>`, `today:<id>`).
+    heads: HashMap<String, Head>,
     /// Every pointer target in the column and what it means.
     targets: HashMap<NodeId, Hit>,
     nav: Nav,
@@ -612,6 +628,7 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
         held: None,
         band_space: None,
         rows: HashMap::new(),
+        heads: HashMap::new(),
         targets,
         nav: Nav::default(),
     }
@@ -646,7 +663,7 @@ impl Column {
         self.slide_band(ui, m);
         self.sync_header(ui, &m.space);
         crate::clear::sync_seam(ui, self.divider, m.clearable);
-        self.sync_rows(ui, images, &m.visible.saved, &m.visible.today);
+        self.sync_rows(ui, images, &m.visible.saved, &m.visible.today, &m.groups);
         self.sync_chips(ui, &m.spaces);
     }
 
@@ -668,6 +685,11 @@ impl Column {
             _ => 1.0,
         };
         let width = ui.tree.window_rect(self.side).w.max(metrics::SIDE);
+        // Each space's rows start from the top, as the Mac's column does
+        // (its scroll is the space's own); the live row is brought into
+        // view after, if it is further down.
+        ui.tree.scroll(self.scroll, |s| s.scroll_to(0.0, false));
+        self.pill_y = -1.0;
         ui.tree.set_prop(self.scroll, Prop::X, way * width);
         ui.tree.animate(self.scroll, Prop::X, 0.0, SLIDE);
     }
@@ -827,6 +849,7 @@ impl Column {
         images: &mut Images,
         saved: &[TabView<Icon>],
         today: &[TabView<Icon>],
+        groups: &[copper_core::groups::TabGroup],
     ) {
         let wanted: Vec<&TabView<Icon>> = saved.iter().chain(today.iter()).collect();
         // Gone.
@@ -861,22 +884,105 @@ impl Column {
                 }
             }
         }
-        // Order: header, saved, divider, new tab, today.
-        let mut order: Vec<NodeId> = Vec::with_capacity(wanted.len() + 3);
+        // Each block as folders and rows (`FolderTree.plan`).
+        let plan = |rows: &[TabView<Icon>]| {
+            let filed: Vec<Option<&str>> = rows.iter().map(|t| t.group.as_deref()).collect();
+            folders::plan(&filed, groups)
+        };
+        let blocks = [("saved", saved, plan(saved)), ("today", today, plan(today))];
+        // Folder lines: made, redrawn when they change, dropped when gone.
+        let mut wanted_heads: Vec<String> = Vec::new();
+        for (block, _, lines) in &blocks {
+            for line in lines {
+                if let FolderRow::Head { id, .. } = line {
+                    let key = format!("{block}:{id}");
+                    if self.heads.get(&key).is_some_and(|h| &h.drawn != line) {
+                        let h = self.heads.remove(&key).expect("present");
+                        self.forget_targets(ui, h.node);
+                        ui.tree.remove(h.node);
+                    }
+                    if !self.heads.contains_key(&key) {
+                        let node = new_head(ui, self.list, line);
+                        self.targets.insert(node, Hit::Folder(id.clone()));
+                        self.heads.insert(
+                            key.clone(),
+                            Head {
+                                node,
+                                drawn: line.clone(),
+                            },
+                        );
+                    }
+                    wanted_heads.push(key);
+                }
+            }
+        }
+        let stale: Vec<String> = self
+            .heads
+            .keys()
+            .filter(|k| !wanted_heads.contains(k))
+            .cloned()
+            .collect();
+        for k in stale {
+            if let Some(h) = self.heads.remove(&k) {
+                self.forget_targets(ui, h.node);
+                ui.tree.remove(h.node);
+            }
+        }
+        // Order: header, saved, divider, new tab, today — each block's lines
+        // as its plan has them; rows inside a shut folder after, hidden.
+        let mut order: Vec<NodeId> = Vec::with_capacity(wanted.len() + wanted_heads.len() + 3);
         let header = ui.tree.parent(self.header_name).unwrap_or(self.header_name);
         order.push(header);
-        order.extend(
-            saved
-                .iter()
-                .filter_map(|t| self.rows.get(&t.id).map(|r| r.node)),
-        );
-        order.push(self.divider);
-        order.push(self.new_tab);
-        order.extend(
-            today
-                .iter()
-                .filter_map(|t| self.rows.get(&t.id).map(|r| r.node)),
-        );
+        let mut shown: std::collections::HashSet<TabId> = Default::default();
+        // The pill rides under the live row.
+        let mut y = HEADER + side::GAP;
+        let mut at = None;
+        let step = side::ROW + side::GAP;
+        for (bi, (block, rows, lines)) in blocks.iter().enumerate() {
+            if bi == 1 {
+                order.push(self.divider);
+                order.push(self.new_tab);
+                if !today.is_empty() {
+                    y += crate::clear::seam_height(ui, self.divider) + side::GAP;
+                }
+                y += step; // New tab.
+            }
+            for line in lines {
+                match line {
+                    FolderRow::Head { id, .. } => {
+                        if let Some(h) = self.heads.get(&format!("{block}:{id}")) {
+                            order.push(h.node);
+                        }
+                    }
+                    FolderRow::Tab { index, depth } => {
+                        let t = &rows[*index];
+                        let Some(r) = self.rows.get_mut(&t.id) else {
+                            continue;
+                        };
+                        if r.depth != *depth {
+                            r.depth = *depth;
+                            let left = side::ROW_INSET + *depth as f32 * FOLDER_STEP;
+                            ui.tree.edit(r.node, |n| n.style.padding.left = left);
+                        }
+                        ui.tree.set_hidden(r.node, false);
+                        order.push(r.node);
+                        shown.insert(t.id.clone());
+                        if t.live {
+                            at = Some(y);
+                        }
+                    }
+                }
+                y += step;
+            }
+        }
+        for t in &wanted {
+            if !shown.contains(&t.id)
+                && let Some(r) = self.rows.get(&t.id)
+            {
+                ui.tree.set_hidden(r.node, true);
+                order.push(r.node);
+            }
+        }
         if ui.tree.children(self.list) != order.as_slice() {
             for (i, id) in order.iter().enumerate() {
                 if ui.tree.children(self.list).get(i) != Some(id) {
@@ -886,27 +992,6 @@ impl Column {
         }
         ui.tree.set_hidden(self.divider, today.is_empty());
 
-        // The pill rides under the live row.
-        let mut y = 0.0;
-        let mut at = None;
-        let step = side::ROW + side::GAP;
-        y += HEADER + side::GAP;
-        for t in saved {
-            if t.live {
-                at = Some(y);
-            }
-            y += step;
-        }
-        if !today.is_empty() {
-            y += crate::clear::seam_height(ui, self.divider) + side::GAP;
-        }
-        y += step; // New tab.
-        for t in today {
-            if t.live {
-                at = Some(y);
-            }
-            y += step;
-        }
         if let Some(y) = at
             && y != self.pill_y
         {
@@ -1390,6 +1475,7 @@ fn new_row(ui: &mut Ui, list: NodeId, t: &TabView<Icon>, icon: Option<u32>) -> R
             .role(Role::None),
     );
     let mut r = Row {
+        depth: 0,
         node,
         mark: m,
         shy,
@@ -1404,6 +1490,104 @@ fn new_row(ui: &mut Ui, list: NodeId, t: &TabView<Icon>, icon: Option<u32>) -> R
 }
 
 /// Redraw what changed in a row.
+/// A folder's line (`GroupHead`): a row like the tabs' — the folder in the
+/// mark column, shut solid in its colour or open in outline, then its name
+/// in the title's place, semibold; a shut one's count at the end.
+fn new_head(ui: &mut Ui, list: NodeId, line: &FolderRow) -> NodeId {
+    let FolderRow::Head {
+        label,
+        depth,
+        count,
+        collapsed,
+        hue,
+        ..
+    } = line
+    else {
+        return list;
+    };
+    let node = ui.tree.add(
+        list,
+        Node::row()
+            .height(side::ROW)
+            .shrink(0.0)
+            .padding(Insets::new(
+                side::ROW_INSET + *depth as f32 * FOLDER_STEP,
+                0.0,
+                side::ROW_TRAILING,
+                0.0,
+            ))
+            .gap(side::MARK_GAP)
+            .align(Align::Center)
+            .radius(side::ROW_RADIUS)
+            .hover_fill(Token::ColumnHover)
+            .button(label)
+            .role(Role::ListItem),
+    );
+    // `GroupHead.colour`/`paper`: a folder with no colour of its own wears
+    // the space's; deeper than the column either way round. Shut, a solid
+    // folder in that colour; open, a paper one under its outline.
+    let dark = ui.theme().dark;
+    let space_hue = ui.theme().space.and_then(|t| t.hue());
+    let colour = match hue.map(|h| h as f32).or(space_hue) {
+        Some(h) if dark => Swatch::Fixed(copper_win_ui::Color::hsb(h, 0.52, 0.82)),
+        Some(h) => Swatch::Fixed(copper_win_ui::Color::hsb(h, 0.82, 0.66)),
+        None => Swatch::Token(Token::ColumnMuted),
+    };
+    let paper = match (dark, hue.map(|h| h as f32).or(space_hue)) {
+        (true, h) => copper_win_ui::Color::hsb(h.unwrap_or(0.0), 0.10, 0.90),
+        (false, _) => copper_win_ui::Color::WHITE.alpha(0.92),
+    };
+    let mark = ui.tree.add(
+        node,
+        Node::stack()
+            .width(side::MARK)
+            .height(side::MARK)
+            .shrink(0.0)
+            .role(Role::None),
+    );
+    if !*collapsed {
+        ui.tree.add(
+            mark,
+            Node::glyph(glyph::FOLDER_FILL, 15.0, side::MARK)
+                .ink(Swatch::Fixed(paper))
+                .role(Role::None),
+        );
+    }
+    ui.tree.add(
+        mark,
+        Node::glyph(
+            if *collapsed {
+                glyph::FOLDER_FILL
+            } else {
+                glyph::FOLDER
+            },
+            15.0,
+            side::MARK,
+        )
+        .ink(colour)
+        .role(Role::None),
+    );
+    ui.tree.add(
+        node,
+        Node::text(label, side::TITLE_SIZE)
+            .weight(Weight::Semibold)
+            .ink(Token::ColumnInk)
+            .grow(1.0)
+            .role(Role::None),
+    );
+    if *collapsed && *count > 0 {
+        ui.tree.add(
+            node,
+            Node::text(&count.to_string(), 11.0)
+                .ink(Token::ColumnFaint)
+                .shrink(0.0)
+                .reveal()
+                .role(Role::None),
+        );
+    }
+    node
+}
+
 fn update_row(ui: &mut Ui, r: &mut Row, d: &Drawn, icon: Option<u32>) {
     if r.drawn.label != d.label {
         ui.tree.set_text(r.label, &d.label);

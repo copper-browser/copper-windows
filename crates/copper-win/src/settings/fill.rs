@@ -31,6 +31,7 @@ pub fn title(s: Source) -> &'static str {
         Source::Keychain => OWN,
         Source::Bitwarden => "Bitwarden",
         Source::OnePassword => "1Password",
+        Source::BotPass => "BotPass",
     }
 }
 
@@ -110,7 +111,7 @@ pub fn footer(rows: &[Row], pending: Pending) -> String {
         match r.credential.source {
             Source::Bitwarden => bw = true,
             Source::OnePassword => op = true,
-            Source::Keychain => {}
+            Source::Keychain | Source::BotPass => {}
         }
         if r.kind == RowKind::Login {
             codes_only = false;

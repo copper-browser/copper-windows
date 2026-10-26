@@ -55,6 +55,7 @@ fn source_name(s: Source) -> &'static str {
         Source::Keychain => "Credential Manager",
         Source::Bitwarden => "Bitwarden",
         Source::OnePassword => "1Password",
+        Source::BotPass => "BotPass",
     }
 }
 

@@ -223,6 +223,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "copper-botpass"
+version = "0.4.1"
+dependencies = [
+ "copper-cloud",
+ "copper-core",
+ "copper-creds",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "copper-cloud"
 version = "0.4.1"
 dependencies = [
@@ -295,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "copper-engine-webview2"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "copper-engine",
@@ -365,7 +381,7 @@ dependencies = [
 
 [[package]]
 name = "copper-setup"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "windows",
@@ -378,6 +394,7 @@ name = "copper-shell-core"
 version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
+ "copper-botpass",
  "copper-cloud",
  "copper-core",
  "copper-creds",
@@ -385,6 +402,7 @@ dependencies = [
  "copper-mcp",
  "copper-pagejs",
  "copper-shield",
+ "png",
  "reqwest",
  "serde",
  "serde_json",
@@ -409,7 +427,7 @@ dependencies = [
 
 [[package]]
 name = "copper-win"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "copper-cloud",
  "copper-core",
@@ -439,14 +457,14 @@ dependencies = [
 
 [[package]]
 name = "copper-win-rt"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "windows",
 ]
 
 [[package]]
 name = "copper-win-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "copper-win-rt",
  "unicode-segmentation",
