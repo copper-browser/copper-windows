@@ -1517,18 +1517,40 @@ fn new_head(ui: &mut Ui, list: NodeId, line: &FolderRow) -> NodeId {
             .button(label)
             .role(Role::ListItem),
     );
-    let ink = match hue {
-        Some(h) => Swatch::Fixed(copper_win_ui::Color::hsb(*h as f32, 0.52, 0.82)),
+    // `GroupHead.colour`/`paper`: a folder with no colour of its own wears
+    // the space's; deeper than the column either way round. Shut, a solid
+    // folder in that colour; open, a paper one under its outline.
+    let dark = ui.theme().dark;
+    let space_hue = ui.theme().space.and_then(|t| t.hue());
+    let colour = match hue.map(|h| h as f32).or(space_hue) {
+        Some(h) if dark => Swatch::Fixed(copper_win_ui::Color::hsb(h, 0.52, 0.82)),
+        Some(h) => Swatch::Fixed(copper_win_ui::Color::hsb(h, 0.82, 0.66)),
         None => Swatch::Token(Token::ColumnMuted),
     };
-    ui.tree.add(
+    let paper = match (dark, hue.map(|h| h as f32).or(space_hue)) {
+        (true, h) => copper_win_ui::Color::hsb(h.unwrap_or(0.0), 0.10, 0.90),
+        (false, _) => copper_win_ui::Color::WHITE.alpha(0.92),
+    };
+    let mark = ui.tree.add(
         node,
+        Node::stack().width(side::MARK).height(side::MARK).shrink(0.0).role(Role::None),
+    );
+    if !*collapsed {
+        ui.tree.add(
+            mark,
+            Node::glyph(glyph::FOLDER_FILL, 15.0, side::MARK)
+                .ink(Swatch::Fixed(paper))
+                .role(Role::None),
+        );
+    }
+    ui.tree.add(
+        mark,
         Node::glyph(
             if *collapsed { glyph::FOLDER_FILL } else { glyph::FOLDER },
             15.0,
             side::MARK,
         )
-        .ink(ink)
+        .ink(colour)
         .role(Role::None),
     );
     ui.tree.add(
