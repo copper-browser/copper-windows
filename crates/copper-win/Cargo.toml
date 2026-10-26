@@ -56,6 +56,7 @@ windows = { workspace = true, features = [
     "Win32_Networking_NetworkListManager",
     "Win32_Security",
     "Win32_Security_Authentication_Identity",
+    "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
     "Win32_Storage_Xps",
     "Win32_System_Com",

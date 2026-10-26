@@ -59,6 +59,8 @@ mod picture;
 mod platform;
 mod settings;
 #[cfg(windows)]
+mod signins;
+#[cfg(windows)]
 mod slot;
 #[cfg(windows)]
 mod sys;
