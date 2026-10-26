@@ -904,7 +904,13 @@ impl Column {
                     if !self.heads.contains_key(&key) {
                         let node = new_head(ui, self.list, line);
                         self.targets.insert(node, Hit::Folder(id.clone()));
-                        self.heads.insert(key.clone(), Head { node, drawn: line.clone() });
+                        self.heads.insert(
+                            key.clone(),
+                            Head {
+                                node,
+                                drawn: line.clone(),
+                            },
+                        );
                     }
                     wanted_heads.push(key);
                 }
@@ -1533,7 +1539,11 @@ fn new_head(ui: &mut Ui, list: NodeId, line: &FolderRow) -> NodeId {
     };
     let mark = ui.tree.add(
         node,
-        Node::stack().width(side::MARK).height(side::MARK).shrink(0.0).role(Role::None),
+        Node::stack()
+            .width(side::MARK)
+            .height(side::MARK)
+            .shrink(0.0)
+            .role(Role::None),
     );
     if !*collapsed {
         ui.tree.add(
@@ -1546,7 +1556,11 @@ fn new_head(ui: &mut Ui, list: NodeId, line: &FolderRow) -> NodeId {
     ui.tree.add(
         mark,
         Node::glyph(
-            if *collapsed { glyph::FOLDER_FILL } else { glyph::FOLDER },
+            if *collapsed {
+                glyph::FOLDER_FILL
+            } else {
+                glyph::FOLDER
+            },
             15.0,
             side::MARK,
         )
