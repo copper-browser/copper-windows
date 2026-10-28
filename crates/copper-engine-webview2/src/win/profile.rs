@@ -165,7 +165,11 @@ impl ProfileInner {
                 .await
             }
         };
-        let wv = match make(env.get().await?).await {
+        let e = env.get().await?;
+        let t = std::time::Instant::now();
+        let made = make(e).await;
+        tracing::debug!(target: "copper::perf", "profile {}: controller in {:?}", self.id, t.elapsed());
+        let wv = match made {
             Err(e) if env.ended() => {
                 // The browser process ended normally and the environment
                 // did not start another: a new environment does.

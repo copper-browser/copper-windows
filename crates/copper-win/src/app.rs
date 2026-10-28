@@ -266,6 +266,9 @@ fn build(opts: Options) -> Shell {
     perf::step("actions");
     crate::features::register(&shell);
     perf::step("features");
+    // Every scheme and the languages are set: the browser process can
+    // start while the session is restored and the window shown.
+    shell.engine().start();
     WinView::listen_downloads(&shell);
     shell.start();
     crate::signins::take_in(&shell);

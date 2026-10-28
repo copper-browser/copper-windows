@@ -408,6 +408,7 @@ impl Env {
             && let Some(t) = self.started.get()
         {
             self.ready_after.set(Some(t.elapsed()));
+            tracing::debug!(target: "copper::perf", "webview2 environment ready in {:?}", t.elapsed());
         }
         let waiters = {
             let mut state = self.state.borrow_mut();

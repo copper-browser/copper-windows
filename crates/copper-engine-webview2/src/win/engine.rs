@@ -208,6 +208,13 @@ impl WebView2Engine {
         Ok(WebView2Engine { inner })
     }
 
+    /// Start the browser process now rather than on the next loop turn:
+    /// call once languages and schemes are set, so its launch overlaps the
+    /// rest of start-up (restoring the session, showing the window).
+    pub fn start(&self) {
+        self.inner.env.start();
+    }
+
     /// The standard engine (`EngineConfig::default()`).
     pub fn with_defaults() -> Result<Self> {
         Self::new(EngineConfig::default())
