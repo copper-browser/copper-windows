@@ -56,6 +56,7 @@ mod freeze;
 mod instance;
 mod palette;
 mod panels;
+mod peek;
 mod picture;
 #[cfg(windows)]
 mod platform;

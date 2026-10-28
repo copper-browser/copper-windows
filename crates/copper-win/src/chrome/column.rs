@@ -673,6 +673,24 @@ impl Column {
         self.targets.get(&id).cloned()
     }
 
+    /// The favourite `id` is, if it is one.
+    pub fn pin_at(&self, id: NodeId) -> Option<TabId> {
+        match self.targets.get(&id) {
+            Some(Hit::Tab(t)) if self.pins_drawn.iter().any(|(p, _)| p == t) => Some(t.clone()),
+            _ => None,
+        }
+    }
+
+    /// Where favourite `tab` is drawn (window DIPs), while it is.
+    pub fn pin_rect(&self, ui: &Ui, tab: &TabId) -> Option<copper_win_ui::Rect> {
+        let node = self
+            .targets
+            .iter()
+            .find(|(n, h)| matches!(h, Hit::Tab(t) if t == tab) && self.pin_at(**n).is_some())?
+            .0;
+        Some(ui.tree.window_rect(*node))
+    }
+
     /// The tab a row node (or anything in it) belongs to.
     pub fn tab_at(&self, ui: &Ui, id: NodeId) -> Option<TabId> {
         let mut cur = Some(id);
@@ -841,8 +859,11 @@ impl Column {
                     .align(Align::Center)
                     .justify(Justify::Center)
                     .button(&t.label)
-                    .tooltip(&t.label)
                     .selected(t.live);
+                // A Calendar pin's card says more than its name would.
+                if !copper_shell_core::calendar::peeks(&t.url) {
+                    pin = pin.tooltip(&t.label);
+                }
                 if t.live {
                     pin = pin
                         .selected_fill(Token::Pill)

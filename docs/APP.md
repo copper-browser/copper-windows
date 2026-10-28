@@ -44,6 +44,7 @@ CLI front ends (`cli.rs`: `--mcp-stdio`, `cloud …`, `--cli <verb>` /
 | `panels/` | Floating panels; `history.rs` is the worked example; `plate.rs` the chrome. |
 | `settings/` | Settings panel: rail of pages, each a `Page` drawing a `form::Form`. |
 | `palette/` | The card's logic (Ctrl+K / Ctrl+L / Ctrl+T), ranked by shell-core. |
+| `peek/` | The Calendar pin's card: the card as nodes (platform-free, tested on any host) and, in `hover.rs`, the pointer's rest and leave and the card's clicks. What it lists is shell-core's `calendar`. |
 | `find.rs` | Find bar (Ctrl+F, F3, Shift+F3). |
 | `forms.rs`, `agents.rs`, `updates.rs`, `canvas.rs`, `cloud.rs` | The lanes' Windows halves. |
 | `instance.rs`, `args.rs`, `cli.rs` | Single instance, arguments, CLI front ends. |

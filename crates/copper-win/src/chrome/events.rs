@@ -63,6 +63,7 @@ pub fn handle(chrome: &Rc<Chrome>, e: Event) {
             crate::panels::field_event(&shell, id, &e);
         }
         Event::Key { key, mods, focused } => key_event(chrome, &shell, key, mods, focused),
+        Event::Hover(target) => crate::peek::hover(&shell, target),
         Event::Resized(_) => {
             chrome.edit(|ui, st| st.card.resized(ui));
             if shell.view().layout() == copper_core::settings::TabsPosition::Top {
@@ -148,7 +149,7 @@ fn click(chrome: &Rc<Chrome>, shell: &Shell, id: NodeId) {
         Clicked::Strip(h) => strip_click(shell, h),
         Clicked::Stage(StageHit::StatusButton(tab)) => shell.reload(&tab),
         Clicked::Other(id) => {
-            if crate::palette::click(shell, id) {
+            if crate::palette::click(shell, id) || crate::peek::click(shell, id) {
                 return;
             }
             if !crate::panels::click(shell, id)
