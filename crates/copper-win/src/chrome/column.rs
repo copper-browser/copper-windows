@@ -991,14 +991,18 @@ impl Column {
                         open.truncate(*depth);
                         if let Some(h) = self.heads.get(&format!("{block}:{id}")) {
                             order.push(h.node);
-                            self.lines.push((bi == 0, h.node, line_of(
-                                Kind::Folder {
-                                    id: id.clone(),
-                                    collapsed: *collapsed,
-                                },
-                                *depth,
-                                open.last().cloned(),
-                            )));
+                            self.lines.push((
+                                bi == 0,
+                                h.node,
+                                line_of(
+                                    Kind::Folder {
+                                        id: id.clone(),
+                                        collapsed: *collapsed,
+                                    },
+                                    *depth,
+                                    open.last().cloned(),
+                                ),
+                            ));
                         }
                         open.push(id.clone());
                     }
@@ -1015,7 +1019,11 @@ impl Column {
                         ui.tree.set_hidden(r.node, false);
                         order.push(r.node);
                         let group = depth.checked_sub(1).and_then(|d| open.get(d)).cloned();
-                        self.lines.push((bi == 0, r.node, line_of(Kind::Tab(t.id.clone()), *depth, group)));
+                        self.lines.push((
+                            bi == 0,
+                            r.node,
+                            line_of(Kind::Tab(t.id.clone()), *depth, group),
+                        ));
                         shown.insert(t.id.clone());
                         if t.live {
                             at = Some(y);
@@ -1435,7 +1443,8 @@ impl Column {
                 ui.tree.remove(line);
             }
         }
-        ui.tree.set_hidden(self.pins_box, self.pins_drawn.is_empty());
+        ui.tree
+            .set_hidden(self.pins_box, self.pins_drawn.is_empty());
     }
 
     /// The chip being dragged, if one is.

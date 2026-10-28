@@ -20,8 +20,8 @@ use std::cell::RefCell;
 thread_local! {
     /// A press on a row: where it went down (window DIPs, y) and its tab.
     static PRESS: RefCell<Option<(f32, TabId)>> = const { RefCell::new(None) };
-    /// The row in the hand and where it would land.
-    static HELD: RefCell<Option<(TabId, Option<Target>)>> = const { RefCell::new(None) };
+    /// The row in the hand.
+    static HELD: RefCell<Option<Held>> = const { RefCell::new(None) };
     /// The tab whose row was dragged: the click the toolkit makes of the
     /// release is not a click.
     static DRAGGED: RefCell<Option<TabId>> = const { RefCell::new(None) };
@@ -79,43 +79,24 @@ pub fn pointer(shell: &Shell) {
                 let Some((y0, id)) = PRESS.with(|s| s.borrow().clone()) else {
                     return false;
                 };
-                // What `stays` needs: the space's row and the folders.
-                let (row, group, filed) = {
-                    let b = shell.browser();
-                    let row: Vec<(TabId, bool, Option<String>)> = b
-                        .row(b.current_space_id())
-                        .iter()
-                        .map(|t| (t.id.clone(), t.saved, t.group.clone()))
-                        .collect();
-                    let group = b.tab(&id).and_then(|t| t.group.clone());
-                    (row, group, groups::all(&shell))
+                let Some(y) = chrome.read(|ui, _| y / ui.scale().max(0.5)) else {
+                    return false;
                 };
-                chrome.read(|ui, st| {
-                    let k = ui.scale().max(0.5);
-                    let y = y / k;
-                    let held = HELD.with(|h| h.borrow().is_some());
-                    if !held {
-                        if (y - y0).abs() < super::column::DRAG_FROM {
-                            return;
-                        }
-                        st.column.lift(ui, &id);
+                if HELD.with(|h| h.borrow().is_none()) {
+                    if (y - y0).abs() < super::column::DRAG_FROM {
+                        return false;
                     }
-                    let target = match sidedrop::target(&st.column.drop_layout(ui), y) {
-                        Target::Spot(s) => {
-                            let order: Vec<(TabId, bool)> =
-                                row.iter().map(|(t, s, _)| (t.clone(), *s)).collect();
-                            let in_folder = |t: &TabId, folder: &str| {
-                                let g = row.iter().find(|r| r.0 == *t).and_then(|r| r.2.as_deref());
-                                groups::in_folder(&filed, g, folder)
-                            };
-                            let stays =
-                                sidedrop::stays(&s, &id, group.as_deref(), &order, in_folder);
-                            (!stays).then_some(Target::Spot(s))
-                        }
-                        pins => Some(pins),
-                    };
-                    st.column.show_drop(ui, &id, target.as_ref());
-                    HELD.with(|h| *h.borrow_mut() = Some((id.clone(), target)));
+                    let held = Held::of(&shell, &id);
+                    chrome.read(|ui, st| st.column.lift(ui, &id));
+                    HELD.with(|h| *h.borrow_mut() = Some(held));
+                }
+                HELD.with(|h| {
+                    let mut h = h.borrow_mut();
+                    let Some(held) = h.as_mut() else { return };
+                    chrome.read(|ui, st| {
+                        held.target = held.target(&st.column.drop_layout(ui), y);
+                        st.column.show_drop(ui, &held.id, held.target.as_ref());
+                    });
                 });
             }
             WM_MOUSEMOVE => {
@@ -127,7 +108,7 @@ pub fn pointer(shell: &Shell) {
             _ => {
                 PRESS.with(|s| s.borrow_mut().take());
                 chrome.read(end);
-                let Some((id, target)) = HELD.with(|h| h.borrow_mut().take()) else {
+                let Some(Held { id, target, .. }) = HELD.with(|h| h.borrow_mut().take()) else {
                     return false;
                 };
                 DRAGGED.with(|d| *d.borrow_mut() = Some(id.clone()));
@@ -152,9 +133,53 @@ pub fn pointer(shell: &Shell) {
     });
 }
 
+/// The row in the hand: what [`sidedrop::stays`] needs, read once when it
+/// is picked up, and where it would land.
+struct Held {
+    id: TabId,
+    /// Its folder.
+    group: Option<String>,
+    /// The space's row: each tab, whether it is saved, its folder.
+    row: Vec<(TabId, bool, Option<String>)>,
+    folders: Vec<copper_core::groups::TabGroup>,
+    target: Option<Target>,
+}
+
+impl Held {
+    fn of(shell: &Shell, id: &TabId) -> Held {
+        let b = shell.browser();
+        Held {
+            id: id.clone(),
+            group: b.tab(id).and_then(|t| t.group.clone()),
+            row: b
+                .row(b.current_space_id())
+                .iter()
+                .map(|t| (t.id.clone(), t.saved, t.group.clone()))
+                .collect(),
+            folders: groups::all(shell),
+            target: None,
+        }
+    }
+
+    /// Where it would land with the pointer at `y`; `None` over its own
+    /// place.
+    fn target(&self, layout: &sidedrop::Layout, y: f32) -> Option<Target> {
+        let Target::Spot(spot) = sidedrop::target(layout, y) else {
+            return Some(Target::Pins);
+        };
+        let order: Vec<(TabId, bool)> = self.row.iter().map(|(t, s, _)| (t.clone(), *s)).collect();
+        let in_folder = |t: &TabId, folder: &str| {
+            let g = self.row.iter().find(|r| r.0 == *t).and_then(|r| r.2.as_deref());
+            groups::in_folder(&self.folders, g, folder)
+        };
+        let stays = sidedrop::stays(&spot, &self.id, self.group.as_deref(), &order, in_folder);
+        (!stays).then_some(Target::Spot(spot))
+    }
+}
+
 /// Put the row in the hand back down, and what showed where it would go.
 fn end(ui: &mut copper_win_ui::win::Ui, st: &mut super::State) {
-    if let Some((id, _)) = HELD.with(|h| h.borrow().clone()) {
+    if let Some(id) = HELD.with(|h| h.borrow().as_ref().map(|h| h.id.clone())) {
         st.column.end_drag(ui, &id);
     }
 }
