@@ -17,6 +17,7 @@ use crate::platform::Icon;
 use copper_core::browser::TabId;
 use copper_shell_core::TabView;
 use copper_shell_core::folders::{self, FolderRow};
+use copper_shell_core::sidedrop::{self, Kind, Line, Target};
 use copper_win_ui::tokens::{metrics, motion, side};
 use copper_win_ui::win::Ui;
 use copper_win_ui::{
@@ -153,6 +154,13 @@ pub struct Column {
     rows: HashMap<TabId, Row>,
     /// Folder lines, by block and folder (`saved:<id>`, `today:<id>`).
     heads: HashMap<String, Head>,
+    /// The lines on show, in order: in Saved, the node, what it is (its
+    /// frame read when a row is dragged).
+    lines: Vec<(bool, NodeId, Line)>,
+    /// Where a dragged row will land ([`super::drag`]).
+    marker: NodeId,
+    /// A dragged row's place at the end of the favourites.
+    pin_ghost: Option<NodeId>,
     /// Every pointer target in the column and what it means.
     targets: HashMap<NodeId, Hit>,
     nav: Nav,
@@ -201,6 +209,8 @@ const PLUS_GLYPH: f32 = 15.0;
 /// A resting chip's mark, and the second copy that lifts it to
 /// [`side::CHIP_HOVER`] under the pointer (the two compose).
 const CHIP_LIFT: f32 = 1.0 - (1.0 - side::CHIP_HOVER) / (1.0 - side::CHIP_RESTING);
+/// The drop line's thickness.
+const MARKER: f32 = 2.0;
 /// The divider: a hairline with room above and below.
 const DIVIDER: f32 = 1.0 + 2.0 * side::DIVIDER_PAD;
 
@@ -382,6 +392,23 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
             ))
             .gap(side::GAP)
             .layer(),
+    );
+    // Where a dragged row will land: over the rows, so a layer after them.
+    let marker = ui.tree.add(
+        scroll,
+        Node::new()
+            .absolute(copper_win_ui::Abs {
+                left: Some(side::INSET),
+                top: Some(0.0),
+                right: Some(side::INSET),
+                bottom: None,
+            })
+            .height(MARKER)
+            .radius(MARKER / 2.0)
+            .fill(Swatch::Fade(Token::ColumnInk, 0.85))
+            .layer()
+            .hidden(true)
+            .role(Role::None),
     );
     // The header (`SpaceHeader`): the space's mark, its own door to
     // Settings › Spaces; the rest of the row is the space menu, with the
@@ -629,6 +656,9 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
         band_space: None,
         rows: HashMap::new(),
         heads: HashMap::new(),
+        lines: Vec::new(),
+        marker,
+        pin_ghost: None,
         targets,
         nav: Nav::default(),
     }
@@ -938,7 +968,10 @@ impl Column {
         let mut y = HEADER + side::GAP;
         let mut at = None;
         let step = side::ROW + side::GAP;
+        self.lines.clear();
         for (bi, (block, rows, lines)) in blocks.iter().enumerate() {
+            // The folders open above the line, by depth.
+            let mut open: Vec<String> = Vec::new();
             if bi == 1 {
                 order.push(self.divider);
                 order.push(self.new_tab);
@@ -949,10 +982,25 @@ impl Column {
             }
             for line in lines {
                 match line {
-                    FolderRow::Head { id, .. } => {
+                    FolderRow::Head {
+                        id,
+                        depth,
+                        collapsed,
+                        ..
+                    } => {
+                        open.truncate(*depth);
                         if let Some(h) = self.heads.get(&format!("{block}:{id}")) {
                             order.push(h.node);
+                            self.lines.push((bi == 0, h.node, line_of(
+                                Kind::Folder {
+                                    id: id.clone(),
+                                    collapsed: *collapsed,
+                                },
+                                *depth,
+                                open.last().cloned(),
+                            )));
                         }
+                        open.push(id.clone());
                     }
                     FolderRow::Tab { index, depth } => {
                         let t = &rows[*index];
@@ -966,6 +1014,8 @@ impl Column {
                         }
                         ui.tree.set_hidden(r.node, false);
                         order.push(r.node);
+                        let group = depth.checked_sub(1).and_then(|d| open.get(d)).cloned();
+                        self.lines.push((bi == 0, r.node, line_of(Kind::Tab(t.id.clone()), *depth, group)));
                         shown.insert(t.id.clone());
                         if t.live {
                             at = Some(y);
@@ -1266,6 +1316,128 @@ impl Column {
         }
     }
 
+    /// The row (not its cross, not a favourite) under `p`, window DIPs.
+    pub fn row_at(&self, ui: &Ui, p: Point) -> Option<TabId> {
+        match self.targets.get(&ui.tree.pick(p).target?) {
+            Some(Hit::Tab(id)) if self.rows.contains_key(id) => Some(id.clone()),
+            _ => None,
+        }
+    }
+
+    /// The column as a dragged row sees it, in window DIPs.
+    pub fn drop_layout(&self, ui: &Ui) -> sidedrop::Layout {
+        let new_tab = ui.tree.window_rect(self.new_tab);
+        let mut layout = sidedrop::Layout {
+            pins: ui.tree.window_rect(self.scroll).y,
+            saved_top: ui.tree.window_rect(self.header).bottom(),
+            new_tab: (new_tab.y, new_tab.bottom()),
+            gap: side::GAP,
+            ..Default::default()
+        };
+        for (saved, node, line) in &self.lines {
+            let r = ui.tree.window_rect(*node);
+            let line = Line {
+                top: r.y,
+                bottom: r.bottom(),
+                ..line.clone()
+            };
+            if *saved {
+                layout.saved.push(line);
+            } else {
+                layout.today.push(line);
+            }
+        }
+        layout
+    }
+
+    /// Pick `id`'s row up: it dims where it is.
+    pub fn lift(&mut self, ui: &mut Ui, id: &TabId) {
+        if let Some(r) = self.rows.get(id) {
+            ui.tree.animate(r.node, Prop::Opacity, 0.35, motion::QUICK);
+        }
+    }
+
+    /// Show where `id`'s row would land: a line, stepped in as the
+    /// folder's rows are, or a ghost at the end of the favourites.
+    pub fn show_drop(&mut self, ui: &mut Ui, id: &TabId, target: Option<&Target>) {
+        if target == Some(&Target::Pins) {
+            let letter = self.rows.get(id).map(|r| r.drawn.letter.clone());
+            self.show_pin_ghost(ui, &letter.unwrap_or_default());
+        } else {
+            self.hide_pin_ghost(ui);
+        }
+        let Some(Target::Spot(s)) = target else {
+            ui.tree.set_hidden(self.marker, true);
+            return;
+        };
+        // The marker's frame is in the scroll's content, the spot's y in
+        // the window's.
+        let top = ui.tree.window_rect(self.scroll).y - ui.tree.scroll_offset(self.scroll);
+        let left = side::INSET + s.depth as f32 * FOLDER_STEP;
+        ui.tree.edit(self.marker, |n| {
+            n.style.absolute = Some(copper_win_ui::Abs {
+                left: Some(left),
+                top: Some(s.y - top - MARKER / 2.0),
+                right: Some(side::INSET),
+                bottom: None,
+            });
+        });
+        ui.tree.set_hidden(self.marker, false);
+    }
+
+    /// The drag is over: the row back, the line and the ghost gone.
+    pub fn end_drag(&mut self, ui: &mut Ui, id: &TabId) {
+        if let Some(r) = self.rows.get(id) {
+            ui.tree.animate(r.node, Prop::Opacity, 1.0, motion::QUICK);
+        }
+        ui.tree.set_hidden(self.marker, true);
+        self.hide_pin_ghost(ui);
+    }
+
+    fn show_pin_ghost(&mut self, ui: &mut Ui, letter: &str) {
+        if self.pin_ghost.is_some_and(|g| ui.tree.get(g).is_some()) {
+            return;
+        }
+        let w = side::pin_width(metrics::SIDE);
+        let h = side::pin_height(w);
+        let last = ui.tree.children(self.pins_box).last().copied();
+        let line = match last {
+            Some(l) if ui.tree.children(l).len() < side::pin_columns(metrics::SIDE) => l,
+            _ => ui.tree.add(self.pins_box, Node::row().gap(side::PIN_GAP)),
+        };
+        // Ringed as the Mac's `PinDropGhost`, its mark faint.
+        let ghost = ui.tree.add(
+            line,
+            Node::stack()
+                .size(w, h)
+                .shrink(0.0)
+                .radius(side::pin_radius(w, h))
+                .fill(Token::ColumnHover)
+                .stroke(Swatch::Fade(Token::ColumnInk, 0.5), 1.5)
+                .align(Align::Center)
+                .justify(Justify::Center)
+                .opacity(0.7)
+                .role(Role::None),
+        );
+        mark(ui, ghost, None, letter, side::pin_mark(h));
+        ui.tree.set_hidden(self.pins_box, false);
+        self.pin_ghost = Some(ghost);
+    }
+
+    fn hide_pin_ghost(&mut self, ui: &mut Ui) {
+        let Some(ghost) = self.pin_ghost.take() else {
+            return;
+        };
+        // A redraw of the favourites meanwhile took it already.
+        if let Some(line) = ui.tree.parent(ghost) {
+            ui.tree.remove(ghost);
+            if ui.tree.children(line).is_empty() {
+                ui.tree.remove(line);
+            }
+        }
+        ui.tree.set_hidden(self.pins_box, self.pins_drawn.is_empty());
+    }
+
     /// The chip being dragged, if one is.
     pub fn held(&self) -> Option<&Held> {
         self.held.as_ref()
@@ -1324,6 +1496,17 @@ impl Column {
         let node = self.chip_nodes[i].1;
         let x = h.travel - (i as f32 - h.from as f32) * CHIP_STEP;
         ui.tree.set_prop(node, Prop::X, x);
+    }
+}
+
+/// A drawn line, its frame read later.
+fn line_of(kind: Kind, depth: usize, group: Option<String>) -> Line {
+    Line {
+        kind,
+        top: 0.0,
+        bottom: 0.0,
+        depth,
+        group,
     }
 }
 
