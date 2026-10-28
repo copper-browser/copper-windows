@@ -169,7 +169,11 @@ impl Held {
         };
         let order: Vec<(TabId, bool)> = self.row.iter().map(|(t, s, _)| (t.clone(), *s)).collect();
         let in_folder = |t: &TabId, folder: &str| {
-            let g = self.row.iter().find(|r| r.0 == *t).and_then(|r| r.2.as_deref());
+            let g = self
+                .row
+                .iter()
+                .find(|r| r.0 == *t)
+                .and_then(|r| r.2.as_deref());
             groups::in_folder(&self.folders, g, folder)
         };
         let stays = sidedrop::stays(&spot, &self.id, self.group.as_deref(), &order, in_folder);
