@@ -34,7 +34,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # One cache per job, written from main only so PRs never evict it.
-          save-if: ${{ github.ref == refs/heads/main }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
@@ -42,10 +42,10 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
       - name: Build release executable
-        if: github.event_name != pull_request
+        if: github.event_name != 'pull_request'
         run: cargo build --release -p copper-win --locked
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: github.event_name != pull_request
+        if: github.event_name != 'pull_request'
         with:
           name: copper-windows-x64-ci
           path: target/release/copper.exe
@@ -67,11 +67,11 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # One cache per job, written from main only so PRs never evict it.
-          save-if: ${{ github.ref == refs/heads/main }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Test on native ARM64 Windows
         run: cargo test --workspace --target aarch64-pc-windows-msvc --locked
       - name: Build native ARM64 executable
-        if: github.event_name != pull_request
+        if: github.event_name != 'pull_request'
         run: cargo build --release -p copper-win --target aarch64-pc-windows-msvc --locked
 
   cross:
