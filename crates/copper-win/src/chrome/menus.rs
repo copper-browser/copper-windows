@@ -18,6 +18,7 @@ pub mod item {
     pub const SAVE: u32 = 7;
     pub const UNSAVE: u32 = 8;
     pub const CHANGE_LETTER: u32 = 9;
+    pub const TAKE_OUT: u32 = 10;
 }
 
 /// What the open menu is about.
@@ -35,6 +36,8 @@ pub struct TabFacts {
     pub blank: bool,
     pub saved: bool,
     pub several: bool,
+    /// In a folder.
+    pub filed: bool,
 }
 
 /// The tab menu for a tab like `t`.
@@ -69,6 +72,10 @@ pub fn tab_menu(t: TabFacts) -> Menu {
         } else {
             m.item(item::SAVE, "&Keep in Saved")
         };
+    }
+    // Out of a folder in one click (Mac: `GroupMenu`).
+    if t.filed {
+        m = m.item(item::TAKE_OUT, "Remove from &Folder");
     }
     m
 }

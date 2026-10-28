@@ -98,6 +98,7 @@ pub fn register(shell: &Shell) {
     reg.add(Command::key("focus-field", plain_field));
     super::spaces::watch(shell);
     super::spaces::pointer(shell);
+    crate::chrome::drag::pointer(shell);
     super::strip_edit::pointer(shell);
     // Ctrl let go of while `Ctrl+K` walks: take the row. The hook only
     // looks; the work runs on the loop's next turn.

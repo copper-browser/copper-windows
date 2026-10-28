@@ -14,6 +14,7 @@ use copper_core::browser::TabId;
 use copper_engine_webview2::WebView2Page;
 use copper_engine_webview2::hosting::{FocusExit, KeyEventKind, PageChange};
 use copper_shell_core::OpenTab;
+use copper_shell_core::agents::groups;
 use copper_shell_core::palette::complete::Purpose;
 use copper_win_ui::input::Key;
 use copper_win_ui::input::Mods;
@@ -176,6 +177,7 @@ fn column_click(chrome: &Rc<Chrome>, shell: &Shell, h: ColumnHit) {
         }
         ColumnHit::Address => crate::palette::edit_address(shell),
         ColumnHit::NewTab => crate::palette::open(shell, Purpose::Launch, false),
+        ColumnHit::Tab(id) if super::drag::was_dragged(&id) => {}
         ColumnHit::Tab(id) => {
             // The live row again: its address, ready to edit (`Side.swift`).
             if shell.active_id().as_ref() == Some(&id) {
@@ -195,7 +197,7 @@ fn column_click(chrome: &Rc<Chrome>, shell: &Shell, h: ColumnHit) {
             crate::commands::run(shell, "bookmarks-door");
         }
         ColumnHit::Canvas => crate::canvas::door::toggle(shell),
-        ColumnHit::Folder(id) => copper_shell_core::agents::groups::toggle(shell, &id),
+        ColumnHit::Folder(id) => groups::toggle(shell, &id),
         h => crate::palette::spaces::column_hit(chrome, shell, h),
     }
 }
@@ -253,6 +255,11 @@ fn context_menu(chrome: &Rc<Chrome>, shell: &Shell, target: Option<NodeId>, at: 
             blank: t.url.is_empty() || t.url.starts_with("about:blank"),
             saved: shell.tab_view(&tab).is_some_and(|v| v.saved),
             several: shell.visible_ids().len() > 1,
+            filed: t.group.as_deref().is_some_and(|g| {
+                groups::all(shell)
+                    .iter()
+                    .any(|f| f.id.eq_ignore_ascii_case(g))
+            }),
         };
         (facts, canvas)
     };
@@ -315,6 +322,7 @@ fn menu_chosen(chrome: &Rc<Chrome>, shell: &Shell, menu: u32, chosen: u32) {
         }
         item::SAVE => shell.set_saved(&tab, true),
         item::UNSAVE => shell.set_saved(&tab, false),
+        item::TAKE_OUT => groups::take_out(shell, &tab),
         _ => {}
     }
 }
