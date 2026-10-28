@@ -13,20 +13,32 @@ use std::rc::Rc;
 /// Start every lane and hook every page.
 pub fn register(shell: &Shell) {
     shield::start(shell);
+    crate::perf::step("f:shield");
     curtain::start(shell);
     // The hide-anything picker's state shows in the palette's offers; a
     // change redraws the chrome that reads it.
     curtain::on_change::<Win>(Rc::new(|s: &Shell| s.view().sync(s)));
+    crate::perf::step("f:curtain");
     crate::updates::register(shell);
+    crate::perf::step("f:updates");
     crate::forms::register(shell);
+    crate::perf::step("f:forms");
     crate::cloud::register(shell);
+    crate::perf::step("f:cloud");
     crate::canvas::register(shell);
+    crate::perf::step("f:canvas");
     crate::agents::register(shell);
+    crate::perf::step("f:agents");
     crate::addons::register(shell);
+    crate::perf::step("f:addons");
     crate::panels::register(shell);
+    crate::perf::step("f:panels");
     crate::settings::register(shell);
+    crate::perf::step("f:settings");
     crate::find::register(shell);
+    crate::perf::step("f:find");
     crate::palette::register(shell);
+    crate::perf::step("f:palette");
     page_commands(shell);
     shell.on_page_created(page_created);
     let pages: Vec<(TabId, WebView2Page)> = shell
