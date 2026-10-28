@@ -3,6 +3,7 @@ name: ci
 # Native Windows builds run the complete workspace tests; Linux cross-checks
 # the MSVC target using the Windows SDK downloaded by cargo-xwin. Release
 # executables are built on main and manual runs, not on pull requests.
+# Clippy runs once, in the Linux cross job (same MSVC target, all targets).
 on:
   push:
     branches: [main]
@@ -37,8 +38,6 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Format
         run: cargo fmt --all --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --workspace --locked
       - name: Build release executable
@@ -102,4 +101,4 @@ jobs:
       - name: cargo-xwin 0.23.1
         run: cargo install --locked cargo-xwin --version 0.23.1
       - name: Cross-target Clippy
-        run: cargo xwin clippy --workspace --target x86_64-pc-windows-msvc --locked -- -D warnings
+        run: cargo xwin clippy --workspace --all-targets --target x86_64-pc-windows-msvc --locked -- -D warnings
