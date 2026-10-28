@@ -11,6 +11,7 @@
 //! │        └─ well · the column's hairline edge, then the stage
 //! ├─ plates ········ a panel or Settings, floating over the page
 //! ├─ toasts
+//! ├─ peek ·········· the Calendar pin's card
 //! ├─ card ·········· launch / edit / palette, over everything
 //! └─ sheet ········· a question that needs an answer
 //! ```
@@ -81,6 +82,7 @@ pub fn build(ui: &mut Ui) -> State {
     super::pane::build(ui, well);
     let plates = ui.tree.add(content, Node::stack().absolute(Abs::FILL));
     let toast = toast::build(ui, content);
+    let peek = crate::peek::Card::build(&mut ui.tree, content);
     let card = card::build(ui, content);
     let sheet = sheet::build(ui, toast.bars());
     State {
@@ -96,6 +98,7 @@ pub fn build(ui: &mut Ui) -> State {
         card,
         sheet,
         toast,
+        peek,
         images: images::Images::default(),
         menus: menus::Menus::default(),
         side: true,

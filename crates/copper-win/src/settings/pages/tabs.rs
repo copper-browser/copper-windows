@@ -1,12 +1,20 @@
 //! Tabs (`Settings.swift` 331–389, `Sections.swift` 522–530): the sidebar,
-//! switching between tabs, and what happens to tabs you leave.
+//! switching between tabs, and what happens to tabs you leave; and the
+//! calendars the Calendar pin's card reads (copper-shell-core `calendar`).
 
 use super::{not_yet, on};
 use crate::chrome::glyph;
 use crate::platform::Shell;
 use crate::settings::Page;
-use crate::settings::form::Form;
+use crate::settings::form::{Form, Tone};
 use copper_core::settings::{Glyph, TabsPosition};
+use copper_shell_core::calendar;
+use std::cell::RefCell;
+
+thread_local! {
+    /// The calendar address being typed, and why the last one was refused.
+    static TYPED: RefCell<(String, Option<String>)> = RefCell::default();
+}
 
 /// Tabs: the sidebar, switching, and tabs you leave.
 pub(super) struct Tabs;
@@ -79,6 +87,37 @@ impl Page for Tabs {
             "Not yet on Windows — tabs stay until you close them",
         )
         .anchor("tabs.archive");
+
+        let sec = f.section("Calendar");
+        for (i, (feed, name)) in calendar::list(shell).into_iter().enumerate() {
+            // Whose it is, never the address.
+            let whose = calendar::owner(&feed.url)
+                .unwrap_or_else(|| copper_shell_core::shell::host_of(&feed.url));
+            sec.button(
+                &name,
+                (whose != name).then_some(whose.as_str()),
+                &format!("calendar.remove:{i}"),
+                "Remove",
+                false,
+            );
+        }
+        let (typed, refused) = TYPED.with_borrow(|t| t.clone());
+        sec.field(
+            "Add a calendar",
+            Some(refused.as_deref().unwrap_or(calendar::WHERE)),
+            "calendar.typed",
+            &typed,
+            "Paste its secret address, then press Enter",
+        )
+        .on_submit("calendar.add", None)
+        .tone(if refused.is_some() {
+            Tone::Error
+        } else {
+            Tone::Plain
+        })
+        .anchor("tabs.calendar")
+        .keywords(&["calendar", "google calendar", "ical", "meetings"])
+        .footnote("Rest the pointer on a Google Calendar pin to see your next meetings. The addresses are kept on this PC only.");
         f
     }
 
@@ -96,7 +135,27 @@ impl Page for Tabs {
                 }
             }
             "sleep" => shell.update_settings(|s| s.set_sleeps_tabs(on(value))),
-            _ => {}
+            "calendar.typed" => TYPED.with_borrow_mut(|t| t.0 = value.to_string()),
+            "calendar.add" => {
+                let refused = calendar::add(shell, value).err();
+                TYPED.with_borrow_mut(|t| {
+                    *t = match refused {
+                        Some(why) => (value.to_string(), Some(why)),
+                        None => Default::default(),
+                    }
+                });
+            }
+            a => {
+                let gone = a
+                    .strip_prefix("calendar.remove:")
+                    .and_then(|i| i.parse::<usize>().ok())
+                    .and_then(|i| calendar::list(shell).into_iter().nth(i));
+                if let Some((feed, _)) = gone
+                    && let Err(why) = calendar::remove(shell, &feed.url)
+                {
+                    shell.toast(&why);
+                }
+            }
         }
     }
 }

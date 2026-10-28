@@ -69,6 +69,8 @@ pub struct State {
     pub card: card::Card,
     pub sheet: sheet::Sheet,
     pub toast: toast::Toasts,
+    /// The Calendar pin's card (`crate::peek`).
+    pub peek: crate::peek::Card,
     pub images: images::Images,
     pub menus: menus::Menus,
     /// Tabs down the left (`true`) or across the top.
