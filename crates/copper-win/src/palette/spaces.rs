@@ -624,6 +624,11 @@ pub fn answered(shell: &Shell, id: NodeId) -> bool {
     let Some((space, answers)) = ASKING.with(|a| a.borrow_mut().take()) else {
         return true;
     };
+    // Confirmed here: its kept tabs leaving the space is no accident for
+    // Copper Cloud to hold on the way to the other devices.
+    if matches!(answers.get(i), Some(Answer::Close | Answer::Move)) {
+        copper_shell_core::cloud::confirmed();
+    }
     match answers.get(i) {
         Some(Answer::Close) => {
             shell.remove_space(&space, false);
