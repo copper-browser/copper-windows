@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "copper-botpass"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "copper-cloud",
  "copper-core",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "copper-calendar"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "copper-core",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "copper-cloud"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "base64 0.22.1",
  "copper-core",
@@ -314,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "copper-core"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "base64 0.22.1",
  "directories",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "copper-creds"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "hmac",
  "oo7",
@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "copper-engine"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "directories",
  "futures-channel",
@@ -379,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "copper-import"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "aes",
  "cbc",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "copper-mcp"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -422,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "copper-pagejs"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "copper-shell-core"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "base64 0.22.1",
  "copper-botpass",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "copper-shield"
-version = "0.4.1"
+version = "0.5.1"
 dependencies = [
  "copper-core",
  "copper-engine",

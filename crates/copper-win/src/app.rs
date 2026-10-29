@@ -390,7 +390,7 @@ fn place_file() -> PathBuf {
 fn init_logging(logs: &std::path::Path) {
     let filter = tracing_subscriber::EnvFilter::try_from_env("COPPER_LOG").unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new(
-            "warn,copper=info,copper::perf=info,copper_shell_core=info,copper_engine_webview2=info",
+            "warn,copper=info,copper::perf=info,copper_shell_core=info,copper_engine_webview2=info,copper_cloud::sync=info",
         )
     });
     // Only the window that won the claim gets here (a launch that hands its
