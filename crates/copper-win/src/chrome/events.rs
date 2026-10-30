@@ -63,6 +63,9 @@ pub fn handle(chrome: &Rc<Chrome>, e: Event) {
             crate::panels::field_event(&shell, id, &e);
         }
         Event::Key { key, mods, focused } => key_event(chrome, &shell, key, mods, focused),
+        Event::Typed(c) => {
+            crate::panels::typed(&shell, c);
+        }
         Event::Hover(target) => crate::peek::hover(&shell, target),
         Event::Resized(_) => {
             chrome.edit(|ui, st| st.card.resized(ui));

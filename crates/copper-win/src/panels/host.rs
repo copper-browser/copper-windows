@@ -61,6 +61,12 @@ pub trait Panel: 'static {
         false
     }
     /// A key the focused node did not use; `true` if it was the panel's.
+    /// A character typed while no field had focus; `true` if it was the
+    /// panel's.
+    fn typed(&self, _shell: &Shell, _c: char) -> bool {
+        false
+    }
+    /// A key the focused node did not use; `true` if it was the panel's.
     fn key(&self, _shell: &Shell, _key: Key, _mods: Mods, _focused: Option<NodeId>) -> bool {
         false
     }
@@ -334,6 +340,16 @@ pub fn key(shell: &Shell, key: Key, mods: Mods, focused: Option<NodeId>) -> bool
         Some((panel, _)) => panel.key(shell, key, mods, focused),
         None => false,
     }
+}
+
+/// A character typed while no field had focus: the panel on show's, if it
+/// wants it.
+pub fn typed(shell: &Shell, c: char) -> bool {
+    shell
+        .view()
+        .panels()
+        .current()
+        .is_some_and(|(panel, _)| panel.typed(shell, c))
 }
 
 /// A right-click the chrome did not take (not on a tab): the panel on
