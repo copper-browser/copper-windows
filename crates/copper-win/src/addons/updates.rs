@@ -3,7 +3,7 @@
 //!
 //! A new addon or version is downloaded, verified and staged by the core
 //! (`AddonSync`); here it surfaces as **"Update available"** — "<Addon
-//! name> <version> for the Agent sidebar" — on Settings › Updates (after
+//! name> <version> for the Agent sidebar" — on Settings › About (after
 //! Copper's own update, which keeps priority), as a toast once per staged
 //! version, and as a palette command. **Install** unpacks it and the slot
 //! reloads with it; no relaunch. Every Copper update check (the person's
@@ -16,7 +16,7 @@ use crate::platform::{Shell, Win};
 use crate::settings::form::Form;
 use std::cell::{Cell, RefCell};
 
-/// The actions this module answers on Settings › Updates (the page sends
+/// The actions this module answers on Settings › About (the page sends
 /// every action starting with `addon-` here).
 const INSTALL: &str = "addon-install";
 const CHECK: &str = "addon-check";
@@ -49,10 +49,10 @@ pub fn words(p: &glue::Pending) -> String {
     format!("{} {} for the {}", p.name, p.version, p.slot_name)
 }
 
-/// The addons changed: Settings › Updates redraws; a newly staged version
+/// The addons changed: Settings › About redraws; a newly staged version
 /// is announced once.
 pub fn changed(shell: &Shell) {
-    crate::settings::changed(shell, "updates");
+    crate::settings::changed(shell, "about");
     let Some(p) = glue::pending() else {
         TOASTED.with(|t| t.borrow_mut().take());
         return;
@@ -69,13 +69,13 @@ pub fn changed(shell: &Shell) {
     });
     if fresh && !glue::selftest_run() {
         shell.toast(&format!(
-            "Update available: {} — Settings › Updates",
+            "Update available: {} — Settings › About",
             words(&p)
         ));
     }
 }
 
-/// Settings › Updates: the addon section (after Copper's own).
+/// Settings › About: the addon section (after Copper's own).
 pub fn section(f: &mut Form) {
     // Copper's own "Check now" asks for addons too.
     let checking = copper_shell_core::updates::status::<Win>().checking;
@@ -119,13 +119,13 @@ pub fn section(f: &mut Form) {
     }
 }
 
-/// A Settings › Updates control of this module's was used.
+/// A Settings › About control of this module's was used.
 pub fn act(shell: &Shell, action: &str) {
     match action {
         INSTALL => install(shell),
         CHECK => {
             glue::check_now();
-            crate::settings::changed(shell, "updates");
+            crate::settings::changed(shell, "about");
         }
         _ => {}
     }
@@ -136,7 +136,7 @@ pub fn install(shell: &Shell) {
     if INSTALLING.with(|i| i.replace(true)) {
         return;
     }
-    crate::settings::changed(shell, "updates");
+    crate::settings::changed(shell, "about");
     let weak = shell.downgrade();
     glue::install_pending(move |r| {
         INSTALLING.with(|i| i.set(false));

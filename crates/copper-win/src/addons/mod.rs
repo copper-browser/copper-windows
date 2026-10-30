@@ -19,13 +19,13 @@
 //! | [`policy`] | the pure rules (widths, addresses, payloads) | `AddonHost.swift` |
 //! | [`host`] | what the bridge asks of Copper (identity, tabs, close, sign-in) | `AddonBridge.swift` |
 //! | [`oauth`] | the sign-in tab for `copper.oauth.authorize` | `AddonBridge.swift` |
-//! | [`updates`] | "Update available" on Settings › Updates, the toast, Install | `AddonUpdates.swift` |
+//! | [`updates`] | "Update available" on Settings › About, the toast, Install | `AddonUpdates.swift` |
 //! | [`glue`] | the one door to `copper_core::addons` and `copper_cloud::addons` | — |
 //! | [`selftest`] | `COPPER_SELFTEST=addons`: the bridge self-test | `AddonBench.swift` |
 //! | [`selftest_cloud`] | `COPPER_SELFTEST=addons-cloud`: against a real cloud | `addons-cloud-e2e.sh` (Linux) |
 //! | [`selftest_agent`] | `COPPER_SELFTEST=agent-ui`: the built-in agent's pictures | `AgentPane` bench seeds |
 //!
-//! Settings › Addons is `settings/pages/addons.rs`. Everything
+//! Settings › Extensions is `settings/pages/addons.rs`. Everything
 //! platform-neutral (manifests, bundles, the on-disk store, the cloud sync,
 //! the bridge's own methods) lives in the shared core; this lane is the
 //! Windows side only.
@@ -114,16 +114,16 @@ mod win {
     }
 
     /// The addons, their state or the cloud's answer changed: bring the
-    /// slot, Settings › Addons and Settings › Updates in line. UI thread.
+    /// slot, Settings › Extensions and Settings › About in line. UI thread.
     pub fn changed(shell: &Shell) {
         pane::sync(shell);
-        crate::settings::changed(shell, "addons");
+        crate::settings::changed(shell, "extensions");
         super::updates::changed(shell);
     }
 
-    /// Settings, on the Addons page.
+    /// Settings, at Extensions › Addons.
     pub fn open_settings(shell: &Shell) {
-        crate::settings::open(shell, "addons");
+        crate::settings::open_at(shell, "extensions", "addons.installed");
     }
 
     pub use super::updates::{act as updates_act, section as updates_section};

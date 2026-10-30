@@ -244,6 +244,21 @@ pub fn open(shell: &Shell, page: &str) {
     panels::show(shell, "settings");
 }
 
+/// Show Settings at `page`, scrolled to `anchor` and lit, as a picked
+/// result lands (`openSettings(_:at:)`): Voice on Intelligence, Addons on
+/// Extensions.
+pub fn open_at(shell: &Shell, page: &str, anchor: &str) {
+    open(shell, page);
+    let Some(s) = get() else { return };
+    super::fold::reveal(anchor);
+    *s.landing.borrow_mut() = Some(Landing {
+        anchor: anchor.to_string(),
+        flash: true,
+    });
+    s.refresh(shell);
+    s.land_soon(shell);
+}
+
 /// The page Settings is showing, if Settings is on screen.
 pub fn showing(shell: &Shell) -> Option<&'static str> {
     let s = get()?;
@@ -347,7 +362,10 @@ impl Settings {
 
     /// Run a page's action and draw what it changed.
     fn act(&self, shell: &Shell, page: &'static str, action: &str, value: &str) {
-        if let Some(p) = self.find(page) {
+        if let Some(fold) = action.strip_prefix(super::fold::ACTION) {
+            super::fold::toggle(fold);
+            self.refresh(shell);
+        } else if let Some(p) = self.find(page) {
             p.act(shell, action, value);
             self.finder.borrow_mut().index = None;
             self.refresh(shell);
@@ -543,5 +561,6 @@ impl Panel for Settings {
         *self.finder.borrow_mut() = Finder::default();
         self.landing.borrow_mut().take();
         self.menu.borrow_mut().take();
+        super::fold::close_all();
     }
 }

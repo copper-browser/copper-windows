@@ -6,7 +6,7 @@
 //! `selftest.txt` and PNGs in `COPPER_SELFTEST_OUT`.
 //!
 //! 1. Within 90 s the cloud sync stages `COPPER_E2E_EXPECT_ID` at
-//!    `COPPER_E2E_EXPECT_VERSION`; Settings › Updates says "Update
+//!    `COPPER_E2E_EXPECT_VERSION`; Settings › About says "Update
 //!    available"; its **Install** runs.
 //! 2. Ctrl+E shows the addon page; `copper.info()` reports the version and
 //!    `copper.identity()` the signed-in cloud account.
@@ -20,7 +20,7 @@
 //!    Check now, "Update available", **Install**, and the page reports the
 //!    new version — the same process and the same view, no relaunch.
 //!    `COPPER_E2E_UPDATE_PANE_SCRIPT` then runs like step 3.
-//! 5. Settings › Addons lists it.
+//! 5. Settings › Extensions lists it.
 
 use super::selftest::{READING, Run, short};
 use super::{glue, view};
@@ -179,16 +179,16 @@ async fn run(r: &Run) {
         update(r, &id, &next).await;
     }
 
-    // 5. Settings › Addons.
+    // 5. Settings › Extensions.
     let want = env("COPPER_E2E_UPDATE_TO").unwrap_or(version);
     let listed = glue::list();
     r.check(
         listed
             .iter()
             .any(|l| l.id == id && l.version == want && l.installed && l.enabled),
-        &format!("Settings › Addons lists {id} {want}, installed and on"),
+        &format!("Settings › Extensions lists {id} {want}, installed and on"),
     );
-    crate::settings::open(shell, "addons");
+    crate::settings::open(shell, "extensions");
     r.shot("cloud-settings-addons").await;
     shell.set_look(copper_core::settings::Look::Dark);
     r.shot("cloud-settings-addons-dark").await;
@@ -205,7 +205,7 @@ async fn staged(r: &Run, id: &str, version: &str) -> bool {
     .await
 }
 
-/// Settings › Updates: screenshot its "Update available", press Install,
+/// Settings › About: screenshot its "Update available", press Install,
 /// and wait for `id` `version` to run.
 async fn install_from_updates(r: &Run, id: &str, version: &str, shot: &str) -> bool {
     let shell = &r.shell;
@@ -213,11 +213,11 @@ async fn install_from_updates(r: &Run, id: &str, version: &str, shot: &str) -> b
         r.check(false, "an update is pending");
         return false;
     };
-    crate::settings::open(shell, "updates");
+    crate::settings::open(shell, "about");
     r.check(
         p.version == version,
         &format!(
-            "Settings › Updates says “Update available — {}”",
+            "Settings › About says “Update available — {}”",
             super::updates::words(&p)
         ),
     );
@@ -362,7 +362,7 @@ async fn update(r: &Run, id: &str, next: &str) {
     r.sleep(1100).await;
     let early = glue::pending().is_some_and(|p| p.version == next);
     let before = glue::checked_at();
-    crate::settings::open(shell, "updates");
+    crate::settings::open(shell, "about");
     r.sleep(300).await;
     super::updates::act(shell, "addon-check");
     let checked = r
@@ -373,7 +373,7 @@ async fn update(r: &Run, id: &str, next: &str) {
     r.check(
         checked || early,
         &format!(
-            "Settings › Updates › Check now runs a cloud check{}",
+            "Settings › About › Check now runs a cloud check{}",
             if early {
                 " (the cloud's event stream had already staged the version)"
             } else {

@@ -58,14 +58,12 @@ impl UpdatesApp<Win> for WinUpdates {
     }
 
     fn announce(&self, shell: &Shell, version: &str) {
-        shell.toast(&format!(
-            "Copper {version} is available — Settings › Updates"
-        ));
-        crate::settings::changed(shell, "updates");
+        shell.toast(&format!("Copper {version} is available — Settings › About"));
+        crate::settings::changed(shell, "about");
     }
 
     fn changed(&self, shell: &Shell) {
-        crate::settings::changed(shell, "updates");
+        crate::settings::changed(shell, "about");
     }
 }
 

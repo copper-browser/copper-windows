@@ -1,5 +1,6 @@
 //! Intelligence (`SettingsFork.swift` 10–335, `IntelligenceCheck.swift`):
-//! the model behind the agent pane and Ask on page, and Jev's fast lane.
+//! the model behind the agent pane and Ask on page, Jev's fast lane, and
+//! voice (not on Windows yet).
 //!
 //! Keys live in `intelligence.json` — the private file the agents' MCP
 //! host already reads ([`copper_mcp::intelligence::read_files`]) — never in
@@ -12,10 +13,11 @@
 //! question each, for real, on the cloud lane's network runtime — never on
 //! the UI thread.
 
-use super::redraw;
+use super::{not_yet, redraw};
 use crate::chrome::glyph;
 use crate::platform::Shell;
 use crate::settings::Page;
+use crate::settings::fold;
 use crate::settings::form::{Form, Pill, Tone};
 use copper_core::intelligence::IntelligenceKeys;
 use copper_mcp::intelligence::{self as brain, Effective, Keys, Lane, Tier};
@@ -154,7 +156,7 @@ impl Page for Intelligence {
         "Intelligence"
     }
     fn blurb(&self) -> &'static str {
-        "The model behind the agent pane and Ask on page, and Jev's fast lane."
+        "The model behind the agent pane, Jev's fast lane, and voice."
     }
     fn glyph(&self) -> char {
         glyph::INTELLIGENCE
@@ -262,29 +264,6 @@ impl Page for Intelligence {
             tier.name(),
         )
         .anchor("intelligence.tier");
-        sec.note(
-            "Model names",
-            Some("What Haiku, Sonnet and Opus are called on your gateway. Leave one empty for the plain name."),
-        )
-        .anchor("intelligence.names");
-        for t in TIERS {
-            let typed = file
-                .router_models
-                .as_ref()
-                .and_then(|m| m.get(t.name()))
-                .cloned()
-                .unwrap_or_default();
-            sec.field(
-                tier_title(t),
-                None,
-                &format!("name-{}", t.name()),
-                &typed,
-                t.name(),
-            )
-            .mono()
-            .on_submit(&format!("name-{}-done", t.name()), Some(150.0))
-            .keywords(&["model name", "gateway model"]);
-        }
         let line = verdict_line(&eff.keys);
         let all_ok = CHECK.with(|c| c.borrow().verdicts.iter().all(|v| v.ok));
         sec.pills(
@@ -310,6 +289,34 @@ impl Page for Intelligence {
             None => Tone::Plain,
         })
         .anchor("intelligence.check");
+        // Model names are for gateways that call them something else:
+        // folded under Advanced (Copper#118).
+        if fold::advanced(sec, "intelligence.more", &["intelligence.names"]) {
+            sec.note(
+                "Model names",
+                Some("What Haiku, Sonnet and Opus are called on your gateway. Leave one empty for the plain name."),
+            )
+            .anchor("intelligence.names");
+            for t in TIERS {
+                let typed = file
+                    .router_models
+                    .as_ref()
+                    .and_then(|m| m.get(t.name()))
+                    .cloned()
+                    .unwrap_or_default();
+                sec.field(
+                    tier_title(t),
+                    None,
+                    &format!("name-{}", t.name()),
+                    &typed,
+                    t.name(),
+                )
+                .mono()
+                .on_submit(&format!("name-{}-done", t.name()), Some(150.0))
+                .anchor("intelligence.names")
+                .keywords(&["model name", "gateway model"]);
+            }
+        }
 
         let mut footnote = "Keys stay on this PC, in your own Windows profile folder.".to_string();
         if eff.sources.values().any(|s| s == "cloud") {
@@ -319,13 +326,17 @@ impl Page for Intelligence {
         let (detail, tone) = key_detail(
             &eff,
             "jevKey",
-            "Picks between choices and says how sure it is, in about a fifth of a second. Agents use it for quick decisions.",
+            if eff.jev_ready() {
+                "Quick decisions for agents, in about a fifth of a second."
+            } else {
+                "Quick decisions for agents, in about a fifth of a second. Needs a key from your TypeSafe account."
+            },
             eff.jev_ready(),
             refused(&eff.keys, "jev"),
         );
-        f.section("Jev — the fast lane")
+        f.section("Jev")
             .secret(
-                "Jev",
+                "Jev key",
                 Some(&detail),
                 "jev-key",
                 &mine.jev_key,
@@ -340,6 +351,15 @@ impl Page for Intelligence {
             .on_submit("jev-key-done", Some(200.0))
             .anchor("intelligence.jev")
             .footnote(&footnote);
+
+        // Voice (`VoiceSettings.swift`, a page of its own until Copper#115).
+        not_yet(
+            f.section("Voice"),
+            "Talk to the agent",
+            "Not yet on Windows — Copper for Windows has no speech model, so it never listens",
+        )
+        .anchor("voice.enabled")
+        .keywords(&["dictation", "speech", "microphone", "push to talk"]);
         f
     }
 

@@ -14,6 +14,7 @@
 //! saved-password manager ([`manager`]) and Move in ([`movein`]).
 
 pub mod fill;
+pub mod fold;
 pub mod form;
 pub mod index;
 pub mod look;
@@ -43,7 +44,7 @@ mod panel;
 mod results;
 
 #[cfg(windows)]
-pub use panel::{Page, changed, open, register, showing};
+pub use panel::{Page, changed, open, open_at, register, showing};
 
 /// `1 password` / `3 passwords`.
 pub fn count(n: usize, one: &str, many: &str) -> String {

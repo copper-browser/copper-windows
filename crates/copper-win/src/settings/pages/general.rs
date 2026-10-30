@@ -1,5 +1,6 @@
 //! General (`Settings.swift` 273–326, `SettingsFork.swift` 1175–1217): the
-//! default browser, how Copper looks, and moving in from another browser.
+//! default browser, how Copper looks, downloads ([`super::downloads`]),
+//! and moving in from another browser.
 //!
 //! Windows doesn't let an app make itself the default browser; "Make
 //! default" opens Settings › Default apps on Copper's page, and the row
@@ -157,7 +158,7 @@ impl Page for General {
         "General"
     }
     fn blurb(&self) -> &'static str {
-        "The default browser, how Copper looks, and moving in from another browser."
+        "The default browser, how Copper looks, downloads, and moving in."
     }
     fn glyph(&self) -> char {
         glyph::GEAR
@@ -216,6 +217,8 @@ impl Page for General {
         )
         .anchor("general.autocorrect");
 
+        super::downloads::section(shell, &mut f);
+
         let sec = f.section("Moving in");
         sec.button(
             "Move in from another browser",
@@ -268,6 +271,9 @@ impl Page for General {
     }
 
     fn act(&self, shell: &Shell, action: &str, value: &str) {
+        if super::downloads::act(shell, action, value) {
+            return;
+        }
         match action {
             "default-browser" => {
                 STATE.with(|s| s.borrow_mut().asked = true);

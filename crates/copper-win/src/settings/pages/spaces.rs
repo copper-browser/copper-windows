@@ -130,7 +130,8 @@ impl Page for Spaces {
                 "icon",
                 chunk,
                 chosen,
-            );
+            )
+            .anchor("spaces.icon");
         }
         let colours: Vec<(&str, &str)> = SpaceColour::ALL
             .iter()
@@ -143,8 +144,14 @@ impl Page for Spaces {
                 "colour",
                 chunk,
                 look.name(),
-            );
+            )
+            .anchor("spaces.colours");
         }
+        // The page draws these behind Customize… (`space_page`).
+        crate::settings::fold::holds(
+            super::space_page::CUSTOMIZE,
+            &["spaces.icon", "spaces.colours"],
+        );
         let mut names: Vec<(String, String)> = vec![(String::new(), "Shared".into())];
         names.extend(profiles.iter().map(|p| (p.clone(), p.clone())));
         let names: Vec<(&str, &str)> = names

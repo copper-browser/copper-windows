@@ -100,8 +100,6 @@ pub const CLEAR: char = '\u{EB90}';
 pub const RETURN: char = '\u{E751}';
 /// `info.circle`: About.
 pub const INFO: char = '\u{E946}';
-/// `flask`: Labs (Windows has no flask; a light bulb is its "try this").
-pub const LABS: char = '\u{EA80}';
 /// `sparkles`: Intelligence.
 pub const INTELLIGENCE: char = '\u{E945}';
 /// `square.split.2x1`: Tabs.
