@@ -31,6 +31,8 @@ pub enum Event {
         mods: Mods,
         focused: Option<NodeId>,
     },
+    /// A character typed while no field had focus (type to search).
+    Typed(char),
     /// Keyboard focus moved inside the chrome (`None`: to the page or out).
     Focus(Option<NodeId>),
     /// The pointer target under the pointer changed (`None`: over nothing

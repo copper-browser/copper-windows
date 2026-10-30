@@ -507,6 +507,26 @@ impl Panel for Settings {
         self.current().is_some_and(|p| p.field(shell, id, e))
     }
 
+    /// Type to search (`SettingsKeys.take`): a character typed with no
+    /// field focused goes on the end of the search, which takes the focus.
+    fn typed(&self, shell: &Shell, c: char) -> bool {
+        let Some(nodes) = self.nodes.get() else {
+            return false;
+        };
+        let mut query = self.finder.borrow().query.clone();
+        if c.is_whitespace() && query.trim().is_empty() {
+            return false;
+        }
+        query.push(c);
+        let text = query.clone();
+        shell.view().chrome().read(move |ui, _| {
+            ui.set_field_text(nodes.search, &text, false);
+            ui.focus(Some(nodes.search));
+        });
+        self.search(shell, query);
+        true
+    }
+
     fn key(&self, shell: &Shell, key: Key, mods: Mods, _focused: Option<NodeId>) -> bool {
         let Some(nodes) = self.nodes.get() else {
             return false;
@@ -520,6 +540,12 @@ impl Panel for Settings {
                     ui.set_field_text(nodes.search, &text, true);
                     ui.focus(Some(nodes.search));
                 });
+                true
+            }
+            // Ctrl+W puts Settings away (`⌘W`), rather than closing the
+            // tab hidden behind it.
+            Key::Letter('W') if mods.ctrl && !mods.alt && !mods.shift => {
+                shell.view().panels().hide(shell);
                 true
             }
             Key::Down if plain && self.finder.borrow().showing => {

@@ -45,6 +45,9 @@ enum Step {
     Method,
     /// A code from method `n` (0 authenticator, 1 email, 3 YubiKey).
     Code(u8),
+    /// A personal API key (`bw login --apikey`) and the master password
+    /// to unlock with.
+    ApiKey,
 }
 
 /// What is typed into the card, and where it is.
@@ -55,6 +58,8 @@ struct Card {
     email: String,
     password: String,
     code: String,
+    client_id: String,
+    client_secret: String,
     step: Step,
     busy: bool,
     error: Option<String>,
@@ -148,12 +153,13 @@ pub fn draw(shell: &Shell, sec: &mut Section, snap: &Snapshot) {
             c.email.clone(),
             c.password.clone(),
             c.code.clone(),
+            (c.client_id.clone(), c.client_secret.clone()),
             c.step,
             c.busy,
             c.error.clone(),
         )
     });
-    let (server, email, password, code, step, busy, error) = card;
+    let (server, email, password, code, (client_id, client_secret), step, busy, error) = card;
     match &snap.bw_state {
         None => {
             sec.note("Bitwarden", Some("Looking for the Bitwarden CLI…"));
@@ -212,10 +218,51 @@ pub fn draw(shell: &Shell, sec: &mut Section, snap: &Snapshot) {
                     sec.pills(
                         "Connect",
                         None,
-                        vec![Pill {
-                            enabled: ready && !busy,
-                            ..action("bw.signin", "Sign in", true, busy)
-                        }],
+                        vec![
+                            plain("bw.apikey", "Use a personal API key instead", !busy),
+                            Pill {
+                                enabled: ready && !busy,
+                                ..action("bw.signin", "Sign in", true, busy)
+                            },
+                        ],
+                    );
+                }
+                Step::ApiKey => {
+                    sec.field(
+                        "client_id",
+                        Some("From the web vault: Account settings › Security › Keys"),
+                        "bw.client_id",
+                        &client_id,
+                        "user.…",
+                    )
+                    .on_submit("bw.signin_key", Some(260.0));
+                    sec.secret(
+                        "client_secret",
+                        None,
+                        "bw.client_secret",
+                        &client_secret,
+                        "client_secret",
+                    )
+                    .on_submit("bw.signin_key", Some(260.0));
+                    sec.secret(
+                        "Master password",
+                        Some("To unlock — leave it empty to unlock later"),
+                        "bw.password",
+                        &password,
+                        "Password",
+                    )
+                    .on_submit("bw.signin_key", Some(260.0));
+                    let ready = !client_id.trim().is_empty() && !client_secret.trim().is_empty();
+                    sec.pills(
+                        "Connect",
+                        None,
+                        vec![
+                            plain("bw.cancel", "Cancel", !busy),
+                            Pill {
+                                enabled: ready && !busy,
+                                ..action("bw.signin_key", "Sign In with API Key", true, busy)
+                            },
+                        ],
                     );
                 }
                 Step::Method => {

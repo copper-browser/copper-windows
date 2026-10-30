@@ -1149,9 +1149,7 @@ impl Ui {
     }
 
     fn char(&mut self, unit: u16) {
-        let Some(id) = self.tree.focused().filter(|&i| self.is_field(i)) else {
-            return;
-        };
+        let field = self.tree.focused().filter(|&i| self.is_field(i));
         let ch = match unit {
             0xD800..=0xDBFF => {
                 self.high_surrogate = Some(unit);
@@ -1167,6 +1165,10 @@ impl Ui {
         };
         self.high_surrogate = None;
         let Some(ch) = ch.filter(|c| !c.is_control()) else {
+            return;
+        };
+        let Some(id) = field else {
+            self.events.push_back(Event::Typed(ch));
             return;
         };
         let mut buf = [0u8; 4];

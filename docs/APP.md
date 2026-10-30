@@ -46,6 +46,7 @@ CLI front ends (`cli.rs`: `--mcp-stdio`, `cloud …`, `--cli <verb>` /
 | `palette/` | The card's logic (Ctrl+K / Ctrl+L / Ctrl+T), ranked by shell-core. |
 | `peek/` | The Calendar pin's card: the card as nodes (platform-free, tested on any host) and, in `hover.rs`, the pointer's rest and leave and the card's clicks. What it lists is shell-core's `calendar`. |
 | `find.rs` | Find bar (Ctrl+F, F3, Shift+F3). |
+| `reader.rs` | Reading mode (Ctrl+Alt+R): the article, via copper-pagejs; left by reloading. |
 | `forms.rs`, `agents.rs`, `updates.rs`, `canvas.rs`, `cloud.rs` | The lanes' Windows halves. |
 | `instance.rs`, `args.rs`, `cli.rs` | Single instance, arguments, CLI front ends. |
 | `sys/` | Win32 helpers: calendar, dialogs, network, screenshots, shell (open/jump list), user, window placement/Mica. |

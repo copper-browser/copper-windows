@@ -43,6 +43,13 @@ pub fn act(shell: &Shell, action: &str, value: &str) -> bool {
         "email" => with(|c| c.email = value.to_string()),
         "password" => with(|c| c.password = value.to_string()),
         "code" => with(|c| c.code = value.to_string()),
+        "client_id" => with(|c| c.client_id = value.to_string()),
+        "client_secret" => with(|c| c.client_secret = value.to_string()),
+        "apikey" => with(|c| {
+            c.step = Step::ApiKey;
+            c.error = None;
+        }),
+        "signin_key" => sign_in_key(shell),
         "dismiss" => with(|c| c.error = None),
         "copy" => {
             shell.view().copy_text(INSTALL);
@@ -73,6 +80,7 @@ pub fn act(shell: &Shell, action: &str, value: &str) -> bool {
             c.step = Step::Credentials;
             c.password.clear();
             c.code.clear();
+            c.client_secret.clear();
             c.error = None;
         }),
         "unlock" => {
@@ -150,8 +158,73 @@ fn finished() {
         c.step = Step::Credentials;
         c.password.clear();
         c.code.clear();
+        c.client_secret.clear();
         c.error = None;
     });
+}
+
+/// The server typed first, or the one Settings remembers; kept in
+/// Settings when it was typed.
+fn server(shell: &Shell, typed: Option<String>) -> Option<String> {
+    let server = typed
+        .or_else(|| shell.settings().string(keys::BW_SERVER).map(str::to_string))
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(s) = &server {
+        let s = s.clone();
+        shell.update_settings(move |st| st.set(keys::BW_SERVER, s.as_str()));
+    }
+    server
+}
+
+/// Point `bw` at `server` when it isn't there already.
+async fn point_at(
+    bw: &mut copper_creds::bitwarden::Bitwarden,
+    server: Option<String>,
+) -> Result<(), String> {
+    if let Some(server) = server {
+        let current = bw
+            .cli_server()
+            .unwrap_or(DEFAULT_SERVER)
+            .trim_end_matches('/');
+        if current != server {
+            bw.configure(&server).await.map_err(|e| e.0)?;
+        }
+    }
+    Ok(())
+}
+
+/// A personal API key to `bw` (no two-step code; the account is left
+/// locked), then the master password, when one was typed, to unlock.
+fn sign_in_key(shell: &Shell) {
+    let (typed, id, secret, password) = with(|c| {
+        (
+            c.server.clone(),
+            c.client_id.clone(),
+            c.client_secret.clone(),
+            c.password.clone(),
+        )
+    });
+    if id.trim().is_empty() || secret.trim().is_empty() {
+        return;
+    }
+    let server = server(shell, typed);
+    run(
+        shell,
+        move |v| async move {
+            let mut bw = v.bw.lock().await;
+            point_at(&mut bw, server).await?;
+            bw.login_api_key(&id, &secret).await.map_err(|e| e.0)?;
+            if password.is_empty() {
+                return Ok(());
+            }
+            bw.unlock(&password).await.map_err(|e| e.0)
+        },
+        |_, r| match r {
+            Ok(()) => finished(),
+            Err(e) => failed(e),
+        },
+    );
 }
 
 /// Email and master password (and a code, once one is asked for) to `bw`,
@@ -163,28 +236,13 @@ fn sign_in(shell: &Shell, code: Option<(u8, String)>) {
     if email.trim().is_empty() || password.is_empty() {
         return;
     }
-    let server = typed
-        .or_else(|| shell.settings().string(keys::BW_SERVER).map(str::to_string))
-        .map(|s| s.trim().trim_end_matches('/').to_string())
-        .filter(|s| !s.is_empty());
-    if let Some(s) = &server {
-        let s = s.clone();
-        shell.update_settings(move |st| st.set(keys::BW_SERVER, s.as_str()));
-    }
+    let server = server(shell, typed);
     let asked_code = code.is_some();
     run(
         shell,
         move |v| async move {
             let mut bw = v.bw.lock().await;
-            if let Some(server) = server {
-                let current = bw
-                    .cli_server()
-                    .unwrap_or(DEFAULT_SERVER)
-                    .trim_end_matches('/');
-                if current != server {
-                    bw.configure(&server).await.map_err(|e| e.0)?;
-                }
-            }
+            point_at(&mut bw, server).await?;
             let (method, code) = match &code {
                 Some((m, c)) => (Some(*m), Some(c.as_str())),
                 None => (None, None),

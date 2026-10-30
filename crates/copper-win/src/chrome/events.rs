@@ -63,6 +63,9 @@ pub fn handle(chrome: &Rc<Chrome>, e: Event) {
             crate::panels::field_event(&shell, id, &e);
         }
         Event::Key { key, mods, focused } => key_event(chrome, &shell, key, mods, focused),
+        Event::Typed(c) => {
+            crate::panels::typed(&shell, c);
+        }
         Event::Hover(target) => crate::peek::hover(&shell, target),
         Event::Resized(_) => {
             chrome.edit(|ui, st| st.card.resized(ui));
@@ -215,6 +218,7 @@ fn strip_click(shell: &Shell, h: StripHit) {
             }
         }
         StripHit::NewTab => crate::palette::open(shell, Purpose::Launch, false),
+        StripHit::Tab(id) if super::drag::was_dragged(&id) => {}
         StripHit::Tab(id) => {
             if shell.active_id().as_ref() == Some(&id) {
                 crate::palette::edit_address(shell);

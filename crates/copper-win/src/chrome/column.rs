@@ -1353,6 +1353,11 @@ impl Column {
         }
     }
 
+    /// The favourite under `p`, window DIPs.
+    pub fn pin_under(&self, ui: &Ui, p: Point) -> Option<TabId> {
+        self.pin_at(ui.tree.pick(p).target?)
+    }
+
     /// The column as a dragged row sees it, in window DIPs.
     pub fn drop_layout(&self, ui: &Ui) -> sidedrop::Layout {
         let new_tab = ui.tree.window_rect(self.new_tab);

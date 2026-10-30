@@ -8,6 +8,11 @@
 //! square shows where it will be pinned. Letting go puts it there. Nothing
 //! is swallowed, so the toolkit's own press and capture stay whole.
 //!
+//! A favourite, or a tab in the top row, moves as it is carried (Mac
+//! `Side.swift` `pinReorder`, `TabBar.swift` `reorder`): over another of
+//! its kind it takes that one's place at once ([`Shell::drop_tab`]), a
+//! favourite among favourites, a title among titles.
+//!
 //! [`DRAG_FROM`]: super::column::DRAG_FROM
 
 use crate::platform::Shell;
@@ -17,11 +22,29 @@ use copper_shell_core::sidedrop::{self, Target};
 use copper_win_ui::Point;
 use std::cell::RefCell;
 
+/// What a press went down on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Grip {
+    /// A row down the column.
+    Row,
+    /// A favourite, or a tab in the top row.
+    Square,
+}
+
+/// A square in the hand, and the tab it was last moved past (so a move
+/// is asked once, not again until the squares are redrawn).
+struct Moving {
+    id: TabId,
+    last: Option<TabId>,
+}
+
 thread_local! {
-    /// A press on a row: where it went down (window DIPs, y) and its tab.
-    static PRESS: RefCell<Option<(f32, TabId)>> = const { RefCell::new(None) };
+    /// A press: where it went down (window DIPs), its tab, on what.
+    static PRESS: RefCell<Option<(Point, TabId, Grip)>> = const { RefCell::new(None) };
     /// The row in the hand.
     static HELD: RefCell<Option<Held>> = const { RefCell::new(None) };
+    /// The square in the hand.
+    static MOVING: RefCell<Option<Moving>> = const { RefCell::new(None) };
     /// The tab whose row was dragged: the click the toolkit makes of the
     /// release is not a click.
     static DRAGGED: RefCell<Option<TabId>> = const { RefCell::new(None) };
@@ -68,20 +91,32 @@ pub fn pointer(shell: &Shell) {
                         // A row still up from a release never seen.
                         end(ui, st);
                         HELD.with(|h| h.borrow_mut().take());
+                        MOVING.with(|m| m.borrow_mut().take());
                         let k = ui.scale().max(0.5);
                         let p = Point::new(x / k, y / k);
-                        st.column.row_at(ui, p).map(|id| (p.y, id))
+                        st.column
+                            .row_at(ui, p)
+                            .map(|id| (p, id, Grip::Row))
+                            .or_else(|| square_at(ui, st, p).map(|(id, _)| (p, id, Grip::Square)))
                     })
                     .flatten();
                 PRESS.with(|s| *s.borrow_mut() = press);
             }
             WM_MOUSEMOVE if m.wparam & MK_LBUTTON != 0 => {
-                let Some((y0, id)) = PRESS.with(|s| s.borrow().clone()) else {
+                let Some((p0, id, grip)) = PRESS.with(|s| s.borrow().clone()) else {
                     return false;
                 };
-                let Some(y) = chrome.read(|ui, _| y / ui.scale().max(0.5)) else {
+                let Some(p) = chrome.read(|ui, _| {
+                    let k = ui.scale().max(0.5);
+                    Point::new(x / k, y / k)
+                }) else {
                     return false;
                 };
+                if grip == Grip::Square {
+                    move_square(&shell, p0, p, id);
+                    return false;
+                }
+                let (y0, y) = (p0.y, p.y);
                 if HELD.with(|h| h.borrow().is_none()) {
                     if (y - y0).abs() < super::column::DRAG_FROM {
                         return false;
@@ -102,11 +137,16 @@ pub fn pointer(shell: &Shell) {
             WM_MOUSEMOVE => {
                 // The button came up where this hook did not see it.
                 PRESS.with(|s| s.borrow_mut().take());
+                MOVING.with(|m| m.borrow_mut().take());
                 chrome.read(end);
                 HELD.with(|h| h.borrow_mut().take());
             }
             _ => {
                 PRESS.with(|s| s.borrow_mut().take());
+                if let Some(m) = MOVING.with(|m| m.borrow_mut().take()) {
+                    DRAGGED.with(|d| *d.borrow_mut() = Some(m.id));
+                    return false;
+                }
                 chrome.read(end);
                 let Some(Held { id, target, .. }) = HELD.with(|h| h.borrow_mut().take()) else {
                     return false;
@@ -130,6 +170,73 @@ pub fn pointer(shell: &Shell) {
             }
         }
         false
+    });
+}
+
+/// The favourite, or top-row tab, under `p` and whether it is pinned.
+fn square_at(ui: &copper_win_ui::win::Ui, st: &super::State, p: Point) -> Option<(TabId, bool)> {
+    st.column
+        .pin_under(ui, p)
+        .map(|id| (id, true))
+        .or_else(|| st.strip.tab_under(ui, p))
+}
+
+/// The pointer, pressed on square `id` at `from`, is at `p`: past
+/// [`DRAG_FROM`] it is carried, and over another square of its kind it
+/// moves to that one's place.
+///
+/// [`DRAG_FROM`]: super::column::DRAG_FROM
+fn move_square(shell: &Shell, from: Point, p: Point, id: TabId) {
+    if MOVING.with(|m| m.borrow().is_none()) {
+        if (p.x - from.x).hypot(p.y - from.y) < super::column::DRAG_FROM {
+            return;
+        }
+        MOVING.with(|m| *m.borrow_mut() = Some(Moving { id, last: None }));
+    }
+    let Some((id, last)) = MOVING.with(|m| {
+        let m = m.borrow();
+        m.as_ref().map(|m| (m.id.clone(), m.last.clone()))
+    }) else {
+        return;
+    };
+    let pinned = shell.browser().tab(&id).is_some_and(|t| t.is_pinned());
+    let over = shell
+        .view()
+        .chrome()
+        .read(|ui, st| square_at(ui, st, p))
+        .flatten();
+    let target = match over {
+        // Over itself, where the last move put it: the next may go on.
+        Some((t, _)) if t == id => {
+            MOVING.with(|m| m.borrow_mut().as_mut().map(|m| m.last = None));
+            return;
+        }
+        Some((t, kind)) if kind == pinned && last.as_ref() != Some(&t) => t,
+        _ => return,
+    };
+    MOVING.with(|m| {
+        m.borrow_mut()
+            .as_mut()
+            .map(|m| m.last = Some(target.clone()))
+    });
+    // On the loop's next turn, as a row's drop.
+    let weak = shell.downgrade();
+    copper_win_rt::spawn_local(async move {
+        let Some(shell) = weak.upgrade() else { return };
+        let after = {
+            let b = shell.browser();
+            let order: Vec<TabId> = if pinned {
+                b.pins().iter().map(|t| t.id.clone()).collect()
+            } else {
+                b.row(b.current_space_id())
+                    .iter()
+                    .map(|t| t.id.clone())
+                    .collect()
+            };
+            let at = |t: &TabId| order.iter().position(|o| o == t);
+            at(&id) < at(&target)
+        };
+        shell.drop_tab(&id, &target, after);
     });
 }
 

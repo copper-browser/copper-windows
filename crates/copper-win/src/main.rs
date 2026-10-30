@@ -60,6 +60,8 @@ mod peek;
 mod picture;
 #[cfg(windows)]
 mod platform;
+#[cfg(windows)]
+mod reader;
 mod settings;
 #[cfg(windows)]
 mod signins;
