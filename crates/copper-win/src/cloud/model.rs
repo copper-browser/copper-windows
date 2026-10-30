@@ -14,7 +14,7 @@
 //! not a Mac.
 
 use copper_cloud::link::{is_bare_pairing_code, manual_link, pairs};
-use copper_cloud::sync::{Selector, SyncState};
+use copper_cloud::sync::SyncState;
 use copper_cloud::{Domain, Endpoint, JoinCode, Link, parse_join_code};
 
 /// The fewest characters a new account's password may have
@@ -538,136 +538,10 @@ pub fn code_parts(link: &str, secret: &str) -> (String, String, String) {
 
 // MARK: delete history on cloud
 
-/// The time range (`CloudHistoryEraser.Span`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Span {
-    #[default]
-    Hour,
-    Day,
-    Week,
-    All,
-}
-
-impl Span {
-    pub const ALL: [Span; 4] = [Span::Hour, Span::Day, Span::Week, Span::All];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Span::Hour => "Last hour",
-            Span::Day => "Last 24 hours",
-            Span::Week => "Last 7 days",
-            Span::All => "All time",
-        }
-    }
-
-    pub fn seconds(self) -> Option<f64> {
-        match self {
-            Span::Hour => Some(3_600.0),
-            Span::Day => Some(86_400.0),
-            Span::Week => Some(604_800.0),
-            Span::All => None,
-        }
-    }
-
-    /// "the last hour"; `None` for all time.
-    pub fn words(self) -> Option<String> {
-        self.seconds()
-            .map(|_| format!("the {}", self.title().to_lowercase()))
-    }
-}
-
-/// The selector for a range and maybe a site: no site and all time is
-/// everything — said, never assumed (`CloudHistoryEraser.selector`).
-pub fn selector(span: Span, site: Option<&str>, now: f64) -> Selector {
-    let mut s = Selector {
-        since: span.seconds().map(|secs| now - secs),
-        ..Selector::default()
-    };
-    if let Some(site) = site {
-        s.hosts = vec![site.to_string()];
-    }
-    s.everything = !s.narrowed();
-    s
-}
-
-/// The site typed, as it will be matched (`CloudHistoryDelete.site`);
-/// `Err(())` when something is typed that isn't a site.
-pub fn typed_site(typed: &str) -> Result<Option<String>, ()> {
-    if typed.trim().is_empty() {
-        return Ok(None);
-    }
-    copper_cloud::sync::delete::site(typed).map(Some).ok_or(())
-}
-
-/// The confirmation's question (`question`).
-pub fn delete_question(span: Span, site: Option<&str>) -> String {
-    match (site, span.words()) {
-        (None, None) => "Delete all of your history on the cloud?".into(),
-        (None, Some(w)) => format!("Delete {w} of history on the cloud?"),
-        (Some(s), None) => format!("Delete every visit to {s} on the cloud?"),
-        (Some(s), Some(w)) => format!("Delete visits to {s} from {w} on the cloud?"),
-    }
-}
-
-/// The confirmation's message.
-pub const DELETE_MESSAGE: &str = "Copper Cloud deletes them for every device signed in as you. History on this device — and what your other devices already have — stays as it is. This can't be undone.";
-
-/// What a finished delete says.
-pub fn deleted_text(deleted: usize, cut: bool) -> String {
-    let mut s = format!(
-        "Deleted {} visit{} from the cloud",
-        group_digits(deleted),
-        if deleted == 1 { "" } else { "s" }
-    );
-    if cut {
-        let looked = copper_cloud::sync::delete::PAGE_LIMIT * copper_cloud::sync::delete::PAGE_SIZE;
-        s.push_str(&format!(
-            " — only the oldest {} were looked through",
-            group_digits(looked)
-        ));
-    }
-    s
-}
-
-/// A delete stopped while deleting: what went before the stop (the rest of
-/// the matches stayed).
-pub fn stopped_text(deleted: usize) -> String {
-    format!(
-        "Stopped after deleting {} visit{} from the cloud",
-        group_digits(deleted),
-        if deleted == 1 { "" } else { "s" }
-    )
-}
-
-/// 1234567 → "1,234,567" (`formatted()`).
-pub fn group_digits(n: usize) -> String {
-    let digits = n.to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
-
-/// The delete card's status line (`status`).
-pub fn delete_status(bad_site: bool, working: bool, looking: bool, result: Option<&str>) -> String {
-    if bad_site {
-        "That isn't a site — try example.com".into()
-    } else if working {
-        if looking {
-            "Looking through your history on this device…".into()
-        } else {
-            "Deleting…".into()
-        }
-    } else {
-        result
-            .unwrap_or("History on this device stays as it is.")
-            .to_string()
-    }
-}
+// The card's words and choices are shell-core's, lifted from here.
+pub use copper_shell_core::cloud::eraser::{
+    DELETE_MESSAGE, Span, delete_question, delete_status, finished, selector, typed_site,
+};
 
 // MARK: words
 

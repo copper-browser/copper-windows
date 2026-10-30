@@ -287,68 +287,6 @@ fn pairing_card() {
 }
 
 #[test]
-fn history_delete() {
-    let now = 1_000_000.0;
-    let all = selector(Span::All, None, now);
-    assert!(all.everything && all.valid());
-    let hour = selector(Span::Hour, None, now);
-    assert_eq!(hour.since, Some(now - 3_600.0));
-    assert!(!hour.everything && hour.valid());
-    let site = selector(Span::All, Some("example.com"), now);
-    assert!(site.scans() && !site.everything && site.valid());
-    assert_eq!(typed_site(""), Ok(None));
-    assert_eq!(typed_site("Example.com"), Ok(Some("example.com".into())));
-    assert_eq!(typed_site("not a site"), Err(()));
-    assert_eq!(
-        delete_question(Span::All, None),
-        "Delete all of your history on the cloud?"
-    );
-    assert_eq!(
-        delete_question(Span::Day, None),
-        "Delete the last 24 hours of history on the cloud?"
-    );
-    assert_eq!(
-        delete_question(Span::All, Some("x.com")),
-        "Delete every visit to x.com on the cloud?"
-    );
-    assert_eq!(
-        delete_question(Span::Week, Some("x.com")),
-        "Delete visits to x.com from the last 7 days on the cloud?"
-    );
-    assert_eq!(deleted_text(1, false), "Deleted 1 visit from the cloud");
-    assert_eq!(
-        deleted_text(1234, false),
-        "Deleted 1,234 visits from the cloud"
-    );
-    assert!(deleted_text(2, true).contains("only the oldest 500,000 were looked through"));
-    assert_eq!(
-        stopped_text(5000),
-        "Stopped after deleting 5,000 visits from the cloud"
-    );
-    assert_eq!(
-        stopped_text(1),
-        "Stopped after deleting 1 visit from the cloud"
-    );
-    assert_eq!(group_digits(0), "0");
-    assert_eq!(group_digits(999), "999");
-    assert_eq!(group_digits(1000), "1,000");
-    assert_eq!(
-        delete_status(true, false, false, None),
-        "That isn't a site — try example.com"
-    );
-    assert_eq!(
-        delete_status(false, true, true, None),
-        "Looking through your history on this device…"
-    );
-    assert_eq!(delete_status(false, true, false, None), "Deleting…");
-    assert_eq!(
-        delete_status(false, false, false, None),
-        "History on this device stays as it is."
-    );
-    assert_eq!(delete_status(false, false, false, Some("Done")), "Done");
-}
-
-#[test]
 fn ago_words() {
     assert_eq!(ago(100.0, 120.0), "just now");
     assert_eq!(ago(200.0, 100.0), "just now");

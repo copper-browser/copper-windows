@@ -22,39 +22,14 @@ use crate::settings::form::{Form, Pill, Tone};
 use copper_core::intelligence::IntelligenceKeys;
 use copper_mcp::intelligence::{self as brain, Effective, Keys, Lane, Tier};
 use copper_shell_core::cloud;
-use serde_json::json;
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::time::Duration;
 
 mod check;
-use check::{is_web_address, key_detail, run_check};
+use brain::check::{Check, is_web_address};
+use check::{key_detail, run_check};
 
 /// Intelligence: model access and Jev.
 pub(super) struct Intelligence;
-
-/// One lane's verdict from the last check.
-#[derive(Clone)]
-struct Verdict {
-    /// `jev` or `router`.
-    lane: &'static str,
-    ok: bool,
-    text: String,
-    /// The key itself was turned away (not the network, not the model).
-    refused: bool,
-}
-
-/// The last check, kept for as long as the setup it asked with holds.
-#[derive(Default)]
-struct Check {
-    running: bool,
-    verdicts: Vec<Verdict>,
-    /// [`whole`] of the setup the verdicts were asked with.
-    asked: Option<u64>,
-    /// [`lane_key`] of each lane that was asked.
-    asked_with: Vec<(&'static str, u64)>,
-}
 
 thread_local! {
     static CHECK: RefCell<Check> = RefCell::default();
@@ -102,50 +77,6 @@ fn edit(shell: &Shell, f: impl FnOnce(&mut IntelligenceKeys)) {
 /// came from. The Claude lane can't be signed in on Windows.
 fn effective(shell: &Shell) -> Effective {
     Effective::new(&brain::read_files(shell.store()), false)
-}
-
-/// One lane's key and address, hashed so no second copy of a key is kept.
-fn lane_key(keys: &Keys, lane: &str) -> u64 {
-    let mut h = DefaultHasher::new();
-    lane.hash(&mut h);
-    match lane {
-        "jev" => (&keys.jev_key, &keys.jev_endpoint).hash(&mut h),
-        _ => (&keys.router_key, &keys.router_url).hash(&mut h),
-    }
-    h.finish()
-}
-
-/// Everything a verdict depends on: both lanes' keys and the model asked.
-fn whole(keys: &Keys) -> u64 {
-    let mut h = DefaultHasher::new();
-    lane_key(keys, "jev").hash(&mut h);
-    lane_key(keys, "router").hash(&mut h);
-    brain::model(keys, None).hash(&mut h);
-    h.finish()
-}
-
-/// The last check's verdict while it still describes this setup.
-fn verdict_line(keys: &Keys) -> Option<String> {
-    CHECK.with(|c| {
-        let c = c.borrow();
-        (!c.verdicts.is_empty() && c.asked == Some(whole(keys))).then(|| {
-            c.verdicts
-                .iter()
-                .map(|v| v.text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-    })
-}
-
-/// Whether the last check saw this lane's key, as it is now, turned away.
-fn refused(keys: &Keys, lane: &str) -> bool {
-    CHECK.with(|c| {
-        let c = c.borrow();
-        let now = lane_key(keys, lane);
-        c.verdicts.iter().any(|v| v.lane == lane && v.refused)
-            && c.asked_with.iter().any(|(l, k)| *l == lane && *k == now)
-    })
 }
 
 impl Page for Intelligence {
@@ -199,7 +130,7 @@ impl Page for Intelligence {
             "routerKey",
             "From your gateway — anything that speaks /v1/chat/completions.",
             eff.router_ready(),
-            refused(&eff.keys, "router"),
+            CHECK.with(|c| c.borrow().refused(&eff.keys, "router")),
         );
         sec.secret(
             "API key",
@@ -264,8 +195,8 @@ impl Page for Intelligence {
             tier.name(),
         )
         .anchor("intelligence.tier");
-        let line = verdict_line(&eff.keys);
-        let all_ok = CHECK.with(|c| c.borrow().verdicts.iter().all(|v| v.ok));
+        let line = CHECK.with(|c| c.borrow().line(&eff.keys));
+        let all_ok = CHECK.with(|c| c.borrow().all_ok());
         sec.pills(
             "Check",
             Some(line.as_deref().unwrap_or(
@@ -332,7 +263,7 @@ impl Page for Intelligence {
                 "Quick decisions for agents, in about a fifth of a second. Needs a key from your TypeSafe account."
             },
             eff.jev_ready(),
-            refused(&eff.keys, "jev"),
+            CHECK.with(|c| c.borrow().refused(&eff.keys, "jev")),
         );
         f.section("Jev")
             .secret(

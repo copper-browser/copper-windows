@@ -662,14 +662,9 @@ fn ask_delete(shell: &Shell) {
                         st.erasing = false;
                         st.looking = false;
                         st.erase_stop = None;
-                        match r {
-                            Ok(o) if o.stopped => {
-                                st.erase_result = Some(model::stopped_text(o.deleted))
-                            }
-                            Ok(o) => st.erase_result = Some(model::deleted_text(o.deleted, o.cut)),
-                            // Stopped before anything went: a result, not a problem (Mac).
-                            Err(f) if f.code == "stopped" => st.erase_result = Some(f.message),
-                            Err(f) => st.erase_problem = Some(f.message),
+                        match model::finished(r) {
+                            Ok(line) => st.erase_result = Some(line),
+                            Err(problem) => st.erase_problem = Some(problem),
                         }
                     });
                     if let Some(s) = w.upgrade() {
