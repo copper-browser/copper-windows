@@ -76,6 +76,12 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Page | Pointer lock granted silently, Esc hint | part | yes | shell-core | L asks every time |
 | Page | Web Inspector with the element picker armed ⇧⌘I | part | part | engine | picker not armed on either |
 | Page | Camera / mic / location / notification prompts remembered per site; Forget choices | yes | yes | shell-core `ask_permission` | shared `permit.rs`; W still its own copy |
+| Page | Camera / mic asks wait their turn, never refused for coming second; a call's mic + camera asked once, one Allow settles every waiting page of that site; Show for a tab you aren't on | part | part | shell-core `permit` | W refuses a second site while one waits (joins one getUserMedia's two asks); L one dialog per ask |
+| Page | Allow kept per site and device; Don't allow never kept (holds until the page reloads, Allow and reload for 8 s); older noes dropped; Permissions API says granted for an allowed site | no | no | shell-core `permit` | both keep a refusal per kind (`capture.{host}\|camera`) |
+| Page | The OS refusing the camera / mic said in the bar (open its settings; Reload once allowed); a blocked camera never costs a call its mic | no | part | platform | W does this for location and notifications only |
+| Page | A call keeps hearing you in a background tab or a covered window (its re-asks answered at once, never parked as hidden); the call on screen takes back a mic another tab paused (Use it here) | no | no | platform | engine-specific; not audited on either port |
+| Page | Share a single tab from getDisplayMedia: Copper's picker (this space's tabs, then other spaces', then A window… / Entire screen…), the tab alone at up to 30 fps, kept painting while you are elsewhere; only the asking frame gets it; no tab audio | no | no | platform | L portal (screen / window), W WebView2's own picker |
+| Page | Sharing *tab* with *site* · Stop at the foot of the window; closing the tab, leaving the call or the page's stop end it (`ended`) | no | no | platform | |
 | Page | Bad certificate: ask once, local hosts trusted | no | part | engine, shell-core | L load just fails |
 | Page | JS dialogs, HTTP auth, file chooser, crashed-tab page | yes | yes | engine | |
 | Page | Print ⌘P | yes | yes | platform | L print dialog, W WebView2's own |
