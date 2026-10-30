@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "copper-botpass"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "copper-cloud",
  "copper-core",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "copper-calendar"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "copper-core",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "copper-cloud"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "base64 0.22.1",
  "copper-core",
@@ -314,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "copper-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "base64 0.22.1",
  "directories",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "copper-creds"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "hmac",
  "oo7",
@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "copper-engine"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "directories",
  "futures-channel",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "copper-engine-webview2"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64 0.22.1",
  "copper-engine",
@@ -379,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "copper-import"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "aes",
  "cbc",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "copper-mcp"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -422,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "copper-pagejs"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "copper-setup"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "windows",
@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "copper-shell-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "base64 0.22.1",
  "copper-botpass",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "copper-shield"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "copper-core",
  "copper-engine",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "copper-win"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "copper-cloud",
  "copper-core",
@@ -507,14 +507,14 @@ dependencies = [
 
 [[package]]
 name = "copper-win-rt"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "windows",
 ]
 
 [[package]]
 name = "copper-win-ui"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "copper-win-rt",
  "unicode-segmentation",
