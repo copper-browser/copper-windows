@@ -6,7 +6,7 @@ repo) have it. It is the to-do list for both ports: when a Mac change lands,
 add or update its row here (the Mac repo's CONTRIBUTING.md asks for that).
 
 **Audited against** `copper-browser/copper` `fork` @ **34649ab** (2026-10-29);
-statuses as of copper-linux 0.6.0, copper-windows 0.3.0 (2026-10-30). Update the commit when you re-audit.
+statuses as of copper-linux 0.6.1, copper-windows 0.3.0 (2026-10-30). Update the commit when you re-audit.
 
 Status: **yes** · **part** (partial, note says what's missing) · **no** ·
 **mac** (can't exist off the Mac; note says why). *Shared* names the
@@ -16,7 +16,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Area | Feature | Linux | Windows | Shared | Note |
 |---|---|---|---|---|---|
 | Tabs | Tabs in a column / across the top, Ctrl+Shift+S toggles | yes | yes | shell-core | |
-| Tabs | Hide the column (⌘S) + reveal on edge hover | no | part | platform | W Ctrl+S folds, no hover reveal |
+| Tabs | Hide the column (⌘S) + reveal on edge hover | part | part | platform | both fold on Ctrl+S, no hover reveal |
 | Tabs | Resize the column by dragging its edge | no | no | core `sidebar_width` | |
 | Tabs | Live tab pill becomes the address field (top row) | no | yes | platform | |
 | Tabs | Pinned tabs (favourites grid), pin/unpin, Change Letter | yes | yes | core | L has no Change Letter UI |
@@ -34,14 +34,14 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Tabs | ⌘1–9 nth tab, ⌃Tab / Ctrl+PgUp/PgDn | yes | yes | shell-core | |
 | Tabs | ⌃Tab in most-recent order (setting) + hold strip | part | part | shell-core `recent`, `switch_tab` | order yes on both, no hold strip |
 | Tabs | Reopen closed ⌘⇧T (restores place + folder) | yes | yes | core | |
-| Tabs | Recently Closed list | no | part | core `closed_tabs` | W palette section only |
-| Tabs | Clear tabs ⌘⇧K + Undo; "↓ Clear" seam button | part | yes | shell-core `clear` | L no seam button |
+| Tabs | Recently Closed list | part | part | core `closed_tabs` | Ctrl+T / palette section on both |
+| Tabs | Clear tabs ⌘⇧K + Undo; "↓ Clear" seam button | yes | yes | shell-core `clear` | L no seam button |
 | Tabs | Tab sleep (idle / memory), site marks, audio badge | yes | yes | shell-core `sleep` | W also freezes hidden WebView2s |
 | Tabs | Hot-tab CPU reading, sleep hot tabs sooner | no | no | platform sampling | |
 | Tabs | Wake cover (last picture while a page rebuilds) | no | yes | shell-core `cover` | L never calls `on_cover` |
 | Tabs | Split view ⌘⇧D (two panes) | no | no | shell-core | |
 | Tabs | Multiple windows ⌘N, per-window space | no | no | shell-core | single window on both |
-| Tabs | Full screen | no | yes | platform | W F11 |
+| Tabs | Full screen | yes | yes | platform | L F11, W F11 |
 | Tabs | Drop a link / text on the column opens a tab | no | no | platform | |
 | Spaces | Spaces: header, chips at the foot, click/drag reorder, + new | yes | yes | core, shell-core | |
 | Spaces | Space menu: New Tab in, Move Tab Here, Move L/R, Colour, Profile, Delete | part | yes | shell-core | L lacks New Tab in / Move Here / Colour / Profile |
@@ -54,7 +54,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Spaces | Settings › Spaces page with live preview | part | part | platform | L editor dialog, W no preview |
 | Spaces | Switch slide / ground blend; swipe between spaces | no | part | platform | W slide only |
 | Spaces | Warm other spaces' pages after launch | no | no | shell-core | |
-| Spaces | ⌃⌥←/→ prev/next; ⌃1–9 nth space; ⌃N new space | part | yes | shell-core | L has no nth / new-space keys |
+| Spaces | ⌃⌥←/→ prev/next; ⌃1–9 nth space; ⌃N new space | yes | yes | shell-core | Alt+1–9 / Alt+N on both |
 | Field | One field: Open Tabs → History → Bookmarks → Search, inline completion, Tab between sections | yes | yes | shell-core `palette/complete` | W has its own `rank.rs`; unify |
 | Field | ⌘T launcher card (Recent Tabs + Recently Closed) | part | yes | shell-core | L no Closed section |
 | Field | Google search suggestions while typing | no | no | shell-core | |
@@ -71,17 +71,17 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Page | Ad blocker, off for this site | yes | yes | shield, shell-core | |
 | Page | Private tabs ⇧⌘N | yes | yes | shell-core `private` | |
 | Page | Float video (PiP) ⇧⌘P | no | no | platform | WebKitGTK has no PiP |
-| Page | Stop sound in tab ⇧⌘M | no | yes | engine `set_muted` | L engine has mute, no action |
+| Page | Stop sound in tab ⇧⌘M | yes | yes | engine `set_muted` | L engine has mute, no action |
 | Page | Copper's image context menu | part | yes | platform | L WebKitGTK stock menu |
 | Page | Pointer lock granted silently, Esc hint | part | yes | shell-core | L asks every time |
 | Page | Web Inspector with the element picker armed ⇧⌘I | part | part | engine | picker not armed on either |
-| Page | Camera / mic / location / notification prompts remembered per site; Forget choices | part | yes | shell-core `ask_permission` | L asks every time |
+| Page | Camera / mic / location / notification prompts remembered per site; Forget choices | yes | yes | shell-core `ask_permission` | shared `permit.rs`; W still its own copy |
 | Page | Bad certificate: ask once, local hosts trusted | no | part | engine, shell-core | L load just fails |
 | Page | JS dialogs, HTTP auth, file chooser, crashed-tab page | yes | yes | engine | |
-| Page | Print ⌘P | part | yes | platform | L only page's own `window.print()` |
+| Page | Print ⌘P | yes | yes | platform | L print dialog, W WebView2's own |
 | Page | Zoom ⌘+/−/0; zoom remembered per site | yes | yes | shell-core `zoom` | L per-site memory missing; W per site from shell-core (`pages.rs`) |
 | Page | Light / Dark / System | yes | yes | core | |
-| App | Announcement toast, length-scaled timing | part | yes | platform | L fixed 2 s |
+| App | Announcement toast, length-scaled timing | yes | yes | platform | shared `view::toast_time` |
 | App | Send Feedback (GitHub issue) | no | yes | platform | |
 | App | Update check (6 h + Check now) | yes | yes | shell-core `updates` | |
 | App | In-app update download + install + relaunch; update pill in the column | part | part | shell-core + installer | both notify + link only |
@@ -175,7 +175,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Voice | Dictation into the composer, ⌃⇧D, Listen live transcript, model download | no | no | platform STT + copper-mcp `Transcript` | needs whisper.cpp / ONNX |
 | Voice | Phonon-2 Core ML runner | mac | mac | — | Core ML / Neural Engine |
 | Canvas | Canvas page `copper://canvas/<id>`, Personal, local canvases, Yjs store, live room, status line, theme | yes | yes | shell-core `canvas`, copper-cloud `canvas` | same canvas-app commit c425198 |
-| Canvas | New Canvas ⌃⇧E; Personal Canvas ⌘⇧O | part | yes | shell-core | L no ⌘⇧O key; L New makes a shared canvas when signed in |
+| Canvas | New Canvas ⌃⇧E; Personal Canvas ⌘⇧O | part | yes | shell-core | L New makes a shared canvas when signed in |
 | Canvas | ⌘K: Open Canvas · name, New Shared, Share, Join | no | yes | W `rank::canvas_offers` → shell-core | |
 | Canvas | Canvas door at the sidebar foot (Personal / Invitations / My / Shared), dot, row menu | no | yes | W `canvas/door.rs`, `copy.rs` → shell-core | biggest L gap |
 | Canvas | Rename / Delete / Leave (door + tab menu) | no | yes | W `canvas/ops.rs` → shell-core | |
@@ -204,7 +204,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Settings | Extensions: Chrome extensions manager | mac | no | — | L WebKitGTK has no WebExtensions; W WebView2 can |
 | Settings | Agents: ⌘E context + tool rounds; agent apps; other MCP servers; terminal setup | part | part | copper-mcp | W has context + rounds |
 | Settings | Passwords: fill codes, fill addresses/cards, offer passkeys, CSV | part | part | shell-core | passkeys only |
-| Settings | Privacy: block, block on this site, forget camera/mic, clear history / cookies / cache | part | part | shield, core | forget choices missing |
+| Settings | Privacy: block, block on this site, forget camera/mic, clear history / cookies / cache | yes | part | shield, core | forget choices missing |
 | Settings | About: identity, Send Feedback, Diagnostics, shortcuts, Updates | part | part | platform | L check + link only |
 | Move in | One sheet: choose → working → summary; keeps running when closed | yes | part | copper-import | |
 | Move in | Chrome, Edge, Brave, Chromium, Vivaldi | part | yes | copper-import `browsers` | L no Vivaldi row |
