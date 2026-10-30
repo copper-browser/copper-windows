@@ -7,7 +7,7 @@
 //! pane ············ the slot: full stage height, `agent.paneWidth` wide
 //! ├─ body
 //! │  ├─ placeholder · with nothing to show: a head, then "No agent here
-//! │  │                yet" and the way to Settings › Addons
+//! │  │                yet" and the way to Settings › Extensions
 //! │  └─ slot ······ the page (made on first show, kept while hidden): the
 //! │                 cloud's addon, else Copper's own agent (`addons::builtin`)
 //! └─ grip ········· the leading 6 px: drag left to widen
@@ -39,7 +39,7 @@ pub const NAME: &str = "Agent sidebar";
 /// The placeholder's words (CONTRACT §1).
 pub const EMPTY_TITLE: &str = "No agent here yet";
 const EMPTY_DETAIL: &str = "Addons from your Copper Cloud can add one here.";
-pub const LINK: &str = "Settings › Addons";
+pub const LINK: &str = "Settings › Extensions";
 /// The head over the placeholder (Mac `AgentPane` head: 42 high, 16 / 8).
 const HEAD: f32 = 42.0;
 const DOOR: f32 = 26.0;
@@ -197,7 +197,7 @@ pub fn build(ui: &mut Ui, well: NodeId) {
             .align(Align::Center)
             .cursor(Cursor::Hand)
             .button(LINK)
-            .tooltip("Open Settings › Addons"),
+            .tooltip("Open Settings › Extensions"),
     );
     ui.tree.add(
         link,

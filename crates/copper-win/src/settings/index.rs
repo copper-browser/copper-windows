@@ -7,23 +7,13 @@ use super::form::Form;
 use super::search::Entry;
 
 /// The rail's groups and their pages, in order (`SettingsIndex.swift`
-/// 32–60, with the Windows rail's Spaces, Addons, Agents and Cloud). A
-/// registered page this table doesn't name goes at the end of `Copper`.
+/// `Group`, `railOrder`: ten pages since Copper#115). A registered page
+/// this table doesn't name goes at the end of `Copper`.
 pub const GROUPS: &[(&str, &[&str])] = &[
-    (
-        "Browsing",
-        &[
-            "general",
-            "tabs",
-            "spaces",
-            "downloads",
-            "extensions",
-            "addons",
-        ],
-    ),
-    ("AI & agents", &["intelligence", "agents", "voice"]),
-    ("Data & privacy", &["passwords", "privacy", "cloud"]),
-    ("Copper", &["labs", "updates", "about"]),
+    ("Browsing", &["general", "tabs", "spaces", "extensions"]),
+    ("AI & agents", &["intelligence", "agents"]),
+    ("Data & privacy", &["passwords", "privacy"]),
+    ("Copper", &["cloud", "about"]),
 ];
 
 /// The page Settings opens at the first time.
@@ -59,7 +49,14 @@ pub fn order<'a>(pages: &[&'a str]) -> Vec<&'a str> {
 /// A page's other words (`Page.keywords`).
 pub fn page_keywords(id: &str) -> &'static [&'static str] {
     match id {
-        "general" => &["preferences", "basics", "options"],
+        "general" => &[
+            "preferences",
+            "basics",
+            "options",
+            "downloads",
+            "files",
+            "download folder",
+        ],
         "tabs" => &["tab bar", "vertical tabs", "sidebar"],
         "spaces" => &["workspaces", "profiles", "space look"],
         "intelligence" => &[
@@ -71,9 +68,6 @@ pub fn page_keywords(id: &str) -> &'static [&'static str] {
             "openai",
             "gpt",
             "keys",
-        ],
-        "agents" => &["mcp", "proxy", "bot", "bots", "automation", "agent"],
-        "voice" => &[
             "voice",
             "dictation",
             "dictate",
@@ -85,9 +79,18 @@ pub fn page_keywords(id: &str) -> &'static [&'static str] {
             "mic",
             "talk",
         ],
+        "agents" => &["mcp", "proxy", "bot", "bots", "automation", "agent"],
         "cloud" => &["sync", "account", "canvas", "devices", "backup"],
-        "updates" => &["update", "upgrade", "version", "release"],
-        "extensions" => &["add-ons", "plugins", "chrome web store"],
+        "extensions" => &[
+            "add-ons",
+            "addons",
+            "addon",
+            "plugins",
+            "chrome web store",
+            "agent sidebar",
+            "sidebar app",
+            "web app",
+        ],
         "passwords" => &[
             "pw",
             "pwd",
@@ -97,19 +100,17 @@ pub fn page_keywords(id: &str) -> &'static [&'static str] {
             "credentials",
             "password manager",
         ],
-        "downloads" => &["files", "download folder"],
         "privacy" => &["security", "tracking", "data", "clear"],
-        "labs" => &[
-            "experiments",
-            "experimental",
-            "flights",
-            "beta",
-            "beta features",
-            "preview",
-            "previews",
+        "about" => &[
+            "version",
+            "credits",
+            "help",
+            "shortcuts",
+            "update",
+            "updates",
+            "upgrade",
+            "release",
         ],
-        "addons" => &["addon", "add-on", "agent sidebar", "sidebar app", "web app"],
-        "about" => &["version", "credits", "help", "shortcuts"],
         _ => &[],
     }
 }
@@ -176,14 +177,14 @@ mod tests {
             "general",
             "privacy",
             "passwords",
-            "updates",
+            "cloud",
             "custom",
             "about",
         ];
         let r = rail(&pages);
         assert_eq!(r[0], ("Browsing", vec!["general"]));
         assert_eq!(r[1], ("Data & privacy", vec!["passwords", "privacy"]));
-        assert_eq!(r[2], ("Copper", vec!["updates", "about", "custom"]));
+        assert_eq!(r[2], ("Copper", vec!["cloud", "about", "custom"]));
         assert_eq!(r.len(), 3);
         assert_eq!(
             order(&pages),
@@ -191,7 +192,7 @@ mod tests {
                 "general",
                 "passwords",
                 "privacy",
-                "updates",
+                "cloud",
                 "about",
                 "custom"
             ]

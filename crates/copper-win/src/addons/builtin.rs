@@ -8,7 +8,7 @@
 //! * **What fills the slot** ([`slot_active`]): the cloud's addon (or the
 //!   developer folder) when there is one; else this. A staged update
 //!   doesn't change that: the agent stays until the person installs it
-//!   (Settings › Updates, the toast).
+//!   (Settings › About, the toast).
 //! * **Reserved.** The id is `copper.agent`; what marks it is [`SHA`],
 //!   which no served bundle can carry (theirs are 64 hex digits), so a
 //!   cloud addon that takes the id is still a cloud addon and gets none of
@@ -60,7 +60,7 @@ const FILES: &[(&str, &[u8])] = &[
 ];
 
 /// The Settings pages the page may open.
-const SETTINGS_PAGES: &[&str] = &["intelligence", "agents", "addons"];
+const SETTINGS_PAGES: &[&str] = &["intelligence", "agents", "extensions"];
 
 thread_local! {
     /// A self-test's say over [`enabled`].
@@ -276,7 +276,10 @@ mod win {
             }
             "settings" => {
                 let page = msg.get("page").and_then(Value::as_str).unwrap_or_default();
-                if SETTINGS_PAGES.contains(&page) {
+                // Addons became a section of Extensions (Copper#115).
+                if page == "addons" {
+                    crate::addons::open_settings(shell);
+                } else if SETTINGS_PAGES.contains(&page) {
                     crate::settings::open(shell, page);
                 }
             }

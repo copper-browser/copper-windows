@@ -36,7 +36,7 @@ impl Settings {
             let mut page = index::page_entry(p.id(), p.title(), p.blurb());
             page.keywords = p.keywords();
             entries.push(page);
-            entries.extend(p.entries(shell));
+            entries.extend(crate::settings::fold::indexing(|| p.entries(shell)));
         }
         let words: Vec<(&'static str, String)> = pages
             .iter()
@@ -102,6 +102,7 @@ impl Settings {
         let Some(hit) = hit else { return };
         self.finder.borrow_mut().showing = false;
         self.switch(shell, hit.entry.page);
+        crate::settings::fold::reveal(&hit.entry.anchor);
         *self.landing.borrow_mut() = Some(Landing {
             anchor: hit.entry.anchor.clone(),
             flash: !hit.entry.is_page,

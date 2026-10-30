@@ -16,7 +16,7 @@
 //!   the page changes, then the window (`PrintWindow`) and the page by
 //!   itself (`CapturePreview`) are taken, with and without a nudge.
 //! * `pending` — a cloud addon staged but not installed: the slot keeps
-//!   showing Copper's agent (Settings › Updates offers the Install).
+//!   showing Copper's agent (Settings › About offers the Install).
 //! * `placeholder` — the built-in off: the placeholder, light and dark,
 //!   after Settings was open, and after hiding and showing again.
 //! * `agent` — the built-in on, the real `copper.agent`: the slot shows
@@ -378,7 +378,7 @@ async fn pending(r: &Run) {
     if page_ready(r).await {
         shot(r, "ui-agent-with-pending-addon").await;
     }
-    crate::settings::open(&r.shell, "updates");
+    crate::settings::open(&r.shell, "about");
     r.sleep(600).await;
     r.shot("ui-agent-pending-updates").await;
     r.shell.view().panels().hide(&r.shell);

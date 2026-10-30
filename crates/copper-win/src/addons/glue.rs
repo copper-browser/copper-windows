@@ -68,7 +68,7 @@ impl Active {
     }
 }
 
-/// One addon for Settings › Addons.
+/// One addon for Settings › Extensions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
     pub id: String,
@@ -477,7 +477,7 @@ impl BridgeHost for CoreHost {
 
 /// The self-test's stand-in for the cloud: pack `files` (a bundle's
 /// files, `manifest.json` among them) in the served format, then verify
-/// and stage it exactly as a cloud answer would be (so Settings › Updates
+/// and stage it exactly as a cloud answer would be (so Settings › About
 /// shows it and Install installs it).
 pub fn selftest_stage(refs: &[(&str, &[u8])]) -> Result<(), String> {
     use copper_core::addons::testkit;

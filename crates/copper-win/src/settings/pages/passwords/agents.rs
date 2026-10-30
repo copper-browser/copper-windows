@@ -95,23 +95,25 @@ pub fn draw(shell: &Shell, f: &mut Form) {
     let sec = f.section("Agent access").card_anchor("passwords.agents");
     sec.switch(
         "Share every saved account with agents",
-        Some("Agents can use saved sign-ins in Copper without receiving the password"),
+        Some(if share_all {
+            "Agents can use every saved sign-in in Copper without receiving the password"
+        } else {
+            "Off, agents use only the accounts you allow, and never receive the password"
+        }),
         "agent.all",
         share_all,
     )
     .anchor("passwords.agents");
+    // Sharing everything needs no list, and an empty kind (no identities,
+    // no cards) draws nothing (Copper#117).
+    if share_all || (accounts.is_empty() && identities.is_empty() && cards.is_empty()) {
+        return;
+    }
     sec.field("", None, "agent.hunt", &hunt, "Search saved accounts")
         .on_submit("agent.hunt", None);
     let found: Vec<&Credential> = accounts.iter().filter(|c| matches(c, &needle)).collect();
     if found.is_empty() {
-        sec.note(
-            "",
-            Some(if accounts.is_empty() {
-                "Nothing kept yet — sign in somewhere or connect Bitwarden or 1Password."
-            } else {
-                "Nothing matches."
-            }),
-        );
+        sec.note("", Some("No saved account matches."));
     }
     for c in found.iter().take(SHOWN) {
         let denied = c.agent_hint == AgentHint::Deny;
@@ -135,24 +137,8 @@ pub fn draw(shell: &Shell, f: &mut Form) {
             )),
         );
     }
-    items(
-        shell,
-        sec,
-        "Identities",
-        "No identities kept yet.",
-        &identities,
-        &needle,
-        share_all,
-    );
-    items(
-        shell,
-        sec,
-        "Cards",
-        "No cards kept yet.",
-        &cards,
-        &needle,
-        share_all,
-    );
+    items(shell, sec, "Identities", &identities, &needle, share_all);
+    items(shell, sec, "Cards", &cards, &needle, share_all);
 }
 
 /// One account, identity or card with its switch.
@@ -167,13 +153,15 @@ fn items(
     shell: &Shell,
     sec: &mut Section,
     heading: &str,
-    empty: &str,
     list: &[Item],
     needle: &str,
     share_all: bool,
 ) {
     let found: Vec<&Item> = list.iter().filter(|i| item_matches(i, needle)).collect();
-    sec.note(heading, found.is_empty().then_some(empty))
+    if found.is_empty() {
+        return;
+    }
+    sec.note(heading, None)
         .anchor(&format!("row:agent:{heading}"));
     for i in found {
         let on = forms::agent_allowed_id(shell, &i.stable);

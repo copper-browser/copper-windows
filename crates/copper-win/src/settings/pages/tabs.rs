@@ -66,17 +66,20 @@ impl Page for Tabs {
             "The next tab in the row — most recent order is not yet on Windows",
         )
         .anchor("tabs.switching");
-        not_yet(
-            sec,
-            "Swipe between spaces",
-            "Not yet on Windows — Ctrl+Alt+← and → move between spaces",
-        )
-        .anchor("tabs.swipe");
+        // Only with the sidebar: the swipe lives over its column (Copper#117).
+        if side {
+            not_yet(
+                sec,
+                "Swipe between spaces",
+                "Not yet on Windows — Ctrl+Alt+← and → move between spaces",
+            )
+            .anchor("tabs.swipe");
+        }
 
         let sec = f.section("Tabs you leave");
         sec.switch(
             "Sleep tabs you aren't using",
-            Some("Only when more pages are open than this PC keeps easily, or memory runs short: the ones you left longest go first, and come back where you left them. Pinned tabs, sound, calls and anything typed stay awake."),
+            Some("When many pages are open or memory runs short, the tabs you left longest sleep and come back where you were. Pinned tabs, sound, calls and anything typed stay awake."),
             "sleep",
             sleeps,
         )

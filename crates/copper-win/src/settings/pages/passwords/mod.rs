@@ -107,11 +107,12 @@ impl Passwords {
                 .tone(Tone::Error);
             }
             Some(Ok(n)) => {
+                // Bringing yours in is in the same window (Copper#117).
                 let detail = if n == 0 {
-                    "In Windows Credential Manager — none kept yet".to_string()
+                    "In Windows Credential Manager — none kept yet; bring yours in from Chrome, Edge, Brave, Vivaldi or Arc there".to_string()
                 } else {
                     format!(
-                        "{} in Windows Credential Manager",
+                        "{} in Windows Credential Manager — bring more in from another browser there",
                         crate::settings::count(n, "password", "passwords")
                     )
                 };
@@ -120,7 +121,7 @@ impl Passwords {
             None => {
                 sec.button(
                     "Your passwords",
-                    Some("In Windows Credential Manager"),
+                    Some("In Windows Credential Manager — bring yours in from Chrome, Edge, Brave, Vivaldi or Arc there"),
                     "open",
                     "Open…",
                     false,
@@ -188,14 +189,6 @@ impl Passwords {
     fn transfer(&self, f: &mut Form) {
         let kept = live::with(|l| matches!(l.kept, Some(Ok(n)) if n > 0));
         let sec = f.section("Import and export");
-        sec.button(
-            "Bring yours in",
-            Some("From Chrome, Edge, Brave, Vivaldi or Arc on this PC — passwords come through each browser's own export, and nothing leaves this PC"),
-            "movein",
-            "Import…",
-            false,
-        )
-        .anchor("passwords.import");
         sec.button(
             "From a CSV file",
             Some("A passwords export from Chrome, Edge, Firefox, Bitwarden, 1Password or another password manager"),
@@ -314,7 +307,6 @@ impl Page for Passwords {
             "fill" => shell.update_settings(|s| s.set(keys::PASSWORDS_FILL, on(value))),
             "everything" => shell.update_settings(|s| s.set(keys::AUTOFILL_EVERYTHING, on(value))),
             "open" => crate::settings::manager::open(shell),
-            "movein" => crate::settings::movein::open(shell),
             "keychain.retry" => live::look(shell),
             "import" => crate::settings::csv::import(shell, said),
             "export" => crate::settings::csv::export(shell, said),

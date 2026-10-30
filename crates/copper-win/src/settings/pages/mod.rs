@@ -3,7 +3,11 @@
 //! (`settings::index::GROUPS`), so the order here doesn't matter.
 //!
 //! One file per page so each can be owned and changed on its own. A page
-//! another worker adds is one `mod` line and one `vec!` line here.
+//! another worker adds is one `mod` line and one `vec!` line here. Ten
+//! pages, as the Mac's since Copper#115: Downloads is a section of General,
+//! Addons of Extensions, Updates of About (their files draw the section
+//! and hear its actions); Labs is gone, and Voice is a line on
+//! Intelligence.
 //!
 //! What Copper for Windows can't do yet is said, faded, with no control
 //! ([`not_yet`]) — never a switch that does nothing.
@@ -21,14 +25,12 @@ mod downloads;
 mod extensions;
 mod general;
 mod intelligence;
-mod labs;
 mod passwords;
 mod privacy;
 mod space_page;
 mod spaces;
 mod tabs;
 mod updates;
-mod voice;
 
 /// Every page.
 pub fn all() -> Vec<Rc<dyn Page>> {
@@ -36,17 +38,12 @@ pub fn all() -> Vec<Rc<dyn Page>> {
         Rc::new(general::General),
         Rc::new(tabs::Tabs),
         Rc::new(spaces::Spaces),
-        Rc::new(downloads::Downloads),
         Rc::new(extensions::Extensions),
         Rc::new(intelligence::Intelligence),
-        Rc::new(voice::Voice),
         Rc::new(passwords::Passwords),
         Rc::new(privacy::Privacy),
         Rc::new(cloud::Cloud),
         Rc::new(agents::Agents),
-        Rc::new(labs::Labs),
-        Rc::new(updates::Updates),
-        Rc::new(addons::Addons),
         Rc::new(about::About),
     ]
 }

@@ -1,17 +1,12 @@
-//! Updates (`SettingsFork.swift` 339–454): which Copper this is, and the
-//! next one. The check is copper-shell-core's `updates` lane (every six
+//! Settings › About › Updates (`SettingsFork.swift` `UpdatesPage`; a page
+//! of its own until Copper#115): which Copper this is, and the next one. The check is copper-shell-core's `updates` lane (every six
 //! hours, and on Check now); Copper for Windows doesn't download or swap
 //! itself, so a newer Copper is offered as the Windows installer on the
 //! releases page — never as "ready" or "Update".
 
-use crate::chrome::glyph;
 use crate::platform::{Shell, Win};
-use crate::settings::Page;
 use crate::settings::form::{Form, Pill};
 use copper_shell_core::updates;
-
-/// Updates: which Copper you have, and the next one.
-pub(super) struct Updates;
 
 /// `2026-10-12T22:01:03Z` → `Oct 12, 2026` (the Mac's abbreviated date);
 /// anything else as it came.
@@ -67,44 +62,30 @@ pub(super) fn latest_line(st: &updates::Status, newer: Option<&str>) -> String {
     "Up to date".into()
 }
 
-impl Page for Updates {
-    fn id(&self) -> &'static str {
-        "updates"
-    }
-    fn title(&self) -> &'static str {
-        "Updates"
-    }
-    fn blurb(&self) -> &'static str {
-        "Which Copper you have, and getting the next one."
-    }
-    fn glyph(&self) -> char {
-        glyph::UPDATE
-    }
-
-    fn draw(&self, _shell: &Shell) -> Form {
-        let st = updates::status::<Win>();
-        let newer = updates::available::<Win>();
-        let mut f = Form::default();
-        let sec = f.section("This Copper");
-        sec.pills(
-            &format!("You have {}", updates::version()),
-            Some(&latest_line(&st, newer.as_deref())),
-            vec![Pill {
-                action: "check".into(),
-                label: if st.checking {
-                    "Checking…"
-                } else {
-                    "Check now"
-                }
-                .into(),
-                filled: false,
-                enabled: !st.checking,
-            }],
-        )
-        .anchor("updates.check")
-        .keywords(&["version", "check for updates"]);
-        if let Some(v) = &newer {
-            sec.button(
+/// The Updates section, and addons waiting for theirs, on `f`.
+pub(super) fn section(f: &mut Form) {
+    let st = updates::status::<Win>();
+    let newer = updates::available::<Win>();
+    let sec = f.section("Updates");
+    sec.pills(
+        &format!("You have {}", updates::version()),
+        Some(&latest_line(&st, newer.as_deref())),
+        vec![Pill {
+            action: "check".into(),
+            label: if st.checking {
+                "Checking…"
+            } else {
+                "Check now"
+            }
+            .into(),
+            filled: false,
+            enabled: !st.checking,
+        }],
+    )
+    .anchor("updates.check")
+    .keywords(&["version", "check for updates"]);
+    if let Some(v) = &newer {
+        sec.button(
                 &format!("Copper {v} is out"),
                 Some("Download the Windows installer from Copper's releases page and run it — your tabs and settings stay"),
                 "download",
@@ -112,37 +93,37 @@ impl Page for Updates {
                 true,
             )
             .anchor("updates.install");
-            if let Some(notes) = st
-                .latest
-                .as_ref()
-                .and_then(|l| l.notes.as_deref())
-                .filter(|n| !n.trim().is_empty())
-            {
-                sec.note(&format!("What’s new in {v}"), Some(notes))
-                    .anchor("updates.notes");
-            }
+        if let Some(notes) = st
+            .latest
+            .as_ref()
+            .and_then(|l| l.notes.as_deref())
+            .filter(|n| !n.trim().is_empty())
+        {
+            sec.note(&format!("What’s new in {v}"), Some(notes))
+                .anchor("updates.notes");
         }
-        crate::addons::updates_section(&mut f);
-        let mut note = format!("Updates come from {}", feed_host());
-        if let Some(when) = st.checked {
-            note += &format!(" · last checked {}", ago(when));
-        }
-        f.section("").uncarded().footnote(&note);
-        f
     }
+    let mut note = format!("Updates come from {}", feed_host());
+    if let Some(when) = st.checked {
+        note += &format!(" · last checked {}", ago(when));
+    }
+    crate::addons::updates_section(f);
+    f.section("").uncarded().footnote(&note);
+}
 
-    fn act(&self, shell: &Shell, action: &str, _value: &str) {
-        match action {
-            a if a.starts_with("addon-") => crate::addons::updates_act(shell, a),
-            "check" => updates::check::<Win>(shell, true),
-            "download" => {
-                if let Err(e) = crate::sys::shell::open(&updates::release_page::<Win>()) {
-                    tracing::warn!("release page: {e}");
-                }
+/// A control in the section was used; `false` if `action` isn't one.
+pub(super) fn act(shell: &Shell, action: &str) -> bool {
+    match action {
+        a if a.starts_with("addon-") => crate::addons::updates_act(shell, a),
+        "check" => updates::check::<Win>(shell, true),
+        "download" => {
+            if let Err(e) = crate::sys::shell::open(&updates::release_page::<Win>()) {
+                tracing::warn!("release page: {e}");
             }
-            _ => {}
         }
+        _ => return false,
     }
+    true
 }
 
 #[cfg(test)]

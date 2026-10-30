@@ -141,7 +141,7 @@ impl WinView {
 
     /// Ask where to save each download, or not, as Settings says
     /// (`downloads.ask`); the Save As dialog belongs to this window.
-    /// Settings › Downloads calls this when the switch changes.
+    /// Settings › General › Downloads calls this when the switch changes.
     pub fn apply_download_ask(&self, shell: &Shell) {
         let ask = shell.settings().downloads_ask();
         shell

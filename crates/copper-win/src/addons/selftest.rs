@@ -7,7 +7,7 @@
 //!
 //! 1. Nothing installed: Ctrl+E shows Copper's placeholder — light, dark.
 //! 2. The hello bundle is packed in the served format, verified and staged:
-//!    Settings › Updates says "Update available"; Install puts it in the
+//!    Settings › About says "Update available"; Install puts it in the
 //!    slot without a relaunch.
 //! 3. Through the page's own `window.copper`: `info` (`platform:
 //!    "windows"`), `settings`, `storage.*`, `fetch` to an unlisted host
@@ -713,9 +713,9 @@ async fn run(r: &Run) {
             .is_some_and(|p| p.id == "example.hello" && p.version == "1.0.0"),
         &format!("pending update is listed ({pending:?})"),
     );
-    crate::settings::open(shell, "updates");
+    crate::settings::open(shell, "about");
     r.shot("win-update-available").await;
-    crate::settings::open(shell, "addons");
+    crate::settings::open(shell, "extensions");
     r.shot("win-settings-addons-pending").await;
     super::updates::install(shell);
     let installed = r
@@ -1034,7 +1034,7 @@ async fn run(r: &Run) {
         kept.as_ref().is_ok_and(|v| v == &json!(true)),
         "the page was kept while hidden (no reload)",
     );
-    crate::settings::open(shell, "addons");
+    crate::settings::open(shell, "extensions");
     r.shot("win-settings-addons").await;
     r.look(Look::Dark).await;
     r.shot("win-settings-addons-dark").await;

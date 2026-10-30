@@ -6,6 +6,10 @@
 //! icon tiles (`icons`/`tile`, 334–399), the colour wells, its place in
 //! the row and Delete. Every change lands as it is made.
 //!
+//! The icon tiles and colour wells fold behind Customize… (Copper#118,
+//! `SpacePage.customizing`): a search for either opens the fold
+//! ([`crate::settings::fold`], held by [`CUSTOMIZE`]).
+//!
 //! Not drawn: the live column preview and the Look tabs (gradient,
 //! picture, scene) with their Adjust sliders — a space on Windows wears
 //! one named colour (`SpaceColour`), which the wells pick.
@@ -38,11 +42,16 @@ const WELL_TARGET: f32 = 30.0;
 /// The resting chips' and tiles' wash (`Palette.wash.opacity(0.7)`).
 const WASH: f32 = 0.7;
 
+/// The fold the icon tiles and colour wells are in.
+pub(super) const CUSTOMIZE: &str = "spaces.customize";
+
 /// What a click on the page does.
 #[derive(Clone, Debug)]
 enum Act {
     Pick(String),
     New,
+    /// Customize… / Done: the icon and colour fold.
+    Customize,
     Icon(Option<String>),
     Colour(SpaceColour),
     /// The profile popup: its menu (`palette::spaces::profile_menu`).
@@ -75,6 +84,8 @@ struct Snap {
     profiles: Vec<String>,
     /// New Profile… was chosen for the space shown: its name is asked.
     naming: bool,
+    /// The icon and colour fold is open.
+    customizing: bool,
     dark: bool,
     /// The page column's width (DIPs) the grid is laid out for.
     room: f32,
@@ -158,6 +169,7 @@ fn snap(shell: &Shell) -> Snap {
         all,
         tabs,
         naming,
+        customizing: crate::settings::fold::is_open(CUSTOMIZE),
         profiles,
         dark: shell.is_dark(),
         room: 0.0,
@@ -197,6 +209,7 @@ pub(super) fn click(shell: &Shell, id: NodeId) -> bool {
     match act {
         Act::Pick(id) => spaces::pick(&id),
         Act::New => spaces::new_space(shell),
+        Act::Customize => crate::settings::fold::toggle(CUSTOMIZE),
         Act::Icon(icon) => shell.set_space_icon(&editing, icon.as_deref()),
         Act::Colour(c) => shell.set_space_colour(&editing, c),
         Act::Profile => {
@@ -590,8 +603,25 @@ fn page(ui: &mut Ui, parent: NodeId, s: &Snap, sp: &SpaceSnap, ink: &Inks, d: &m
     );
 
     let cards = ui.tree.add(parent, Node::column().gap(12.0));
-    icons(ui, cards, s, sp, ink, d);
-    colours(ui, cards, sp, ink, d);
+    let card = controls::card(ui, cards, ink);
+    let l = controls::line(
+        ui,
+        card,
+        "Icon and colour",
+        Some("The glyph on its chip and the colour the column wears"),
+        Swatch::Token(Token::Muted),
+    );
+    let label = if s.customizing {
+        "Done"
+    } else {
+        "Customize\u{2026}"
+    };
+    let pill = controls::pill(ui, l.control, label, false, true);
+    d.hits.push((pill, Act::Customize));
+    if s.customizing {
+        icons(ui, cards, s, sp, ink, d);
+        colours(ui, cards, sp, ink, d);
+    }
     order(ui, cards, s, sp, ink, d);
 }
 
