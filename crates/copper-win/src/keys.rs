@@ -106,8 +106,12 @@ pub const BINDINGS: &[(&str, &[Chord])] = &[
     ("personal-canvas", &[cs(l('O'))]),
     ("close-tab", &[c(l('W')), c(Key::F(4))]),
     ("reopen-tab", &[cs(l('T'))]),
-    ("next-tab", &[c(Key::Tab), c(Key::PageDown)]),
-    ("previous-tab", &[cs(Key::Tab), c(Key::PageUp)]),
+    // Ctrl+Tab follows Settings › Tabs (the row, or most recent);
+    // Ctrl+PgUp/PgDn always walk the row.
+    ("switch-tab", &[c(Key::Tab)]),
+    ("switch-tab-back", &[cs(Key::Tab)]),
+    ("next-tab", &[c(Key::PageDown)]),
+    ("previous-tab", &[c(Key::PageUp)]),
     ("select-tab-1", &[c(Key::Digit(1))]),
     ("select-tab-2", &[c(Key::Digit(2))]),
     ("select-tab-3", &[c(Key::Digit(3))]),
@@ -320,8 +324,10 @@ mod tests {
         assert_eq!(t(Key::Letter('T'), true, true, false), Some("reopen-tab"));
         assert_eq!(t(Key::Letter('L'), true, false, false), Some("focus-field"));
         assert_eq!(t(Key::Letter('K'), true, false, false), Some("palette"));
-        assert_eq!(t(Key::Tab, true, false, false), Some("next-tab"));
-        assert_eq!(t(Key::Tab, true, true, false), Some("previous-tab"));
+        assert_eq!(t(Key::Tab, true, false, false), Some("switch-tab"));
+        assert_eq!(t(Key::Tab, true, true, false), Some("switch-tab-back"));
+        assert_eq!(t(Key::PageDown, true, false, false), Some("next-tab"));
+        assert_eq!(t(Key::PageUp, true, false, false), Some("previous-tab"));
         assert_eq!(t(Key::Digit(1), true, false, false), Some("select-tab-1"));
         assert_eq!(t(Key::Digit(9), true, false, false), Some("select-tab-9"));
         assert_eq!(t(Key::Letter('R'), true, false, false), Some("reload"));
