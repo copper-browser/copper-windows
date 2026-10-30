@@ -5,8 +5,8 @@ whether Copper for Linux (`copper-linux`, GTK) and Copper for Windows (this
 repo) have it. It is the to-do list for both ports: when a Mac change lands,
 add or update its row here (the Mac repo's CONTRIBUTING.md asks for that).
 
-**Audited against** `copper-browser/copper` `fork` @ **34649ab** (2026-10-29),
-copper-linux 0.5.2, copper-windows 0.2.2. Update the commit when you re-audit.
+**Audited against** `copper-browser/copper` `fork` @ **34649ab** (2026-10-29);
+statuses as of copper-linux 0.6.0, copper-windows 0.3.0 (2026-10-30). Update the commit when you re-audit.
 
 Status: **yes** · **part** (partial, note says what's missing) · **no** ·
 **mac** (can't exist off the Mac; note says why). *Shared* names the
@@ -23,16 +23,16 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Tabs | Drag to reorder pins / reorder in the top row | yes | no | shell-core `drop_tab` | |
 | Tabs | Drag a row onto favourites to pin it | yes | yes | shell-core `drop_on_pins` | |
 | Tabs | Saved / Today sections, seam, Save/Unsave, ⌘W puts a Saved tab down | yes | yes | core, shell-core | |
-| Tabs | Archive Today after 12/24/48 h | no | yes | shell-core `archive` | W sweep (`start_timers`) + Settings › Tabs row |
+| Tabs | Archive Today after 12/24/48 h | yes | yes | shell-core `archive` | W sweep (`start_timers`) + Settings › Tabs row |
 | Tabs | Drag across the seam with a landing marker; "Drop here to save" | yes | part | shell-core `sidedrop` | W no empty-Saved slot |
-| Tabs | Folders drawn in the column, fold/unfold | no | yes | shell-core `folders::plan` | L draws flat rows |
-| Tabs | Drag a tab into / out of a folder, Remove from Folder | no | yes | shell-core `sidedrop`, `groups::take_out` | |
+| Tabs | Folders drawn in the column, fold/unfold | yes | yes | shell-core `folders::plan` | L draws flat rows |
+| Tabs | Drag a tab into / out of a folder, Remove from Folder | yes | yes | shell-core `sidedrop`, `groups::take_out` | |
 | Tabs | New folder from tab (⌃⇧G), Move to folder, folder menu (rename/colour/ungroup/close all) | no | no | shell-core `groups` | rename/dissolve need shared fns |
 | Tabs | Tab menu: Duplicate, Copy Address, Close, Close Others | yes | yes | shell-core | |
 | Tabs | Middle-click closes a row; middle/Ctrl-click link opens behind | yes | yes | platform | |
 | Tabs | Mouse thumb buttons / two-finger swipe back-forward | part | part | platform | engine defaults over the page only |
 | Tabs | ⌘1–9 nth tab, ⌃Tab / Ctrl+PgUp/PgDn | yes | yes | shell-core | |
-| Tabs | ⌃Tab in most-recent order (setting) + hold strip | part | part | shell-core `recent`, `switch_tab` | L row inert; W no hold strip |
+| Tabs | ⌃Tab in most-recent order (setting) + hold strip | part | part | shell-core `recent`, `switch_tab` | order yes on both, no hold strip |
 | Tabs | Reopen closed ⌘⇧T (restores place + folder) | yes | yes | core | |
 | Tabs | Recently Closed list | no | part | core `closed_tabs` | W palette section only |
 | Tabs | Clear tabs ⌘⇧K + Undo; "↓ Clear" seam button | part | yes | shell-core `clear` | L no seam button |
@@ -79,7 +79,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Page | Bad certificate: ask once, local hosts trusted | no | part | engine, shell-core | L load just fails |
 | Page | JS dialogs, HTTP auth, file chooser, crashed-tab page | yes | yes | engine | |
 | Page | Print ⌘P | part | yes | platform | L only page's own `window.print()` |
-| Page | Zoom ⌘+/−/0; zoom remembered per site | part | yes | shell-core `zoom` | L per-site memory missing; W per site from shell-core (`pages.rs`) |
+| Page | Zoom ⌘+/−/0; zoom remembered per site | yes | yes | shell-core `zoom` | L per-site memory missing; W per site from shell-core (`pages.rs`) |
 | Page | Light / Dark / System | yes | yes | core | |
 | App | Announcement toast, length-scaled timing | part | yes | platform | L fixed 2 s |
 | App | Send Feedback (GitHub issue) | no | yes | platform | |
@@ -102,19 +102,19 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Cloud | Brake (>10 unfiled/removed asks) as a column card | part | part | copper-cloud `held` | modal question, not a card |
 | Cloud | Settings sync (9-key allowlist), bookmarks merge | yes | yes | core `CLOUD_SETTINGS_KEYS` | |
 | Cloud | "On your other devices" card | yes | yes | copper-cloud | |
-| Cloud | History push/pull; Clear History / Forget page delete on the cloud too | part | yes | shell-core `history_cleared/forgot` | L never calls them (privacy bug) |
-| Cloud | Settings › Cloud › Delete history on cloud (span + site) | no | yes | copper-cloud `delete`, shell-core `cloud::eraser` | |
+| Cloud | History push/pull; Clear History / Forget page delete on the cloud too | yes | yes | shell-core `history_cleared/forgot` | fixed in copper-linux 0.6.0 |
+| Cloud | Settings › Cloud › Delete history on cloud (span + site) | yes | yes | copper-cloud `delete`, shell-core `cloud::eraser` | |
 | Cloud | Sign out, rename device, log card, SSE reconnect, 401 signs out | yes | yes | copper-cloud | |
 | Cloud | Model keys from the cloud, shown as the source | part | yes | copper-mcp `intelligence::merge` | L has no Intelligence page |
 | Addons | Agent sidebar ⌘E filled from the cloud; width drag; hidden slot keeps running | yes | yes | core `addons` | |
 | Addons | Fetch / verify / stage; check at launch, 6 h, update check | yes | yes | copper-cloud `addons` | |
-| Addons | Install offer in the update pill; ⌘K "Install <name>"; Remind Me Later | part | part | platform | toast instead of pill; L no ⌘K row |
+| Addons | Install offer in the update pill; ⌘K "Install <name>"; Remind Me Later | part | part | platform | toast instead of pill on both |
 | Addons | Fallback to the agent pane after load failure / 3 crashes, reason shown | part | part | core `addons/state` | reload on crash only |
 | Addons | Built-in agent when no addon | no | yes | shell-core `chat` | L placeholder text |
 | Addons | Settings › Extensions › Addons (list, use, remove, check); dev folder + Reload | yes | part | core | W Remove doesn't ask; no Reload button |
 | Addons | Bridge `copper.*`: info, settings, identity, storage, fetch, oauth, openUrl, page | yes | yes | core `addons/bridge` | bridge.js byte-identical |
 | Addons | Bridge `copper.agent.*` + `agent` event | no | yes | core bridge, shell-core chat | L "no native agent yet" |
-| Addons | Bridge `copper.voice.*` + `voice` event, ⌃⇧D into the addon | no | no | needs Voice | shared `run()` should answer `bad_request` |
+| Addons | Bridge `copper.voice.*` + `voice` event, ⌃⇧D into the addon | no | no | needs Voice | shared `run()` answers `bad_request` as the Mac |
 | Addons | `oauth.authorize` in its own window | yes | part | core | W uses a tab |
 | Agent links | Settings › Agents › Your agents: per-app cards, token, grants, recent calls, Revoke | no | no | copper-mcp (to add) | |
 | Agent links | Outbound link stream (hello / heartbeat / backoff), Jev progress over the link, `copper link` CLI | no | no | copper-mcp (to add) | |
@@ -125,22 +125,22 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Passwords | Sign-ins inside iframes | no | no | pagejs relay, shell-core `watch` | relay is main-frame only |
 | Passwords | Accounts popup (key door, ⇧⌘Y, search, Fill / Copy / Open) | no | no | shell-core `vault::all_credentials` | data there, no UI |
 | Passwords | Two-step code rows (Bitwarden / 1Password TOTP) | yes | yes | copper-creds `totp` | |
-| Passwords | Fill two-step codes on their own after a pick (setting) | no | yes | shell-core `watch` | |
+| Passwords | Fill two-step codes on their own after a pick (setting) | yes | yes | shell-core `watch` | |
 | Passwords | Two-step codes for OS-store logins (Add code) | no | no | copper-creds `store` | |
 | Passwords | Suggest strong password; save first, fill new + confirm; offer to save a typed new password | no | no | copper-creds, pagejs `relay.js` | |
 | Passwords | Identity / card autofill rows; "Fill addresses and cards" switch | yes | yes | shell-core `view` | L switch missing |
 | Passwords | Custom-field rows; most-used usernames on any email box | no | no | shell-core `watch` | |
 | Passwords | Bitwarden: connect, lock / unlock / sign out / sync, authenticator + YubiKey code | yes | yes | copper-creds `bitwarden` | |
 | Passwords | Bitwarden: email code + new-device code (interactive `bw login`) | part | part | copper-creds `bitwarden` | one-shot login only |
-| Passwords | Bitwarden: API-key sign-in; stay unlocked between launches; auto-lock 5/15/60/Never | part | yes | copper-creds, shell-core `forms::autolock` | L no auto-lock, stay-unlocked off |
+| Passwords | Bitwarden: API-key sign-in; stay unlocked between launches; auto-lock 5/15/60/Never | yes | yes | copper-creds, shell-core `forms::autolock` | L no auto-lock, stay-unlocked off |
 | Passwords | 1Password via `op` (app / password / service account), vault for new logins | yes | yes | copper-creds `onepassword` | |
 | Passwords | 1Password extension sign-in / app link (native messaging) | mac | mac | — | needs WebExtensions + native messaging |
 | Passwords | BotPass source (pair, unlock, fill) | yes | part | copper-botpass | W fills, no pairing card; not on Mac |
 | Passwords | Save new passwords to (chooser); Agent access (share everything + per item) | yes | yes | shell-core | |
 | Passwords | `browser_sign_in`, `browser_autofill` card / identity / field + CLI | yes | yes | shell-core `forms/mcp` | |
 | Passwords | `browser_autofill kind=new-password` | no | no | shell-core `forms/mcp` | needs strong password |
-| Passwords | Passwords list: search, add, show, copy, remove; re-auth before show / export | part | part | shell-core `vault` | L no Add/Copy; no Windows Hello gate |
-| Passwords | CSV import / export | no | yes | copper-import `passwords_csv`, shell-core `forms::csv` | L unwired |
+| Passwords | Passwords list: search, add, show, copy, remove; re-auth before show / export | part | part | shell-core `vault` | no Windows Hello / polkit gate |
+| Passwords | CSV import / export | yes | yes | copper-import `passwords_csv`, shell-core `forms::csv` | L unwired |
 | Passwords | Copper's own passkeys (page authenticator, picker, Settings list) | no | part | pagejs (to add) | W Windows Hello only; L removes WebAuthn |
 | Agents | Loopback MCP server, bearer, Origin check, `--mcp-stdio` bridge | yes | yes | copper-mcp | |
 | Agents | Settings › Agents: switch, status, port, token, Copy config / stdio config | yes | yes | shell-core `agents` | W port not typed |
@@ -150,27 +150,27 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Agents | Who is calling, per-caller agent tabs, backstage paints, announce each call | yes | yes | copper-mcp, shell-core | |
 | Agents | CLI page verbs, `signin`, `autofill`, `cloud-history` | yes | yes | copper-mcp `cli` | |
 | Agents | CLI `run --vision/--model/--strategy/--json-run` | no | no | copper-mcp `ultrafast` | |
-| Agents | CLI `intelligence`, `claude`, `link`, `bitwarden`, `session`, `crashes`, `listen` | no | no | copper-mcp `Host::control` | nothing serves `copper/*` |
+| Agents | CLI `intelligence`, `claude`, `link`, `bitwarden`, `session`, `crashes`, `listen` | part | part | copper-mcp `Host::control` | `intelligence` works on both; the rest need lanes |
 | Agents | Headless mode | yes | no | platform | L weston; low value on W |
 | Jev | Jev mode switch, ultrafast loop, page trail | yes | yes | copper-mcp `ultrafast`, pagejs `trail` | |
-| Jev | TypeSafe key in Settings (+ Get a key); text model picker | part | part | copper-core `intelligence` | L file only; no text-model row on either |
-| Jev | Fast mode + strategies (literal / burst / paste / watch / lean) | no | no | copper-mcp `ultrafast` | `jevFast` unread |
+| Jev | TypeSafe key in Settings (+ Get a key); text model picker | yes | part | copper-core `intelligence` | W no text-model row |
+| Jev | Fast mode + strategies (literal / burst / paste / watch / lean) | yes | no | copper-mcp `ultrafast` | shared; no Settings switch, `jevFast` in intelligence.json |
 | Jev | What Jev sees (auto / marks / box / pixels), `json` trace | no | no | copper-mcp `ultrafast`, `shot` | |
-| Jev | SIGN_IN / AUTOFILL controls inside a run | no | no | shell-core `jev_extras` | |
+| Jev | SIGN_IN / AUTOFILL controls inside a run | yes | no | shell-core `jev_extras` | |
 | Jev | Text helper over the Claude account | no | no | copper-mcp `claude_ask` | |
 | Driving | Drive events; "X is driving" pill + Stop; Stop refuses 30 s | yes | yes | copper-mcp `drive` | |
 | Driving | Warm ring inside the page edge; per-tab hand badges | part | yes | platform | L no ring |
-| Driving | "Let it back in" (end refusal early) | no | yes | shell-core `Agents::resume_hand` | |
+| Driving | "Let it back in" (end refusal early) | yes | yes | shell-core `Agents::resume_hand` | |
 | Driving | Driver card (who, goal, steps, clock), Details timeline, concurrent band, Driver Timeline ⌥⌘J | no | part | shell-core `chat/transcript` | W card, no Details |
 | Agent pane | ⌘E chat with in-process tools, model pill, activity row, markdown, nested Jev, Stop | no | yes | shell-core `chat` | W built-in web UI `agent-ui/`; L unwired |
 | Agent pane | Page chip + suggestions, `/jev` toggle, tool rounds (cloud max_turns), error callouts | no | yes | shell-core `chat` | |
 | Agent pane | Ask About This Page ⌘⇧E | no | no | platform | Ctrl+Shift+E is New canvas off-Mac |
 | Agent pane | Your other MCP servers (`mcp.json`, `server__tool`), Open / Reload | no | no | copper-mcp (client to add) | |
 | Agent pane | "Sign in with Claude" empty state | no | no | needs Claude lane | |
-| Intelligence | Settings › Intelligence page | no | part | copper-mcp `intelligence` | W no Claude / text model / Voice |
-| Intelligence | API-key lane: gateway key + address, tier picker, model names | part | yes | copper-mcp `intelligence` | L env / file only |
+| Intelligence | Settings › Intelligence page | part | part | copper-mcp `intelligence` | no Claude lane on either; W no text model / Voice |
+| Intelligence | API-key lane: gateway key + address, tier picker, model names | yes | yes | copper-mcp `intelligence` | L env / file only |
 | Intelligence | Claude account sign-in (OAuth PKCE, refresh) + Claude lane inference | no | no | copper-cloud or copper-mcp | |
-| Intelligence | Check (one ask per lane) | no | yes | copper-mcp `intelligence::check` | |
+| Intelligence | Check (one ask per lane) | yes | yes | copper-mcp `intelligence::check` | |
 | Intelligence | Prompt cache marks; keys from Copper Cloud | yes | yes | shell-core `chat/wire`, copper-cloud | L Jev one-shots only |
 | Voice | Dictation into the composer, ⌃⇧D, Listen live transcript, model download | no | no | platform STT + copper-mcp `Transcript` | needs whisper.cpp / ONNX |
 | Voice | Phonon-2 Core ML runner | mac | mac | — | Core ML / Neural Engine |
@@ -186,24 +186,24 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Canvas | Chat panel, send @mentions / assignment notices | yes | yes | shell-core `host` | |
 | Canvas | Checklists, comments, assignees, timeline, comment threads (page) | yes | yes | canvas-app bundle | |
 | Canvas | Live frames + posters; frames on sites that forbid embedding | part | part | engine | no XFO bypass |
-| Canvas | MCP canvas tools, paged read, screenshot waits for settled, staged ready-wait | yes | yes | shell-core `canvas::mcp` | `canvas_list.invitations` missing |
-| Canvas | "Switching from Chrome" canvas after import | no | yes | shell-core `land_chrome_canvas` | W Move in's "Open the Chrome guide" |
+| Canvas | MCP canvas tools, paged read, screenshot waits for settled, staged ready-wait | yes | yes | shell-core `canvas::mcp` | `canvas_list.invitations` on both |
+| Canvas | "Switching from Chrome" canvas after import | yes | yes | shell-core `land_chrome_canvas` | W Move in's "Open the Chrome guide" |
 | Canvas | Xos whiteboard insert (`copper://canvas/insert`) | no | no | shell-core `canvas::xos` (to add) | |
 | Canvas | Easel → canvas import | mac | mac | — | easels only existed on the Mac |
 | Calendar | Calendar peek on the Google Calendar pin (next 4 meetings, Join links, clock) | yes | yes | shell-core `calendar`, copper-calendar | |
 | Calendar | Meetings source | part | part | copper-calendar `feeds` | iCal feeds instead of EventKit (mac) |
-| Settings | ⌘, panel; ten pages in four groups; blurbs | part | yes | platform | L 8 pages, no Spaces / Intelligence, no groups |
-| Settings | Reopens at last page; open at a row (deep link) | no | yes | core `SETTINGS_PAGE` | |
-| Settings | Search (typo-tolerant, grouped), opens folded rows, ⌘F, ↑↓↩, Esc clears | no | yes | W `search.rs` → shell-core | L search disabled |
+| Settings | ⌘, panel; ten pages in four groups; blurbs | part | yes | platform | L 9 pages (no Spaces), no groups/blurbs |
+| Settings | Reopens at last page; open at a row (deep link) | part | yes | core `SETTINGS_PAGE` | L no deep link |
+| Settings | Search (typo-tolerant, grouped), opens folded rows, ⌘F, ↑↓↩, Esc clears | part | yes | W `search.rs` → shell-core | L adw search: titles only |
 | Settings | ⌘W closes Settings; typing starts a search | no | no | platform | |
 | Settings | Asks before destructive actions | part | part | platform | W addon Remove doesn't ask |
 | Settings | General: default browser, appearance, Move in, bring in history, Downloads folder, Ask where | part | yes | core | L no history bring-in, no Ask where |
 | Settings | General: Correct spelling as you type | no | part | core `AUTOCORRECT` | engine spellcheck is the stand-in |
-| Settings | Tabs: sidebar, show, ⌃Tab order, swipe, sleep, archive, calendar feeds | part | part | core | L ⌃Tab / swipe / archive inert; W swipe "not yet" |
+| Settings | Tabs: sidebar, show, ⌃Tab order, swipe, sleep, archive, calendar feeds | part | part | core | swipe inert on both |
 | Settings | Spaces page: pick, name, look, profile, icon, colours, adjust, delete | part | part | shell-core | no look / adjust on either |
 | Settings | Extensions: Chrome extensions manager | mac | no | — | L WebKitGTK has no WebExtensions; W WebView2 can |
 | Settings | Agents: ⌘E context + tool rounds; agent apps; other MCP servers; terminal setup | part | part | copper-mcp | W has context + rounds |
-| Settings | Passwords: fill codes, fill addresses/cards, offer passkeys, CSV | part | part | shell-core | see Passwords; W passkeys "not yet" |
+| Settings | Passwords: fill codes, fill addresses/cards, offer passkeys, CSV | part | part | shell-core | passkeys only |
 | Settings | Privacy: block, block on this site, forget camera/mic, clear history / cookies / cache | part | part | shield, core | forget choices missing |
 | Settings | About: identity, Send Feedback, Diagnostics, shortcuts, Updates | part | part | platform | L check + link only |
 | Move in | One sheet: choose → working → summary; keeps running when closed | yes | part | copper-import | |
