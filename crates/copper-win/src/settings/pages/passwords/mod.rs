@@ -84,11 +84,12 @@ impl Passwords {
 
     /// Saved passwords: the list, offering and filling, the never list.
     fn saved(&self, shell: &Shell, f: &mut Form) {
-        let (save, fill, everything) = {
+        let (save, fill, codes, everything) = {
             let s = shell.settings();
             (
                 s.saves_passwords(),
                 s.fills_passwords(),
+                s.fills_codes(),
                 s.fills_everything(),
             )
         };
@@ -144,6 +145,14 @@ impl Passwords {
             fill,
         )
         .anchor("passwords.fill");
+        // Mac `Settings.swift`; the watcher fills them (shared `forms::watch`).
+        sec.switch(
+            "Fill two-step codes",
+            Some("Right after you pick an account whose code Copper keeps, the code page fills itself"),
+            "codes",
+            codes,
+        )
+        .anchor("passwords.codes");
         sec.switch(
             "Fill addresses and cards",
             Some("Click into a checkout or address form and your Bitwarden and 1Password identities and cards hang from it"),
@@ -305,6 +314,7 @@ impl Page for Passwords {
         match action {
             "save" => shell.update_settings(|s| s.set(keys::PASSWORDS_SAVE, on(value))),
             "fill" => shell.update_settings(|s| s.set(keys::PASSWORDS_FILL, on(value))),
+            "codes" => shell.update_settings(|s| s.set(keys::PASSWORDS_CODES, on(value))),
             "everything" => shell.update_settings(|s| s.set(keys::AUTOFILL_EVERYTHING, on(value))),
             "open" => crate::settings::manager::open(shell),
             "keychain.retry" => live::look(shell),

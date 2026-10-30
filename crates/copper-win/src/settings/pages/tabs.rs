@@ -7,7 +7,7 @@ use crate::chrome::glyph;
 use crate::platform::Shell;
 use crate::settings::Page;
 use crate::settings::form::{Form, Tone};
-use copper_core::settings::{Glyph, TabsPosition};
+use copper_core::settings::{ArchiveAfter, Glyph, TabSwitching, TabsPosition};
 use copper_shell_core::calendar;
 use std::cell::RefCell;
 
@@ -37,9 +37,14 @@ impl Page for Tabs {
         // The shell's answer, not the stored one: with nothing stored yet
         // the tabs are down the side.
         let side = shell.tabs_position() == TabsPosition::Left;
-        let (letters, sleeps) = {
+        let (letters, sleeps, switching, archive) = {
             let s = shell.settings();
-            (s.glyph() == Glyph::Letters, s.sleeps_tabs())
+            (
+                s.glyph() == Glyph::Letters,
+                s.sleeps_tabs(),
+                s.tab_switching(),
+                s.archive_after(),
+            )
         };
         let mut f = Form::default();
         f.section("Layout")
@@ -60,10 +65,15 @@ impl Page for Tabs {
             .anchor("tabs.glyph");
 
         let sec = f.section("Switching");
-        not_yet(
-            sec,
+        sec.choice(
             "Ctrl+Tab switches to",
-            "The next tab in the row — most recent order is not yet on Windows",
+            Some("The next tab in the row, or the one you used last"),
+            "switching",
+            &[
+                ("row", "Next tab in the row"),
+                ("recent", "Most recent tab"),
+            ],
+            switching.as_str(),
         )
         .anchor("tabs.switching");
         // Only with the sidebar: the swipe lives over its column (Copper#117).
@@ -84,10 +94,18 @@ impl Page for Tabs {
             sleeps,
         )
         .anchor("tabs.sleep");
-        not_yet(
-            sec,
+        // Mac `ArchiveLine` (Fork/Sections.swift); the sweep is shell-core's.
+        sec.choice(
             "Archive Today after",
-            "Not yet on Windows — tabs stay until you close them",
+            Some("Untouched rows below the New Tab line close themselves, and wait in Reopen Closed Tab."),
+            "archive",
+            &[
+                ("h12", "12h"),
+                ("h24", "24h"),
+                ("h48", "48h"),
+                ("never", "Never"),
+            ],
+            archive.as_str(),
         )
         .anchor("tabs.archive");
 
@@ -138,6 +156,16 @@ impl Page for Tabs {
                 }
             }
             "sleep" => shell.update_settings(|s| s.set_sleeps_tabs(on(value))),
+            "switching" => {
+                if let Some(v) = TabSwitching::parse(value) {
+                    shell.update_settings(|s| s.set_tab_switching(v));
+                }
+            }
+            "archive" => {
+                if let Some(v) = ArchiveAfter::parse(value) {
+                    shell.update_settings(|s| s.set_archive_after(v));
+                }
+            }
             "calendar.typed" => TYPED.with_borrow_mut(|t| t.0 = value.to_string()),
             "calendar.add" => {
                 let refused = calendar::add(shell, value).err();

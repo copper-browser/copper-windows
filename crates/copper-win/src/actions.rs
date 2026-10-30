@@ -88,6 +88,8 @@ pub fn register(shell: &Shell) {
         .when(|s| !s.browser().closed_tabs().is_empty()),
         Command::key("next-tab", |s| s.cycle_tab(true)),
         Command::key("previous-tab", |s| s.cycle_tab(false)),
+        Command::key("switch-tab", |s| s.switch_tab(true)),
+        Command::key("switch-tab-back", |s| s.switch_tab(false)),
         Command::new("pin-tab", "Pin or Unpin Tab", glyph::PIN, |s| {
             with_active(s, |s, id| s.toggle_pin(id))
         })
@@ -204,11 +206,39 @@ pub fn register(shell: &Shell) {
         r.add(c);
     }
     crate::cover::register(shell);
+    // Ctrl let go in the chrome (a page's comes as its accelerator key-up,
+    // `ctrl_released`): a most-recent Ctrl+Tab walk lands where it stopped.
+    let weak = shell.downgrade();
+    copper_win_rt::add_message_hook(move |m| {
+        const WM_KEYUP: u32 = 0x0101;
+        const WM_SYSKEYUP: u32 = 0x0105;
+        if (m.message == WM_KEYUP || m.message == WM_SYSKEYUP)
+            && m.wparam == VK_CONTROL as usize
+            && let Some(s) = weak.upgrade()
+        {
+            ctrl_released(&s);
+        }
+        false
+    });
     for n in 1..=9usize {
         r.add(Command::key(&format!("select-tab-{n}"), move |s| {
             s.select_nth(if n == 9 { None } else { Some(n - 1) })
         }));
     }
+}
+
+/// `VK_CONTROL`.
+pub const VK_CONTROL: u32 = 0x11;
+
+/// Ctrl went up (the chrome's, a page's or a pane's): end a most-recent
+/// Ctrl+Tab walk, on the loop's next turn (never inside a callback).
+pub fn ctrl_released(shell: &Shell) {
+    let weak = shell.downgrade();
+    copper_win_rt::spawn_local(async move {
+        if let Some(s) = weak.upgrade() {
+            s.tab_cycle_ended();
+        }
+    });
 }
 
 /// "Switch to …" for every other space, made fresh for the palette.

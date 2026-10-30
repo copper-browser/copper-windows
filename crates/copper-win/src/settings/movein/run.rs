@@ -70,8 +70,15 @@ impl Choice {
     }
 }
 
-/// Bring `kind` over; what came of it.
-pub async fn one(shell: &Shell, c: &Choice, kind: Kind) -> Step {
+/// Bring `kind` over; what came of it, and how many tabs or bookmarks
+/// came (the Chrome guide is offered when some did).
+pub async fn one(shell: &Shell, c: &Choice, kind: Kind) -> (Step, usize) {
+    let mut came = 0;
+    let step = bring(shell, c, kind, &mut came).await;
+    (step, came)
+}
+
+async fn bring(shell: &Shell, c: &Choice, kind: Kind, came: &mut usize) -> Step {
     let name = c.browser.name.clone();
     match kind {
         Kind::Bookmarks => {
@@ -80,6 +87,7 @@ pub async fn one(shell: &Shell, c: &Choice, kind: Kind) -> Step {
                 return Step::Missed(format!("Couldn't read {name}'s bookmarks"));
             };
             let (n, complete) = (read.count(), read.complete());
+            *came = n;
             if !read.nodes.is_empty() {
                 let roots = {
                     let mut b = shell.bookmarks_mut();
@@ -135,6 +143,7 @@ pub async fn one(shell: &Shell, c: &Choice, kind: Kind) -> Step {
             match read {
                 Ok(spaces) => {
                     let (s, t) = open_spaces(shell, spaces);
+                    *came = t;
                     Step::Arrived(format!(
                         "{} in {}",
                         super::super::count(t, "open tab", "open tabs"),

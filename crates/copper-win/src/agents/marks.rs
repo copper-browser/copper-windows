@@ -3,7 +3,7 @@
 //!
 //! * over the page on screen, top centre: one capsule per hand (at most
 //!   three) — the agent's square, its name and thread, what it is doing,
-//!   Stop. Solid while a call is in flight, breathing between calls. When
+//!   Stop (once stopped, "Let it back in" while its calls are refused). Solid while a call is in flight, breathing between calls. When
 //!   the pointer comes near, a capsule tucks in to its square and Stop so
 //!   the page under it can be clicked; it comes back 300 ms after the
 //!   pointer leaves the room it took.
@@ -58,6 +58,8 @@ struct Nodes {
 #[derive(Clone, Debug)]
 enum Target {
     Stop(String),
+    /// "Let it back in".
+    Back,
     Show(TabId),
 }
 
@@ -225,6 +227,7 @@ pub fn click(shell: &Shell, id: NodeId) -> bool {
     };
     match t {
         Target::Stop(key) => stop(shell, &key),
+        Target::Back => let_back_in(shell),
         Target::Show(tab) => {
             shell.select(&tab);
         }
@@ -239,6 +242,16 @@ pub fn stop(shell: &Shell, key: &str) {
         a.stop_hand(key);
     }
     marks().hands.borrow_mut().stop(key, Instant::now());
+    redraw(shell);
+}
+
+/// "Let it back in": every stopped agent's calls are accepted again now,
+/// before the 30 s refusal runs out (`Agents::resume_hand`).
+pub fn let_back_in(shell: &Shell) {
+    if let Some(a) = copper_shell_core::agents::get::<Win>() {
+        a.resume_hand();
+    }
+    marks().hands.borrow_mut().let_back_in();
     redraw(shell);
 }
 
@@ -512,6 +525,30 @@ fn capsule(m: &Marks, ui: &mut Ui, parent: NodeId, h: &Hand, tucked: bool) -> No
         m.targets
             .borrow_mut()
             .insert(stop, Target::Stop(h.key.clone()));
+    } else if h.refused(Instant::now()) {
+        // Mac `DriveCard`; it ends when the hand ages out (both 30 s).
+        let back = ui.tree.add(
+            cap,
+            Node::stack()
+                .height(18.0)
+                .shrink(0.0)
+                .padding(Insets::new(7.0, 0.0, 7.0, 0.0))
+                .radius(9.0)
+                .hover_fill(Swatch::Fade(Token::Ink, 0.08))
+                .press_fill(Swatch::Fade(Token::Ink, 0.14))
+                .align(Align::Center)
+                .justify(Justify::Center)
+                .button("Let it back in")
+                .tooltip("Accept the agent's calls again now"),
+        );
+        ui.tree.add(
+            back,
+            Node::text("Let it back in", 11.0)
+                .weight(Weight::Medium)
+                .ink(Token::Ink)
+                .role(Role::None),
+        );
+        m.targets.borrow_mut().insert(back, Target::Back);
     }
     cap
 }

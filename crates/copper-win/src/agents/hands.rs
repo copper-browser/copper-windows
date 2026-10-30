@@ -13,7 +13,7 @@
 
 use copper_core::browser::TabId;
 use copper_mcp::Who;
-use copper_mcp::drive::{DriveEvent, Status};
+use copper_mcp::drive::{DriveEvent, REFUSAL, Status};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -61,6 +61,12 @@ impl Hand {
     /// Still drawn at `now`.
     pub fn live(&self, now: Instant) -> bool {
         self.busy > 0 || now.saturating_duration_since(self.last) < LINGER
+    }
+
+    /// Stopped (not a Jev run, which just ends) and its calls still turned
+    /// away at `now`: "Let it back in" shows (Mac `DriveCard`).
+    pub fn refused(&self, now: Instant) -> bool {
+        self.stopped && !self.jev && now.saturating_duration_since(self.last) < REFUSAL
     }
 
     /// The text dark enough on its colour (amber takes dark ink).
@@ -328,6 +334,20 @@ impl Hands {
         self.tabs_of(key)
     }
 
+    /// "Let it back in": every stopped hand is a plain one again (the
+    /// server's side is `Agents::resume_hand`); the tabs that changed.
+    pub fn let_back_in(&mut self) -> Vec<TabId> {
+        let mut tabs = Vec::new();
+        for (t, hs) in self.tabs.iter_mut() {
+            for h in hs.iter_mut().filter(|h| h.stopped) {
+                h.stopped = false;
+                h.action.clear();
+                tabs.push(t.clone());
+            }
+        }
+        tabs
+    }
+
     /// The server stopped: forget everything; the tabs that had marks.
     pub fn clear(&mut self) -> Vec<TabId> {
         self.tickets.clear();
@@ -559,6 +579,10 @@ mod tests {
         assert_eq!(h.on(&t, now)[0].action, "Done");
         assert_eq!(h.stop("jev", now), vec![t.clone()]);
         assert!(h.on(&t, now)[0].stopped);
+        // A Jev run just ends: nothing to let back in.
+        assert!(!h.on(&t, now)[0].refused(now));
+        assert_eq!(h.let_back_in(), vec![t.clone()]);
+        assert!(!h.on(&t, now)[0].stopped);
         h.forget(&t);
         assert!(h.tabs(now).is_empty());
     }

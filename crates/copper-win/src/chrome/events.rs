@@ -393,12 +393,15 @@ pub fn hook_page(shell: &Shell, tab: &TabId, page: &WebView2Page) {
     super::pagemenu::watch(shell, tab, page);
     let weak = shell.downgrade();
     page.on_accelerator_key(move |k| {
-        if !matches!(k.kind, KeyEventKind::KeyDown | KeyEventKind::SystemKeyDown) {
-            return false;
-        }
         let Some(shell) = weak.upgrade() else {
             return false;
         };
+        if !matches!(k.kind, KeyEventKind::KeyDown | KeyEventKind::SystemKeyDown) {
+            if k.virtual_key == crate::actions::VK_CONTROL {
+                crate::actions::ctrl_released(&shell);
+            }
+            return false;
+        }
         let chord = Chord::new(
             keys::key_of(k.virtual_key),
             Mods {
