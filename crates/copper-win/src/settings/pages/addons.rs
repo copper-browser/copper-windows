@@ -11,6 +11,7 @@ use crate::addons::glue;
 use crate::chrome::pane;
 use crate::platform::Shell;
 use crate::settings::form::Form;
+use copper_shell_core::{Question, ShellView};
 
 /// The Addons sections, on `f`.
 pub(super) fn section(f: &mut Form) {
@@ -77,7 +78,7 @@ pub(super) fn section(f: &mut Form) {
             "Remove",
             Some("From this Copper, until your cloud changes it."),
             &format!("remove:{}", a.id),
-            "Remove",
+            "Remove…",
             false,
         );
     }
@@ -124,6 +125,32 @@ pub(super) fn section(f: &mut Form) {
     );
 }
 
+/// Remove asks first (as Linux's and Settings' other destructive rows).
+fn ask_remove(shell: &Shell, id: &str) {
+    let name = glue::list()
+        .into_iter()
+        .find(|a| a.id == id)
+        .map_or_else(|| "this addon".to_string(), |a| a.name);
+    let id = id.to_string();
+    shell.view().ask(
+        shell,
+        Question {
+            title: format!("Remove {name}?"),
+            detail: Some(
+                "It leaves this computer until your Copper Cloud changes it again. What it saved here stays."
+                    .into(),
+            ),
+            deny: "Cancel".into(),
+            allow: "Remove".into(),
+        },
+        Box::new(move |allowed| {
+            if allowed {
+                glue::remove(&id);
+            }
+        }),
+    );
+}
+
 /// A control in the sections was used; `false` if `action` isn't one.
 pub(super) fn act(shell: &Shell, action: &str, value: &str) -> bool {
     match action {
@@ -141,7 +168,7 @@ pub(super) fn act(shell: &Shell, action: &str, value: &str) -> bool {
             if let Some(id) = a.strip_prefix("use:") {
                 glue::set_enabled(id, super::on(value));
             } else if let Some(id) = a.strip_prefix("remove:") {
-                glue::remove(id);
+                ask_remove(shell, id);
             } else {
                 return false;
             }
