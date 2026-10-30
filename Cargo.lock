@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "copper-engine-webview2"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "copper-engine",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "copper-setup"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "windows",
@@ -478,7 +478,7 @@ dependencies = [
 
 [[package]]
 name = "copper-win"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "copper-cloud",
  "copper-core",
@@ -508,14 +508,14 @@ dependencies = [
 
 [[package]]
 name = "copper-win-rt"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "windows",
 ]
 
 [[package]]
 name = "copper-win-ui"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "copper-win-rt",
  "unicode-segmentation",
