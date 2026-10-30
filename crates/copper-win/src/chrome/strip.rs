@@ -203,6 +203,17 @@ impl Strip {
         None
     }
 
+    /// The tab under `p` (window DIPs), and whether it is pinned.
+    pub fn tab_under(&self, ui: &Ui, p: copper_win_ui::Point) -> Option<(TabId, bool)> {
+        match self.targets.get(&ui.tree.pick(p).target?)? {
+            Hit::Tab(t) => {
+                let pinned = self.drawn.iter().any(|d| d.id == *t && d.pinned);
+                Some((t.clone(), pinned))
+            }
+            _ => None,
+        }
+    }
+
     /// Draw `m`, sized for a window `window_w` DIPs wide.
     pub fn sync(&mut self, ui: &mut Ui, images: &mut Images, m: &Model) {
         self.sync_nav(ui, m.nav);

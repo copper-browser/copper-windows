@@ -218,6 +218,7 @@ fn strip_click(shell: &Shell, h: StripHit) {
             }
         }
         StripHit::NewTab => crate::palette::open(shell, Purpose::Launch, false),
+        StripHit::Tab(id) if super::drag::was_dragged(&id) => {}
         StripHit::Tab(id) => {
             if shell.active_id().as_ref() == Some(&id) {
                 crate::palette::edit_address(shell);
