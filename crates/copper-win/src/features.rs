@@ -85,6 +85,10 @@ fn page_commands(shell: &Shell) {
         )
         .when(|s| shield::enabled(s) && s.active_page().is_some()),
     );
+    r.add(
+        Command::new("reader", "Reading Mode", glyph::DOC, crate::reader::toggle)
+            .when(|s| s.active_id().is_some()),
+    );
 }
 
 /// A tab's page was just made, before its first load: the block list, the
@@ -93,6 +97,7 @@ fn page_commands(shell: &Shell) {
 pub fn page_created(shell: &Shell, id: &TabId, page: &WebView2Page) {
     shield::protect(shell, page);
     curtain::dress(shell, id, page);
+    crate::reader::forget(id);
     let mut events = page.events();
     let weak = shell.downgrade();
     let tab = id.clone();
@@ -109,6 +114,7 @@ pub fn page_created(shell: &Shell, id: &TabId, page: &WebView2Page) {
                 PageEvent::ScriptMessage { name, body } if name == curtain::HANDLER => {
                     curtain::message(&shell, &tab, &body);
                 }
+                PageEvent::Load(LoadState::Started { .. }) => crate::reader::forget(&tab),
                 PageEvent::Load(LoadState::Committed { .. }) => {
                     curtain::navigated(&shell, &tab);
                     crate::find::page_moved(&shell, &tab);
@@ -117,5 +123,10 @@ pub fn page_created(shell: &Shell, id: &TabId, page: &WebView2Page) {
             }
         }
         curtain::page_gone::<Win>(page_id);
+        if let Some(shell) = weak.upgrade()
+            && shell.slot(&tab).is_none()
+        {
+            crate::reader::forget(&tab);
+        }
     });
 }
