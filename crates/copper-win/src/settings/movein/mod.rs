@@ -8,7 +8,9 @@
 //! shows where its export is (`passwords_csv::export_hint`) before the
 //! file is chosen, and Bring it over waits for the file. What Copper for
 //! Windows can't bring yet (passkeys, sign-ins, site data, extensions) is
-//! said once, faded.
+//! said once, faded. When tabs or bookmarks came from Chrome, the finished
+//! sheet offers "Open the Chrome guide" (Mac Flow; shell-core's
+//! `canvas::land_chrome_canvas`).
 //!
 //! The body is a Settings [`Form`] drawn with Settings' own pieces, so it
 //! reads as the same thing.
@@ -64,6 +66,17 @@ struct State {
     csv: Option<PathBuf>,
     phase: Phase,
     steps: Vec<(Kind, Step)>,
+    /// Tabs or bookmarks came from Chrome: "Open the Chrome guide".
+    guide: Guide,
+}
+
+/// The Chrome guide's button on the finished sheet (Mac Flow).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Guide {
+    #[default]
+    None,
+    Offered,
+    Opening,
 }
 
 #[derive(Clone, Copy)]
@@ -226,21 +239,56 @@ impl MoveIn {
         self.refresh(shell);
         let weak = shell.downgrade();
         copper_win_rt::spawn_local(async move {
+            let mut came = 0;
             for kind in choice.kinds.clone() {
                 let Some(s) = weak.upgrade() else { return };
                 set_step(&s, kind, Step::Working);
-                let step = run::one(&s, &choice, kind).await;
+                let (step, n) = run::one(&s, &choice, kind).await;
+                came += n;
                 set_step(&s, kind, step);
             }
             if let Some(s) = weak.upgrade()
                 && let Some(m) = sheet(&s)
             {
-                m.st.borrow_mut().phase = Phase::Done;
+                let mut st = m.st.borrow_mut();
+                st.phase = Phase::Done;
+                if choice.browser.name == "Chrome" && came > 0 {
+                    st.guide = Guide::Offered;
+                }
+                drop(st);
                 panels::refresh(&s, ID);
                 s.toast("Moved in");
             }
         });
     }
+}
+
+/// "Open the Chrome guide": land the "Switching from Chrome" canvas
+/// (Linux `forms/import.rs`), then put the sheet away.
+fn open_guide(shell: &Shell) {
+    let Some(m) = sheet(shell) else { return };
+    if m.st.borrow().guide != Guide::Offered {
+        return;
+    }
+    m.st.borrow_mut().guide = Guide::Opening;
+    panels::refresh(shell, ID);
+    let weak = shell.downgrade();
+    copper_win_rt::spawn_local(async move {
+        let Some(s) = weak.upgrade() else { return };
+        let landed = copper_shell_core::canvas::land_chrome_canvas(&s).await;
+        tracing::info!(?landed, "move in: chrome guide");
+        let Some(m) = sheet(&s) else { return };
+        if landed.is_some() {
+            m.st.borrow_mut().guide = Guide::None;
+            if s.view().panels().showing() == Some(ID) {
+                s.view().panels().hide(&s);
+            }
+        } else {
+            m.st.borrow_mut().guide = Guide::Offered;
+            panels::refresh(&s, ID);
+            s.toast("Couldn't open the Chrome guide");
+        }
+    });
 }
 
 /// One kind moved on.
@@ -315,9 +363,9 @@ impl Panel for MoveIn {
         if self.st.borrow().browsers.is_none() {
             self.look(shell);
         }
-        let (form, phase, ready) = {
+        let (form, phase, ready, guide) = {
             let st = self.st.borrow();
-            (st.form(), st.phase, st.ready())
+            (st.form(), st.phase, st.ready(), st.guide)
         };
         let ink = Inks::new(shell.is_dark());
         let made = shell.view().chrome().read(move |ui, _| {
@@ -341,6 +389,18 @@ impl Panel for MoveIn {
                     super::controls::pill(ui, n.foot, "Bringing it over…", true, false);
                 }
                 Phase::Done => {
+                    if guide != Guide::None {
+                        let opening = guide == Guide::Opening;
+                        let label = if opening {
+                            "Opening the guide…"
+                        } else {
+                            "Open the Chrome guide"
+                        };
+                        foot.push((
+                            super::controls::pill(ui, n.foot, label, false, !opening),
+                            "guide",
+                        ));
+                    }
                     foot.push((
                         super::controls::pill(ui, n.foot, "Done", true, true),
                         "close",
@@ -366,6 +426,10 @@ impl Panel for MoveIn {
         match foot {
             Some("close") => {
                 shell.view().panels().hide(shell);
+                return true;
+            }
+            Some("guide") => {
+                open_guide(shell);
                 return true;
             }
             Some(_) => {
