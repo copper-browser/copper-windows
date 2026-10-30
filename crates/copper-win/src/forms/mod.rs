@@ -12,9 +12,8 @@
 //! Manager is always there, nothing to unlock). What both say, and where
 //! the list goes, is in `settings::fill`, where host tests check it.
 //!
-//! Also here: the Settings keys the Passwords page and the lane share,
-//! Mac defaults the lane doesn't know of (stay unlocked), the chosen
-//! 1Password vault put back at launch, and Bitwarden's auto-lock.
+//! Also here: the chosen 1Password vault put back at launch. Bitwarden's
+//! auto-lock is the lane's (`forms::autolock`, `forms::keys::BW_AUTOLOCK`).
 
 mod offer;
 mod picker;
@@ -23,11 +22,10 @@ use crate::platform::{Shell, Win};
 use copper_core::browser::TabId;
 use copper_pagejs::messages::FieldRect;
 use copper_shell_core::forms::view::{OfferData, Row};
-use copper_shell_core::forms::{self, Forms, FormsUi, keys, rt, vault};
+use copper_shell_core::forms::{self, Forms, FormsUi, rt, vault};
 use copper_shell_core::shell::pages::PageSlot;
 use copper_win_ui::NodeId;
 use std::rc::Rc;
-use std::time::Duration;
 
 pub use offer::Offer;
 pub use picker::Picker;
@@ -36,37 +34,20 @@ pub use picker::Picker;
 /// system menu; the tag stays so the chrome's menu answer
 /// ([`picked`]) keeps meaning a row.
 pub const PICKER_MENU: u32 = 20;
-/// Settings key: minutes without use before Copper locks Bitwarden — 0
-/// (never, the default), 5, 15 or 60 (`Bitwarden.autolockMinutes`).
-pub const BW_AUTOLOCK: &str = "bitwarden.autolockMinutes";
 /// Settings key: the 1Password vault new logins are created in, by id
 /// (unset: Private, Personal or Employee, else the first writable one).
 pub const OP_SAVE_VAULT: &str = "onepassword.saveVault";
-/// How often Bitwarden's idle time is looked at.
-const IDLE_CHECK: Duration = Duration::from_secs(30);
 
 /// The forms lane's widgets on Windows.
 pub enum WinForms {}
 
 /// Start the lane.
 pub fn register(shell: &Shell) {
-    // Stay unlocked is on until it is turned off (`Bitwarden.swift`
-    // `stayUnlocked`, 1Password's the same); the lane reads a missing key
-    // as off, so it is written once here before the lane starts.
-    let missing: Vec<&str> = [keys::BW_STAY, keys::OP_STAY]
-        .into_iter()
-        .filter(|k| shell.settings().get(k).is_none())
-        .collect();
-    if !missing.is_empty() {
-        shell.update_settings(|s| {
-            for k in missing {
-                s.set(k, true);
-            }
-        });
-    }
+    // Stay unlocked defaults on and Bitwarden's auto-lock runs in the
+    // shared lane (`forms::start`, `forms::autolock`).
     forms::start::<WinForms>(shell, vault::always_there);
     restore_save_vault(shell);
-    autolock(shell);
+    forms::autolock(shell);
 }
 
 /// The 1Password vault chosen in Settings, for new logins from now on.
@@ -77,31 +58,6 @@ fn restore_save_vault(shell: &Shell) {
     let Some(v) = forms::vault() else { return };
     copper_win_rt::spawn_local(async move {
         rt::run(async move { v.op.lock().await.set_save_vault(Some(id)) }).await;
-    });
-}
-
-/// Lock Bitwarden after the minutes chosen in Settings without use
-/// (`Bitwarden.autolockMinutes`; 0: never).
-fn autolock(shell: &Shell) {
-    let weak = shell.downgrade();
-    copper_win_rt::spawn_local(async move {
-        loop {
-            copper_win_rt::sleep(IDLE_CHECK).await;
-            let Some(s) = weak.upgrade() else { return };
-            let minutes = s.settings().number(BW_AUTOLOCK).unwrap_or(0.0);
-            drop(s);
-            if minutes <= 0.0 {
-                continue;
-            }
-            let Some(v) = forms::vault() else { continue };
-            rt::run(async move {
-                // Never wait behind a sign-in or a sync under way.
-                if let Ok(mut bw) = v.bw.try_lock() {
-                    bw.check_idle(minutes).await;
-                }
-            })
-            .await;
-        }
     });
 }
 

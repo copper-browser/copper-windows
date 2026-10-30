@@ -23,7 +23,7 @@ use std::cell::RefCell;
 pub const INSTALL: &str = "winget install Bitwarden.CLI";
 /// Bitwarden's own server, which `bw` uses when none is configured.
 const DEFAULT_SERVER: &str = "https://vault.bitwarden.com";
-use crate::forms::BW_AUTOLOCK as AUTOLOCK;
+use copper_shell_core::forms::keys::BW_AUTOLOCK as AUTOLOCK;
 
 mod acts;
 
