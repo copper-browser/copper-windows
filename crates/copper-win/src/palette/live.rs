@@ -297,8 +297,25 @@ pub fn changed(shell: &Shell) {
     };
     let began = std::time::Instant::now();
     let m = mode(purpose);
-    let inputs = gather(shell, &text, m, private);
-    let offers = rank::offers(m, &inputs);
+    // `copper://cloud/join?code=…`: Settings › Cloud, never a search.
+    let offers = match copper_shell_core::cloud::join::palette_row(&text) {
+        Some(join) => rank::Offers {
+            rows: vec![Row {
+                kind: Kind::Known,
+                title: join.title,
+                detail: join.detail,
+                badge: String::new(),
+                hint: join.hint,
+                action: Action::Go(text.trim().to_string()),
+                url: None,
+                glyph: Some(glyph::CLOUD),
+                section: rank::Section::Plain,
+            }],
+            default: Some(0),
+            ending: None,
+        },
+        None => rank::offers(m, &gather(shell, &text, m, private)),
+    };
     // The plain field puts its ending in the field, selected, only while
     // the words grow at the end; a backspace means it was not wanted.
     let grew = text.len() > before.len() && text.starts_with(&before);
