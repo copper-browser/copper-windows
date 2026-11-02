@@ -37,7 +37,11 @@ impl AgentsApp<Win> for App {
 
     fn prepare(&self, shell: &Shell, tab: &TabId) -> bool {
         let mut changed = false;
-        match shell.browser().tab(tab).map(|t| t.sleeping) {
+        // Read first: a guard in the `match` head would live through the
+        // arms, and waking the tab there panicked ("RefCell already
+        // borrowed") — any agent call on a sleeping tab closed Copper.
+        let sleeping = shell.browser().tab(tab).map(|t| t.sleeping);
+        match sleeping {
             None => return false,
             Some(true) => {
                 shell.with_browser(|b| b.set_sleeping(tab, false));
