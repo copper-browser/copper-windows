@@ -219,7 +219,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Move in | Bookmarks, history, open tabs → sleeping spaces, profile picker | yes | yes | copper-import | |
 | Move in | Passwords from the browser's store | yes | no | copper-import `passwords` | W by design: CSV export only |
 | Move in | Export files: passwords CSV, bookmarks HTML | no | part | copper-import | no bookmarks-HTML parser in Rust |
-| Move in | Cookies (stay signed in), localStorage | no | no | copper-import (to add) | |
+| Move in | Cookies (stay signed in), localStorage | no | part | copper-import (to add) | W one-shot from a Mac Copper: `tools/signins/mac-*.py` → sealed `import\*.dpapi`, read at start-up (`signins.rs`); no IndexedDB, no UI |
 | Move in | Extensions, passkeys | mac | no | — | depend on extensions / passkey store |
 | Move in | Counts before moving; second move adds only new; "Work (Chrome)" clash | part | part | copper-import | tabs duplicate on a rerun |
 | Move in | Locked-card access explanation | mac | part | — | TCC is macOS; L/W show keyring / in-use errors |
