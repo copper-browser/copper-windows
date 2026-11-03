@@ -40,8 +40,16 @@
         <div class="sparkle" data-icon="sparkles" aria-hidden="true"></div>
         <h2 class="empty-title" id="empty-title"></h2>
         <p class="empty-text" id="empty-text"></p>
-        <div class="empty-actions" id="setup" hidden>
-          <button type="button" class="pill filled" id="setup-key">Use an API key</button>
+        <div class="setup" id="setup" hidden>
+          <div class="setup-wait" id="setup-wait" role="status" hidden></div>
+          <p class="setup-trouble" id="setup-trouble" role="alert" hidden></p>
+          <div class="empty-actions" id="setup-actions">
+            <button type="button" class="pill filled" id="setup-claude">Sign in with Claude</button>
+            <button type="button" class="pill" id="setup-key">Use an API key</button>
+          </div>
+          <div class="empty-actions" id="setup-waiting" hidden>
+            <button type="button" class="pill" id="setup-cancel">Cancel</button>
+          </div>
         </div>
       </div>
       <div class="empty-room"></div>

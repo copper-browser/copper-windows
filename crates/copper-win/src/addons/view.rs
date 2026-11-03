@@ -435,6 +435,17 @@ impl AddonView {
         });
     }
 
+    /// Run `js` in the page while it shows the built-in agent (its own
+    /// door's pushes).
+    pub(super) fn run_builtin(&self, js: &str) {
+        if !self.retired.get()
+            && super::builtin::is(&self.addon.borrow())
+            && self.page.url().is_some_and(|u| super::builtin::in_slot(&u))
+        {
+            self.run(js);
+        }
+    }
+
     /// `window.__copperAddon.emit(name, payload)`.
     pub fn emit(&self, name: &str, payload: Value) {
         if self.retired.get() {
