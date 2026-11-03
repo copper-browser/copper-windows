@@ -156,14 +156,14 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Agents | Who is calling, per-caller agent tabs, backstage paints, announce each call | yes | yes | copper-mcp, shell-core | |
 | Agents | CLI page verbs, `signin`, `autofill`, `cloud-history` | yes | yes | copper-mcp `cli` | |
 | Agents | CLI `run --vision/--model/--strategy/--json-run` | no | no | copper-mcp `ultrafast` | |
-| Agents | CLI `intelligence`, `claude`, `link`, `bitwarden`, `session`, `crashes`, `listen` | part | part | copper-mcp `Host::control` | `intelligence` works on both; the rest need lanes |
+| Agents | CLI `intelligence`, `claude`, `link`, `bitwarden`, `session`, `crashes`, `listen` | part | part | copper-mcp `Host::control` | `intelligence` and `claude` work on both; the rest need lanes |
 | Agents | Headless mode | yes | no | platform | L weston; low value on W |
 | Jev | Jev mode switch, ultrafast loop, page trail | yes | yes | copper-mcp `ultrafast`, pagejs `trail` | |
 | Jev | TypeSafe key in Settings (+ Get a key); text model picker | yes | part | copper-core `intelligence` | W no text-model row |
 | Jev | Fast mode + strategies (literal / burst / paste / watch / lean) | yes | no | copper-mcp `ultrafast` | shared; no Settings switch, `jevFast` in intelligence.json |
 | Jev | What Jev sees (auto / marks / box / pixels), `json` trace | no | no | copper-mcp `ultrafast`, `shot` | |
 | Jev | SIGN_IN / AUTOFILL controls inside a run | yes | no | shell-core `jev_extras` | |
-| Jev | Text helper over the Claude account | no | no | copper-mcp `claude_ask` | |
+| Jev | Text helper over the Claude account | yes | yes | copper-mcp `claude`, shell-core `AppHost::claude_ask` | |
 | Driving | Drive events; "X is driving" pill + Stop; Stop refuses 30 s | yes | yes | copper-mcp `drive` | |
 | Driving | Warm ring inside the page edge; per-tab hand badges | part | yes | platform | L no ring |
 | Driving | "Let it back in" (end refusal early) | yes | yes | shell-core `Agents::resume_hand` | |
@@ -172,10 +172,10 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Agent pane | Page chip + suggestions, `/jev` toggle, tool rounds (cloud max_turns), error callouts | no | yes | shell-core `chat` | |
 | Agent pane | Ask About This Page ⌘⇧E | no | no | platform | Ctrl+Shift+E is New canvas off-Mac |
 | Agent pane | Your other MCP servers (`mcp.json`, `server__tool`), Open / Reload | no | no | copper-mcp (client to add) | |
-| Agent pane | "Sign in with Claude" empty state | no | no | needs Claude lane | |
-| Intelligence | Settings › Intelligence page | part | part | copper-mcp `intelligence` | no Claude lane on either; W no text model / Voice |
+| Agent pane | "Sign in with Claude" empty state | no | yes | shell-core `claude::sign_in` | W built-in `agent-ui/` (wait, Cancel, failure); L pane unwired |
+| Intelligence | Settings › Intelligence page | part | part | copper-mcp `intelligence` | L no Claude lane row; W no text model / Voice |
 | Intelligence | API-key lane: gateway key + address, tier picker, model names | yes | yes | copper-mcp `intelligence` | L env / file only |
-| Intelligence | Claude account sign-in (OAuth PKCE, refresh) + Claude lane inference | no | no | copper-cloud or copper-mcp | |
+| Intelligence | Claude account sign-in (OAuth PKCE, refresh) + Claude lane inference | part | yes | copper-mcp `claude`, shell-core `claude` | W Settings › Intelligence Use › Claude account (Sign in with Claude, paste the code, Sign out); L `copper claude signin` only, no Settings row |
 | Intelligence | Check (one ask per lane) | yes | yes | copper-mcp `intelligence::check` | |
 | Intelligence | Prompt cache marks; keys from Copper Cloud | yes | yes | shell-core `chat/wire`, copper-cloud | L Jev one-shots only |
 | Voice | Dictation into the composer, ⌃⇧D, Listen live transcript, model download | no | no | platform STT + copper-mcp `Transcript` | needs whisper.cpp / ONNX |

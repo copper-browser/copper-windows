@@ -12,7 +12,8 @@
 //!   addon granted the `agent` capability (Mac `AddonHost.agentChanged`).
 //! * Copper Cloud's keys arriving (or going), the model chosen in Settings
 //!   and `chat.json`'s page-context switch change the state too: the event
-//!   follows those files while a page listens.
+//!   follows those files while a page listens. So does the Claude account
+//!   (`copper_shell_core::claude`): signing in makes the `claude` lane ready.
 //! * Nothing secret is kept: the conversation is in memory only; the model
 //!   choice goes to `intelligence.json` as the Mac keeps it.
 //!
@@ -57,6 +58,7 @@ pub fn register(shell: &Shell) {
     chat.on_change(changed);
     CHAT.with(|c| *c.borrow_mut() = Some(chat));
     follow_files(shell);
+    follow_claude(shell);
     sweep_while_unlistened();
     selftest::maybe_start(shell);
 }
@@ -115,6 +117,23 @@ fn emit() {
     }
     LAST.with(|l| *l.borrow_mut() = text);
     view.emit("agent", state);
+}
+
+/// The Claude account moving on (signed in or out, a sign-in's phase): the
+/// agent's readiness, the built-in's empty state and Settings ›
+/// Intelligence follow it.
+fn follow_claude(shell: &Shell) {
+    let mut status = copper_shell_core::claude::account(shell.store()).watch();
+    let weak = shell.downgrade();
+    copper_win_rt::spawn_local(async move {
+        while status.changed().await.is_ok() {
+            let Some(shell) = weak.upgrade() else { break };
+            let now = status.borrow_and_update().clone();
+            changed();
+            crate::addons::builtin::claude_changed(&now);
+            crate::settings::changed(&shell, "intelligence");
+        }
+    });
 }
 
 /// What the state reads from disk: the keys (this PC's and Copper Cloud's)

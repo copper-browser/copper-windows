@@ -16,8 +16,9 @@
 //! * **Its own door** ([`handle`]): `webkit.messageHandlers.copperBuiltin`
 //!   answers only this page, while it shows the built-in. It opens
 //!   Settings › Intelligence (the bridge's `openUrl` takes only web
-//!   addresses) and reads and sets `chat.json`'s `pageContext`, the
-//!   page chip's switch.
+//!   addresses), reads and sets `chat.json`'s `pageContext`, the page
+//!   chip's switch, and starts or cancels "Sign in with Claude", whose
+//!   phase it is told as it changes ([`claude_changed`]).
 //! * **Off** with `COPPER_AGENT_BUILTIN=0` (the slot shows the placeholder
 //!   again), and during the addon lanes' self-tests, which test the
 //!   placeholder.
@@ -268,6 +269,7 @@ mod win {
                     "demo": demo(),
                     "dev": cfg!(debug_assertions),
                     "pageContext": page_context(shell),
+                    "claude": claude_json(&copper_shell_core::claude::account(shell.store()).status()),
                 });
                 reply(format!(
                     "window.__copperBuiltin && window.__copperBuiltin.hello({})",
@@ -282,6 +284,18 @@ mod win {
                 } else if SETTINGS_PAGES.contains(&page) {
                     crate::settings::open(shell, page);
                 }
+            }
+            "claude" => {
+                let account = copper_shell_core::claude::account(shell.store());
+                match msg.get("do").and_then(Value::as_str) {
+                    Some("signin") => {
+                        // A refusal is the status's to say.
+                        let _ = copper_shell_core::claude::sign_in(shell);
+                    }
+                    Some("cancel") => account.cancel(),
+                    _ => {}
+                }
+                reply(claude_js(&account.status()));
             }
             "pageContext" => {
                 if let Some(on) = msg.get("on").and_then(Value::as_bool) {
@@ -299,6 +313,29 @@ mod win {
     /// The built-in's page, by address (the view's checks).
     pub fn in_slot(url: &str) -> bool {
         policy::in_slot(url, ID)
+    }
+
+    /// The sign-in as the empty state draws it: `{signedIn, phase, trouble}`.
+    fn claude_json(st: &copper_mcp::claude::Status) -> Value {
+        json!({
+            "signedIn": st.signed_in,
+            "phase": st.phase.name(),
+            "trouble": st.phase.trouble(),
+        })
+    }
+
+    fn claude_js(st: &copper_mcp::claude::Status) -> String {
+        format!(
+            "window.__copperBuiltin && window.__copperBuiltin.claude({})",
+            copper_core::addons::bridge::script_json(&claude_json(st))
+        )
+    }
+
+    /// The Claude sign-in moved on: tell the built-in's page, if it shows.
+    pub fn claude_changed(st: &copper_mcp::claude::Status) {
+        if let Some(v) = crate::addons::view::live() {
+            v.run_builtin(&claude_js(st));
+        }
     }
 }
 

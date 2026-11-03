@@ -4,13 +4,14 @@
 
 use super::*;
 
-/// Ask Jev and the gateway one small question each and keep the verdicts
+/// Ask Jev and the model lane one small question each and keep the verdicts
 /// ([`brain::check::run`] does its requests on the cloud runtime).
 pub(super) fn run_check(shell: &Shell) {
     if CHECK.with(|c| std::mem::replace(&mut c.borrow_mut().running, true)) {
         return;
     }
     let eff = effective(shell);
+    let account = copper_shell_core::claude::account(shell.store());
     let net = brain::Net::new(
         cloud::runtime().handle().clone(),
         copper_shell_core::updates::version(),
@@ -18,7 +19,7 @@ pub(super) fn run_check(shell: &Shell) {
     redraw(shell, "intelligence");
     let weak = shell.downgrade();
     copper_win_rt::spawn_local(async move {
-        let done = brain::check::run(&net, &eff).await;
+        let done = brain::check::run(&net, &eff, Some(&account)).await;
         CHECK.with(|c| *c.borrow_mut() = done);
         if let Some(s) = weak.upgrade() {
             redraw(&s, "intelligence");

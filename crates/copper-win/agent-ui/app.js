@@ -3,7 +3,7 @@
 // Copper only through window.copper (bridge v1): copper.agent.* for the
 // conversation, page for the chip and suggestions, openUrl for links, and
 // the built-in's own door (webkit.messageHandlers.copperBuiltin) for
-// Settings › Intelligence and the page-context switch.
+// Settings › Intelligence, the page-context switch and Sign in with Claude.
 //
 // Everything the agent or a page wrote goes in as text nodes (markdown.js
 // builds elements, never HTML).
@@ -37,7 +37,9 @@
     localError: "",
     menuOpen: false,
     opening: null,
-    hello: false
+    hello: false,
+    // The Claude sign-in, as the door says it: {signedIn, phase, trouble}.
+    claude: { signedIn: false, phase: "idle", trouble: "" }
   };
   var agent = null;
 
@@ -55,12 +57,18 @@
       ui.dev = !!(h && h.dev);
       ui.demo = !!(h && h.demo) || (ui.dev && /[?&]demo=1\b/.test(location.search));
       if (h && typeof h.pageContext === "boolean") ui.pageContext = h.pageContext;
+      if (h && h.claude) ui.claude = h.claude;
       var w = helloWaiters; helloWaiters = [];
       w.forEach(function (f) { f(); });
     },
     pageContext: function (on) {
       if (typeof ui.st.pageContext !== "boolean") ui.pageContext = !!on;
       renderComposer();
+    },
+    claude: function (c) {
+      if (!c || typeof c !== "object") return;
+      ui.claude = c;
+      render();
     }
   };
   function hello() {
@@ -73,6 +81,13 @@
   function openIntelligence() {
     if (!tell({ op: "settings", page: "intelligence" })) {
       ui.localError = "Open Settings › Intelligence to add an API key.";
+      render();
+    }
+  }
+  // "Sign in with Claude" opens claude.ai in a tab; Cancel gives up.
+  function claude(what) {
+    if (!tell({ op: "claude", do: what })) {
+      ui.localError = "Open Settings › Intelligence to sign in with Claude.";
       render();
     }
   }
@@ -307,14 +322,30 @@
   function renderEmpty() {
     var r = ready();
     var kind = pageKind();
-    var sig = (r ? "r" : "u") + kind + (ui.agentOk ? 1 : 0);
+    var c = ui.claude || {};
+    var phase = str(c.phase);
+    var sig = (r ? "r" : "u") + kind + (ui.agentOk ? 1 : 0) + phase + str(c.trouble);
     if (sig === lastEmpty) return;
     lastEmpty = sig;
     $("empty-title").textContent = r ? "What should we do?" : "Set up a model to start";
     $("empty-text").textContent = r
       ? "It reads the page, clicks and types for you, and draws on your canvases."
-      : "Add an API key for a model gateway in Settings › Intelligence.";
+      : "Sign in with your Claude account, or add an API key for a gateway in Settings › Intelligence.";
     $("setup").hidden = r;
+    // The sign-in's wait, or why it failed, sits with the buttons.
+    var waiting = phase === "waiting" || phase === "exchanging";
+    var wait = $("setup-wait");
+    wait.hidden = !waiting;
+    if (waiting) {
+      wait.textContent = "";
+      wait.appendChild(I.ring(10, 1.5));
+      wait.appendChild(el("span", null, phase === "waiting" ? "Finish signing in in the tab that opened…" : "Signing in…"));
+    }
+    var trouble = phase === "failed" ? str(c.trouble) : "";
+    $("setup-trouble").hidden = !trouble;
+    $("setup-trouble").textContent = trouble;
+    $("setup-actions").hidden = waiting;
+    $("setup-waiting").hidden = !waiting;
     var box = $("suggestions");
     box.textContent = "";
     box.hidden = !r;
@@ -601,7 +632,7 @@
   function canSend() { return ready() && !busy() && draft().replace(JEV, "").trim().length > 0; }
 
   function placeholder() {
-    if (!ready()) return "Add an API key to start";
+    if (!ready()) return "Sign in with Claude or add a key to start";
     var k = pageKind();
     if (k === "blank") return "Ask anything, or say what to do…";
     return k === "canvas" ? "Ask about this canvas…" : "Ask about this page…";
@@ -756,7 +787,7 @@
       var n = input.value.length;
       input.setSelectionRange(n, n);
     } else {
-      var b = $("setup-key");
+      var b = $("setup-actions").hidden ? $("setup-cancel") : $("setup-claude");
       if (b && !$("setup").hidden && !$("empty").hidden) b.focus();
     }
   }
@@ -793,6 +824,8 @@
       if (ui.atBottom && !$("scroller").hidden) toBottom(false); else scrolled();
     });
     $("setup-key").addEventListener("click", openIntelligence);
+    $("setup-claude").addEventListener("click", function () { claude("signin"); });
+    $("setup-cancel").addEventListener("click", function () { claude("cancel"); });
 
     var input = $("input");
     input.addEventListener("input", function () { grow(); renderComposer(); });
