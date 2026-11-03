@@ -480,3 +480,64 @@ impl Page for Intelligence {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::form::{Control, Line};
+
+    fn rows(st: &Status) -> Vec<Line> {
+        let mut f = Form::default();
+        account_rows(f.section("Model access"), st);
+        f.sections.remove(0).lines
+    }
+
+    fn button(line: &Line) -> (&str, &str) {
+        match &line.control {
+            Control::Button { action, label, .. } => (action.as_str(), label.as_str()),
+            other => panic!("not a button: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_account_row_follows_the_sign_in() {
+        let idle = rows(&Status::default());
+        assert_eq!(idle.len(), 1);
+        assert_eq!(button(&idle[0]), ("claude-signin", "Sign in with Claude"));
+
+        let waiting = rows(&Status {
+            phase: Phase::Waiting,
+            ..Status::default()
+        });
+        assert_eq!(button(&waiting[0]), ("claude-cancel", "Cancel"));
+        assert!(
+            matches!(&waiting[1].control, Control::Field { submit, .. } if submit == "claude-paste"),
+            "the code box"
+        );
+
+        let failed = rows(&Status {
+            phase: Phase::Failed("Sign-in timed out — try again".into()),
+            ..Status::default()
+        });
+        assert_eq!(button(&failed[0]), ("claude-signin", "Try again"));
+        assert_eq!(failed[0].tone, Tone::Error);
+        assert_eq!(
+            failed[0].detail.as_deref(),
+            Some("Sign-in timed out — try again")
+        );
+
+        let signed_in = rows(&Status {
+            signed_in: true,
+            email: "nick@example.com".into(),
+            name: "Nick".into(),
+            organization: "Exowatt".into(),
+            ..Status::default()
+        });
+        assert_eq!(signed_in.len(), 1);
+        assert_eq!(button(&signed_in[0]), ("claude-signout", "Sign out"));
+        assert_eq!(
+            signed_in[0].detail.as_deref(),
+            Some("Signed in as Nick · nick@example.com · Exowatt")
+        );
+    }
+}
