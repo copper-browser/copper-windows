@@ -1,5 +1,6 @@
 //! A small HTTPS GET to a file over WinHTTP — enough to fetch the WebView2
-//! bootstrapper without carrying an HTTP stack in copper.exe.
+//! bootstrapper and Copper's own updates without carrying an HTTP stack in
+//! copper.exe.
 //!
 //! WinHTTP uses the system's proxy settings (`AUTOMATIC_PROXY`), TLS stack
 //! and certificate store, and follows redirects (go.microsoft.com's fwlink
@@ -11,8 +12,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::Win32::Networking::WinHttp::{
-    INTERNET_DEFAULT_HTTPS_PORT, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE,
-    WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2, WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3,
+    WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE, WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2,
+    WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3, WINHTTP_OPEN_REQUEST_FLAGS,
     WINHTTP_OPTION_SECURE_PROTOCOLS, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_QUERY_FLAG_NUMBER,
     WINHTTP_QUERY_STATUS_CODE, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest,
     WinHttpQueryDataAvailable, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse,
@@ -62,10 +63,14 @@ fn query_number(request: &Handle, level: u32) -> Option<u32> {
     .map(|_| value)
 }
 
-/// GET `https://{host}{path}` into `to`. `progress(done, total)` is called as
-/// bytes arrive; setting `cancel` stops the download (the file is removed).
+/// GET `https://{host}:{port}{path}` into `to` (plain `http` when not
+/// `secure`: only Copper's test feeds). `progress(done, total)` is called
+/// as bytes arrive; setting `cancel` stops the download (the file is
+/// removed).
 pub fn download(
     host: &str,
+    port: u16,
+    secure: bool,
     path: &str,
     to: &Path,
     cancel: &AtomicBool,
@@ -102,12 +107,7 @@ pub fn download(
             );
         }
         let connection = Handle::new(
-            WinHttpConnect(
-                session.0,
-                &HSTRING::from(host),
-                INTERNET_DEFAULT_HTTPS_PORT,
-                0,
-            ),
+            WinHttpConnect(session.0, &HSTRING::from(host), port, 0),
             "WinHttpConnect",
         )?;
         let request = Handle::new(
@@ -118,7 +118,11 @@ pub fn download(
                 PCWSTR::null(),
                 PCWSTR::null(),
                 std::ptr::null(),
-                WINHTTP_FLAG_SECURE,
+                if secure {
+                    WINHTTP_FLAG_SECURE
+                } else {
+                    WINHTTP_OPEN_REQUEST_FLAGS(0)
+                },
             ),
             "WinHttpOpenRequest",
         )?;
@@ -126,7 +130,9 @@ pub fn download(
         WinHttpReceiveResponse(request.0, std::ptr::null_mut())?;
 
         let status = query_number(&request, WINHTTP_QUERY_STATUS_CODE).unwrap_or(0);
-        check_status(status, &format!("https://{host}{path}")).map_err(anyhow::Error::msg)?;
+        let scheme = if secure { "https" } else { "http" };
+        check_status(status, &format!("{scheme}://{host}:{port}{path}"))
+            .map_err(anyhow::Error::msg)?;
         let total = query_number(&request, WINHTTP_QUERY_CONTENT_LENGTH).map(u64::from);
 
         let mut file = File::create(to)?;

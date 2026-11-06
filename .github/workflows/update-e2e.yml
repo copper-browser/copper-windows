@@ -1,0 +1,73 @@
+name: update-e2e
+
+# Copper updating itself, end to end, on a real Windows runner: build A (this
+# version) and B (99.0.0), install A, serve B from a local feed and watch A
+# refuse a mismatched download, then download, verify, install and relaunch
+# B — by Restart to Update and by quitting (tools/update-e2e.ps1).
+on:
+  pull_request:
+    paths:
+      - crates/copper-setup/**
+      - crates/copper-win/src/self_update.rs
+      - crates/copper-win/src/update_selftest.rs
+      - crates/copper-win/src/updates.rs
+      - crates/copper-win/src/app.rs
+      - shared/copper-linux
+      - tools/update-e2e.ps1
+      - .github/workflows/update-e2e.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  e2e:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build A (this version) and B (99.0.0)
+        shell: pwsh
+        timeout-minutes: 50
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path e2e | Out-Null
+          cargo build -p copper-win --locked
+          if ($LASTEXITCODE) { throw 'build A failed' }
+          Copy-Item target/debug/copper.exe e2e/A.exe
+          # Only [workspace.package]'s version is a bare `version = ` line.
+          $toml = Get-Content Cargo.toml -Raw
+          $bumped = [regex]::new('(?m)^version = "[^"]*"').Replace($toml, 'version = "99.0.0"', 1)
+          Set-Content Cargo.toml $bumped -NoNewline
+          cargo build -p copper-win
+          if ($LASTEXITCODE) { throw 'build B failed' }
+          Copy-Item target/debug/copper.exe e2e/B.exe
+          git checkout -- Cargo.toml Cargo.lock
+      - name: Update end to end
+        shell: pwsh
+        timeout-minutes: 25
+        run: ./tools/update-e2e.ps1 -A e2e/A.exe -B e2e/B.exe -Out e2e/out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: update-e2e
+          path: |
+            e2e/out/**/*.txt
+            e2e/out/logs/
+            e2e/out/feed/*.json
+          if-no-files-found: warn
+          retention-days: 14

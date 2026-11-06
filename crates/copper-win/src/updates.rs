@@ -2,11 +2,13 @@
 //! Windows is published, one HTTP/1.1 exchange over rustls (on a worker
 //! thread, so the UI thread never waits on the network), and the line that
 //! says a new version is out. The check itself — when, what is newer,
-//! `updates.json` — is copper-shell-core's `updates` lane.
+//! `updates.json` — is copper-shell-core's `updates` lane; getting the new
+//! version ready and installing it is `self_update`'s.
 
 use crate::chrome::glyph;
 use crate::commands::Command;
 use crate::platform::{Shell, Win};
+use crate::self_update;
 use copper_engine::LocalFuture;
 use copper_shell_core::main_loop::spawn_blocking;
 use copper_shell_core::updates::{self, Channel, MAX_ANSWER, UpdatesApp};
@@ -58,18 +60,38 @@ impl UpdatesApp<Win> for WinUpdates {
     }
 
     fn announce(&self, shell: &Shell, version: &str) {
-        shell.toast(&format!("Copper {version} is available — Settings › About"));
+        // The installed copy says so once the download is ready (or why it
+        // isn't); a portable one points at the release page.
+        if !self_update::enabled() {
+            shell.toast(&format!("Copper {version} is available — Settings › About"));
+        } else if self_update::ready().as_deref() == Some(version) {
+            shell.toast(&format!("Copper {version} is ready — Restart to Update"));
+        }
         crate::settings::changed(shell, "about");
     }
 
     fn changed(&self, shell: &Shell) {
         crate::settings::changed(shell, "about");
+        if !updates::status::<Win>().checking {
+            self_update::stage(shell);
+        }
     }
 }
 
 /// Start the lane and its commands.
 pub fn register(shell: &Shell) {
     updates::start::<Win>(shell, Rc::new(WinUpdates));
+    self_update::start(shell);
+    crate::update_selftest::maybe_start(shell);
+    shell.view().commands().add(
+        Command::new(
+            "restart-to-update",
+            "Restart to Update",
+            glyph::UPDATE,
+            self_update::restart,
+        )
+        .when(|_| self_update::ready().is_some()),
+    );
     shell.view().commands().add(Command::new(
         "check-updates",
         "Check for Updates",
@@ -87,7 +109,7 @@ pub fn register(shell: &Shell) {
                 }
             },
         )
-        .when(|_| updates::available::<Win>().is_some()),
+        .when(|_| updates::available::<Win>().is_some() && self_update::ready().is_none()),
     );
 }
 

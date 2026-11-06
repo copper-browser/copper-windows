@@ -1,8 +1,8 @@
 //! Settings › About › Updates (`SettingsFork.swift` `UpdatesPage`; a page
 //! of its own until Copper#115): which Copper this is, and the next one. The check is copper-shell-core's `updates` lane (every six
-//! hours, and on Check now); Copper for Windows doesn't download or swap
-//! itself, so a newer Copper is offered as the Windows installer on the
-//! releases page — never as "ready" or "Update".
+//! hours, and on Check now). The installed copy downloads and verifies the
+//! new one itself (`self_update`) and offers Restart to Update; a portable
+//! copy is offered the installer on the releases page.
 
 use crate::platform::{Shell, Win};
 use crate::settings::form::{Form, Pill};
@@ -84,24 +84,62 @@ pub(super) fn section(f: &mut Form) {
     )
     .anchor("updates.check")
     .keywords(&["version", "check for updates"]);
-    if let Some(v) = &newer {
+    let me = crate::self_update::status();
+    if let Some(ready) = &me.ready {
         sec.button(
-                &format!("Copper {v} is out"),
-                Some("Download the Windows installer from Copper's releases page and run it — your tabs and settings stay"),
-                "download",
-                "Download",
-                true,
-            )
+            &format!("Copper {ready} is ready"),
+            Some(
+                if crate::self_update::install_at_quit(me.outcome.as_ref(), ready) {
+                    "Copper restarts and your tabs come back. Quitting installs it too"
+                } else {
+                    "Copper restarts and your tabs come back"
+                },
+            ),
+            "restart-update",
+            "Restart to Update",
+            true,
+        )
+        .anchor("updates.install");
+    } else if let Some(v) = newer.as_ref().filter(|_| me.enabled && me.busy) {
+        sec.note(&format!("Downloading Copper {v}…"), None)
             .anchor("updates.install");
-        if let Some(notes) = st
+    } else if let Some(v) = &newer {
+        let detail = match &me.error {
+            Some(e) if me.enabled => format!(
+                "Couldn’t get it ready: {e}. Check now tries again, or download the installer and run it"
+            ),
+            _ => "Download the Windows installer from Copper's releases page and run it — your tabs and settings stay".to_owned(),
+        };
+        sec.button(
+            &format!("Copper {v} is out"),
+            Some(&detail),
+            "download",
+            "Download",
+            true,
+        )
+        .anchor("updates.install");
+    }
+    if let Some(v) = &newer
+        && let Some(notes) = st
             .latest
             .as_ref()
             .and_then(|l| l.notes.as_deref())
             .filter(|n| !n.trim().is_empty())
-        {
-            sec.note(&format!("What’s new in {v}"), Some(notes))
-                .anchor("updates.notes");
-        }
+    {
+        sec.note(&format!("What’s new in {v}"), Some(notes))
+            .anchor("updates.notes");
+    }
+    if let Some(o) = &me.outcome {
+        let when = ago(o.at.unix());
+        let (title, detail) = if o.ok {
+            (format!("Updated to Copper {}", o.detail), when)
+        } else {
+            (
+                "The last update didn’t install".to_owned(),
+                format!("{} · {when}", o.detail),
+            )
+        };
+        sec.note(&title, Some(&detail)).anchor("updates.outcome");
     }
     let mut note = format!("Updates come from {}", feed_host());
     if let Some(when) = st.checked {
@@ -116,6 +154,7 @@ pub(super) fn act(shell: &Shell, action: &str) -> bool {
     match action {
         a if a.starts_with("addon-") => crate::addons::updates_act(shell, a),
         "check" => updates::check::<Win>(shell, true),
+        "restart-update" => crate::self_update::restart(shell),
         "download" => {
             if let Err(e) = crate::sys::shell::open(&updates::release_page::<Win>()) {
                 tracing::warn!("release page: {e}");

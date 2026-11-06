@@ -208,6 +208,67 @@ pub fn close_running_copper(dir: &Path, grace: Duration, found: impl FnOnce()) -
     left
 }
 
+/// Wait (at most `limit`) for process `pid` to exit — the Copper that
+/// started this update, quitting. Only a process running from `dir` is
+/// waited for: by the time setup looks, the pid may be someone else's.
+pub fn wait_for_exit(pid: u32, dir: &Path, limit: Duration) {
+    // SAFETY: a handle to wait on and read the exe path of, closed below.
+    let opened = unsafe {
+        OpenProcess(
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        )
+    };
+    let Ok(handle) = opened else {
+        log!("Copper (pid {pid}) has already quit");
+        return;
+    };
+    // Canonical on both sides: a junction in the profile path must not hide it.
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let inside = image_path(handle).is_some_and(|p| {
+        is_inside(
+            &canon(Path::new(&p)).to_string_lossy(),
+            &canon(dir).to_string_lossy(),
+        )
+    });
+    if inside {
+        let started = Instant::now();
+        // SAFETY: a handle opened with SYNCHRONIZE.
+        let r = unsafe { WaitForSingleObject(handle, limit.as_millis() as u32) };
+        log!(
+            "waited {:?} for Copper (pid {pid}) to quit{}",
+            started.elapsed(),
+            if r == WAIT_TIMEOUT {
+                "; it is still running"
+            } else {
+                ""
+            }
+        );
+    }
+    // SAFETY: the handle opened above, closed once.
+    let _ = unsafe { CloseHandle(handle) };
+}
+
+/// Is a Copper window open from `dir` (one this setup didn't start)?
+pub fn copper_open(dir: &Path) -> bool {
+    let dir = dir.to_string_lossy();
+    windows_of_class(COPPER_WINDOW_CLASS)
+        .into_iter()
+        .any(|(_, pid)| {
+            // SAFETY: a handle to read the exe path of, closed right after.
+            let Ok(handle) =
+                (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) })
+            else {
+                return false;
+            };
+            let inside = image_path(handle).is_some_and(|p| is_inside(&p, &dir));
+            // SAFETY: the handle just opened.
+            let _ = unsafe { CloseHandle(handle) };
+            inside
+        })
+}
+
 /// Start Copper, detached, from its own folder.
 pub fn launch(exe: &Path) -> anyhow::Result<()> {
     let dir = exe.parent().unwrap_or(Path::new("."));

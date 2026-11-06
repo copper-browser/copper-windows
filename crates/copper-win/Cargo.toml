@@ -38,6 +38,9 @@ png = "0.17"
 # with the same rustls + ring + webpki-roots copper-cloud already links.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
+# Checking a downloaded update against the feed's SHA-256 (the same crate
+# copper-core hashes addon bundles with).
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 copper-engine-webview2.workspace = true
