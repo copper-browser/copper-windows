@@ -101,6 +101,7 @@ fn uninstall_options() -> UninstallOptions {
 pub fn run_installer() -> i32 {
     let options = install_options();
     let Some(_lock) = single::acquire(options.silent) else {
+        reopen_after_update(&options);
         return exit::busy(options.silent);
     };
     let _com = sys::shell::Com::init();
@@ -134,18 +135,23 @@ fn silent_install(options: &InstallOptions) -> i32 {
         }
         Err(e) => {
             log::line(&format!("silent install failed: {e}"));
-            // Restart to Update closed Copper for this: open the one there
-            // is rather than leave the person with none.
-            let exe = install::installed_exe();
-            if options.launch
-                && options.update_from.is_some()
-                && exe.is_file()
-                && let Err(e) = sys::process::launch(&exe)
-            {
-                log::line(&format!("couldn't open Copper: {e:#}"));
-            }
+            reopen_after_update(options);
             exit::FAILED
         }
+    }
+}
+
+/// Restart to Update closed Copper for an update that couldn't go ahead:
+/// open the Copper there is rather than leave the person with none.
+#[cfg(windows)]
+fn reopen_after_update(options: &InstallOptions) {
+    let exe = install::installed_exe();
+    if options.launch
+        && options.update_from.is_some()
+        && exe.is_file()
+        && let Err(e) = sys::process::launch(&exe)
+    {
+        log::line(&format!("couldn't open Copper: {e:#}"));
     }
 }
 

@@ -122,6 +122,17 @@ pub fn settle(pending: &str, running: &str) -> (bool, String) {
     }
 }
 
+/// Install a staged `version` when Copper quits — unless installing that
+/// very version already failed (`outcome`): then only Restart to Update
+/// tries again, so a failure that keeps happening doesn't run at every quit.
+pub fn install_at_quit(
+    outcome: Option<&copper_core::updates::UpdateOutcome>,
+    version: &str,
+) -> bool {
+    !outcome
+        .is_some_and(|o| !o.ok && o.extra.get("version").and_then(Value::as_str) == Some(version))
+}
+
 /// The size and SHA-256 (lower-case hex) of everything `r` reads.
 pub fn sha256_of(r: &mut impl Read) -> std::io::Result<(u64, String)> {
     use sha2::Digest as _;
@@ -175,6 +186,12 @@ mod imp {
 
     fn with<R>(f: impl FnOnce(&mut State) -> R) -> R {
         STATE.with(|s| f(&mut s.borrow_mut()))
+    }
+
+    /// Not in a scripted run (`--screenshot`): one must never install over,
+    /// or close, the Copper someone is using.
+    fn active(shell: &Shell) -> bool {
+        enabled() && !shell.options().scripted()
     }
 
     /// This is the installed copy, so it may replace itself.
@@ -278,7 +295,7 @@ mod imp {
     /// At launch: read the state, settle a pending update, drop what is
     /// stale.
     pub fn start(shell: &Shell) {
-        if !enabled() {
+        if !active(shell) {
             return;
         }
         let mut saved: UpdatesFile = std::fs::read(state_file())
@@ -295,16 +312,17 @@ mod imp {
             } else {
                 format!("Copper {} wasn’t installed — Settings › About", p.version)
             });
-            if !ok {
-                // Fetch and check it afresh before trying again.
-                saved.staged = None;
-            }
-            saved.outcome = Some(UpdateOutcome {
+            let mut outcome = UpdateOutcome {
                 ok,
                 detail,
                 at: SwiftDate::now(),
                 ..Default::default()
-            });
+            };
+            if !ok {
+                // Kept staged (it verified); see `install_at_quit`.
+                outcome.extra.insert("version".into(), p.version.into());
+            }
+            saved.outcome = Some(outcome);
         }
         saved.staged = saved
             .staged
@@ -333,7 +351,7 @@ mod imp {
         let Some(version) = updates::available::<Win>() else {
             return;
         };
-        if !enabled()
+        if !active(shell)
             || with(|s| s.busy || s.applying)
             || ready().is_some_and(|r| !updates::is_newer(&version, &r))
         {
@@ -393,7 +411,9 @@ mod imp {
         }
         let asset = pick(&manifest, ARCH, test)?;
         let name = staged_name(&version).ok_or("The feed’s version isn’t one")?;
-        let path = spawn_blocking(move || download(&asset, &dir().join(name)))
+        let to = dir().join(name);
+        let wanted = version.clone();
+        let path = spawn_blocking(move || download(&asset, &wanted, &to))
             .await
             .unwrap_or_else(|| Err("The download stopped".into()))?;
         let sha256 = path.1;
@@ -406,9 +426,46 @@ mod imp {
         })
     }
 
-    /// Download `asset` to `to` (via `to.part`) and keep it only if it
-    /// verifies (worker thread): the file and its SHA-256.
-    fn download(asset: &Asset, to: &Path) -> Result<(PathBuf, String), String> {
+    /// The `ProductVersion` in a copper.exe's version block
+    /// (`assets/copper.rc.in`), which its signature covers.
+    fn product_version(file: &Path) -> Option<String> {
+        use windows::Win32::Storage::FileSystem::{
+            GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+        };
+        let path = windows::core::HSTRING::from(file);
+        // SAFETY: a sized buffer for the block, then a pointer into it read
+        // for the length VerQueryValueW gives (UTF-16 units, NUL included).
+        unsafe {
+            let size = GetFileVersionInfoSizeW(&path, None);
+            if size == 0 {
+                return None;
+            }
+            let mut block = vec![0u8; size as usize];
+            GetFileVersionInfoW(&path, None, size, block.as_mut_ptr().cast()).ok()?;
+            let mut value = std::ptr::null_mut();
+            let mut len = 0u32;
+            let found = VerQueryValueW(
+                block.as_ptr().cast(),
+                windows::core::w!("\\StringFileInfo\\040904B0\\ProductVersion"),
+                &mut value,
+                &mut len,
+            );
+            if !found.as_bool() || value.is_null() {
+                return None;
+            }
+            let text = std::slice::from_raw_parts(value as *const u16, len as usize);
+            Some(
+                String::from_utf16_lossy(text)
+                    .trim_end_matches('\0')
+                    .trim()
+                    .to_owned(),
+            )
+        }
+    }
+
+    /// Download `asset` (Copper `version`) to `to` (via `to.part`) and keep
+    /// it only if it verifies (worker thread): the file and its SHA-256.
+    fn download(asset: &Asset, version: &str, to: &Path) -> Result<(PathBuf, String), String> {
         let folder = to.parent().ok_or("No folder")?;
         std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
         let part = to.with_extension("exe.part");
@@ -448,14 +505,23 @@ mod imp {
                 let mut f = std::fs::File::open(&part).map_err(|e| e.to_string())?;
                 let (size, sha) = sha256_of(&mut f).map_err(|e| e.to_string())?;
                 verify(asset, size, &sha)?;
+                // The feed's label must be the build's own (signed) word: an
+                // older build relabelled newer is refused.
+                let says = product_version(&part);
+                if says.as_deref() != Some(version) {
+                    return Err(format!(
+                        "The download is Copper {}, not {version}",
+                        says.as_deref().unwrap_or("of no version")
+                    ));
+                }
                 let running = std::env::current_exe()
                     .map(|me| signature::check(&me))
                     .unwrap_or((-1, None));
+                let running = signature::publisher(running.0, running.1.as_deref()).map_err(|s| {
+                    format!("This Copper’s own signature doesn’t hold up (0x{s:08x}), so it takes no updates")
+                })?;
                 let update = signature::check(&part);
-                same_publisher(
-                    signature::valid_signer(running.0, running.1.as_deref()),
-                    signature::valid_signer(update.0, update.1.as_deref()),
-                )?;
+                same_publisher(running, signature::valid_signer(update.0, update.1.as_deref()))?;
                 Ok(sha)
             });
         let sha = match checked {
@@ -476,9 +542,15 @@ mod imp {
     /// Start the staged installer: `relaunch` opens Copper again after.
     /// `false` when nothing was started (the reason is in Settings).
     fn apply(shell: &Shell, relaunch: bool) -> bool {
-        let Some(staged) = with(|s| s.saved.staged.clone()).filter(|_| enabled()) else {
+        let Some(staged) = with(|s| s.saved.staged.clone()).filter(|_| active(shell)) else {
             return false;
         };
+        // A release pulled since (the feed no longer names it or newer) is
+        // not installed.
+        if !updates::available::<Win>().is_some_and(|v| !updates::is_newer(&staged.version, &v)) {
+            discard(shell, "The release is no longer offered");
+            return false;
+        }
         // Held, without sharing writes, until the installer is running: the
         // bytes hashed are the bytes run.
         let held = std::fs::OpenOptions::new()
@@ -489,17 +561,8 @@ mod imp {
         let held = match held {
             Ok((f, sha)) if sha.eq_ignore_ascii_case(&staged.sha256) => f,
             other => {
-                tracing::warn!(
-                    ok = other.is_ok(),
-                    "the staged update changed; discarding it"
-                );
-                with(|s| {
-                    s.saved.staged = None;
-                    s.error = Some("The downloaded update changed on disk".into());
-                });
-                save();
-                sweep(None);
-                crate::settings::changed(shell, "about");
+                tracing::warn!(ok = other.is_ok(), "the staged update changed");
+                discard(shell, "The downloaded update changed on disk");
                 return false;
             }
         };
@@ -547,6 +610,18 @@ mod imp {
         }
     }
 
+    /// Forget the staged update and delete it, saying why.
+    fn discard(shell: &Shell, why: &str) {
+        tracing::warn!("discarding the staged update: {why}");
+        with(|s| {
+            s.saved.staged = None;
+            s.error = Some(why.to_owned());
+        });
+        save();
+        sweep(None);
+        crate::settings::changed(shell, "about");
+    }
+
     /// Restart to Update: install the staged Copper, then open it again.
     pub fn restart(shell: &Shell) {
         if apply(shell, true) {
@@ -556,7 +631,11 @@ mod imp {
 
     /// Copper is quitting: a staged update installs now, opening nothing.
     pub fn on_quit(shell: &Shell) {
-        if !with(|s| s.applying) && ready().is_some() {
+        let at_quit = with(|s| match &s.saved.staged {
+            Some(st) => !s.applying && install_at_quit(s.saved.outcome.as_ref(), &st.version),
+            None => false,
+        });
+        if at_quit && ready().is_some() {
             apply(shell, false);
         }
     }
@@ -646,6 +725,27 @@ mod tests {
         for bad in ["", "..\\..\\x", "0.3.5/../a", "v0.3.5", "0.3.5 x", "0.3:5"] {
             assert!(staged_name(bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_version_that_failed_to_install_waits_for_restart_to_update() {
+        use copper_core::updates::UpdateOutcome;
+        let failed = |v: &str| UpdateOutcome {
+            ok: false,
+            extra: [("version".to_owned(), json!(v))].into_iter().collect(),
+            ..Default::default()
+        };
+        assert!(install_at_quit(None, "0.3.5"));
+        assert!(!install_at_quit(Some(&failed("0.3.5")), "0.3.5"));
+        assert!(
+            install_at_quit(Some(&failed("0.3.5")), "0.3.6"),
+            "a newer one goes ahead"
+        );
+        let ok = UpdateOutcome {
+            ok: true,
+            ..failed("0.3.5")
+        };
+        assert!(install_at_quit(Some(&ok), "0.3.5"));
     }
 
     #[test]

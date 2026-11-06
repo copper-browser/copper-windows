@@ -33,12 +33,26 @@ pub fn trust(status: i32) -> Trust {
     }
 }
 
+/// `TRUST_E_NOSIGNATURE`: the file carries no signature at all.
+pub const NO_SIGNATURE: i32 = 0x800B_0100_u32 as i32;
+
 /// Who signed the file, when the signature holds up (`status`) and names
 /// someone; `None` for an unsigned file or a broken signature.
 pub fn valid_signer(status: i32, signer: Option<&str>) -> Option<&str> {
     signer
         .map(str::trim)
         .filter(|s| trust(status) != Trust::Invalid && !s.is_empty())
+}
+
+/// Whose a file is, failing closed: `Ok(None)` only when it carries no
+/// signature at all, `Ok(Some(signer))` when its signature holds up, and
+/// `Err(status)` for one that doesn't (revoked, expired, tampered, no
+/// readable signer) — never mistaken for "unsigned".
+pub fn publisher(status: i32, signer: Option<&str>) -> Result<Option<&str>, i32> {
+    if status == NO_SIGNATURE {
+        return Ok(None);
+    }
+    valid_signer(status, signer).map(Some).ok_or(status)
 }
 
 #[cfg(windows)]
@@ -167,5 +181,18 @@ mod tests {
         );
         assert_eq!(valid_signer(0, None), None);
         assert_eq!(valid_signer(0, Some("  ")), None);
+    }
+
+    #[test]
+    fn only_a_missing_signature_reads_as_unsigned() {
+        assert_eq!(publisher(NO_SIGNATURE, None), Ok(None));
+        assert_eq!(
+            publisher(0, Some("Exowatt, Inc.")),
+            Ok(Some("Exowatt, Inc."))
+        );
+        let revoked = 0x800B_010C_u32 as i32;
+        assert_eq!(publisher(revoked, Some("Exowatt, Inc.")), Err(revoked));
+        assert_eq!(publisher(0, None), Err(0), "signed, but by no one readable");
+        assert_eq!(publisher(-1, None), Err(-1), "couldn't be checked at all");
     }
 }

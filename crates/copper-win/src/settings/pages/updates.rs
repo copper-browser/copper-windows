@@ -88,7 +88,13 @@ pub(super) fn section(f: &mut Form) {
     if let Some(ready) = &me.ready {
         sec.button(
             &format!("Copper {ready} is ready"),
-            Some("Copper restarts and your tabs come back. Quitting installs it too"),
+            Some(
+                if crate::self_update::install_at_quit(me.outcome.as_ref(), ready) {
+                    "Copper restarts and your tabs come back. Quitting installs it too"
+                } else {
+                    "Copper restarts and your tabs come back"
+                },
+            ),
             "restart-update",
             "Restart to Update",
             true,

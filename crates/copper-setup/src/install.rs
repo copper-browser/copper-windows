@@ -286,6 +286,13 @@ pub fn run(
                 "Copper changed since this update was downloaded ({installed:?} is installed, not {from})"
             )));
         }
+        // Someone opened Copper again meanwhile: never close a window this
+        // update wasn't asked to; it installs at that Copper's quit.
+        if process::copper_open(&dir) {
+            return Err(fail(anyhow::anyhow!(
+                "Copper was opened again before the update could install"
+            )));
+        }
     }
 
     if !same_file(&src, &dir.join(EXE_NAME)) {
