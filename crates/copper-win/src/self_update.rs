@@ -629,8 +629,13 @@ mod imp {
         }
     }
 
-    /// Copper is quitting: a staged update installs now, opening nothing.
+    /// Copper is quitting: a staged update installs now, opening nothing —
+    /// unless a setup is what closes it (an uninstall, a manual install):
+    /// the update would wait for that setup and then fight it.
     pub fn on_quit(shell: &Shell) {
+        if copper_setup::setup_running() {
+            return;
+        }
         let at_quit = with(|s| match &s.saved.staged {
             Some(st) => !s.applying && install_at_quit(s.saved.outcome.as_ref(), &st.version),
             None => false,
