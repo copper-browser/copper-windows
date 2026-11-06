@@ -43,6 +43,8 @@ pub use install::{
     unregister,
 };
 #[cfg(windows)]
+pub use single::running as setup_running;
+#[cfg(windows)]
 pub use sys::http::download;
 #[cfg(windows)]
 pub use sys::process::COPPER_WINDOW_CLASS;
@@ -216,7 +218,9 @@ pub fn open_default_apps_settings() -> anyhow::Result<()> {
 #[cfg(windows)]
 mod single {
     use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0};
-    use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
+    use windows::Win32::System::Threading::{
+        CreateMutexW, OpenMutexW, ReleaseMutex, SYNCHRONIZATION_SYNCHRONIZE, WaitForSingleObject,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
         FindWindowW, IsIconic, SW_RESTORE, SetForegroundWindow, ShowWindow,
     };
@@ -234,11 +238,28 @@ mod single {
         }
     }
 
+    /// The setup lock's name (this session's namespace).
+    const NAME: PCWSTR = w!("Local\\CopperSetup");
+
+    /// Is a setup running in this session (it holds or waits for the lock)?
+    /// A Copper it closes must not start an update of its own.
+    pub fn running() -> bool {
+        // SAFETY: opening a named mutex, closed at once.
+        match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, NAME) } {
+            Ok(h) => {
+                // SAFETY: the handle just opened.
+                let _ = unsafe { CloseHandle(h) };
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Take the setup lock. Silent runs wait for it (two silent installs in
     /// a row from a script); windowed runs focus the other window instead.
     pub fn acquire(silent: bool) -> Option<Lock> {
         // SAFETY: a named mutex in this session's namespace.
-        let handle = unsafe { CreateMutexW(None, false, w!("Local\\CopperSetup")) }.ok()?;
+        let handle = unsafe { CreateMutexW(None, false, NAME) }.ok()?;
         let wait_ms = if silent { 5 * 60 * 1000 } else { 0 };
         // SAFETY: valid handle.
         let r = unsafe { WaitForSingleObject(handle, wait_ms) };
