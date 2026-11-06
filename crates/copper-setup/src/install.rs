@@ -21,6 +21,9 @@ use crate::webview2;
 
 /// How long a running Copper gets to close before setup ends it.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long an update waits for the Copper that started it to quit (saving
+/// its session) before setup closes whatever is left the usual way.
+const QUIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Why an install stopped.
 #[derive(Debug)]
@@ -267,6 +270,23 @@ pub fn run(
         log!("install failed: {e:#}");
         Failure::Install(e)
     };
+
+    if let Some(pid) = options.wait_pid {
+        process::wait_for_exit(pid, &dir, QUIT_TIMEOUT);
+    }
+    // An update replaces only the Copper that downloaded it: if another
+    // setup changed Copper meanwhile, this one would be a step back.
+    if let Some(from) = &options.update_from {
+        let installed = installed_version();
+        if !installed
+            .as_deref()
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case(from))
+        {
+            return Err(fail(anyhow::anyhow!(
+                "Copper changed since this update was downloaded ({installed:?} is installed, not {from})"
+            )));
+        }
+    }
 
     if !same_file(&src, &dir.join(EXE_NAME)) {
         process::close_running_copper(&dir, CLOSE_TIMEOUT, || report(Step::CloseCopper));

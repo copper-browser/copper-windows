@@ -22,6 +22,15 @@ pub enum Launch {
     App,
 }
 
+/// Open Copper after a silent install too (Copper's own Restart to Update).
+pub const RELAUNCH: &str = "--relaunch";
+/// `--wait-pid=<pid>`: first wait for that Copper (the one updating itself)
+/// to finish quitting.
+pub const WAIT_PID: &str = "--wait-pid=";
+/// `--update-from=<version>`: install only if that version is still the
+/// one installed (nothing else changed Copper since it staged the update).
+pub const UPDATE_FROM: &str = "--update-from=";
+
 /// Choices for an install. The window offers the same two as switches.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct InstallOptions {
@@ -30,8 +39,28 @@ pub struct InstallOptions {
     /// Put a shortcut on the desktop as well (off unless asked for).
     pub desktop_shortcut: bool,
     /// Open Copper when done. On for the window; `--no-launch` turns it off.
-    /// Silent installs never launch.
+    /// Silent installs launch only with [`RELAUNCH`].
     pub launch: bool,
+    /// [`WAIT_PID`]: the Copper that started this update, to let quit first.
+    pub wait_pid: Option<u32>,
+    /// [`UPDATE_FROM`]: the version this update replaces.
+    pub update_from: Option<String>,
+}
+
+/// The arguments a running Copper (`pid`, version `from`) starts its staged
+/// installer with: silent, after it has quit, only over itself, and opened
+/// again when `relaunch`.
+pub fn update_args(pid: u32, from: &str, relaunch: bool) -> Vec<String> {
+    let mut args = vec![
+        "--install".to_owned(),
+        "--silent".to_owned(),
+        format!("{WAIT_PID}{pid}"),
+        format!("{UPDATE_FROM}{from}"),
+    ];
+    if relaunch {
+        args.push(RELAUNCH.to_owned());
+    }
+    args
 }
 
 /// Choices for an uninstall.
@@ -66,6 +95,7 @@ fn flags(args: &[OsString]) -> Vec<String> {
 pub fn classify(exe_stem: Option<&str>, args: &[OsString]) -> Launch {
     let flags = flags(args);
     let has = |names: &[&str]| flags.iter().any(|f| names.contains(&f.as_str()));
+    let value = |prefix: &str| flags.iter().find_map(|f| f.strip_prefix(prefix));
     let silent = has(&["/s", "/silent", "--silent", "-s"]);
 
     if has(&["--uninstall"]) {
@@ -78,7 +108,11 @@ pub fn classify(exe_stem: Option<&str>, args: &[OsString]) -> Launch {
         return Launch::Install(InstallOptions {
             silent,
             desktop_shortcut: has(&["--desktop-shortcut"]),
-            launch: !silent && !has(&["--no-launch"]),
+            launch: has(&[RELAUNCH]) || (!silent && !has(&["--no-launch"])),
+            wait_pid: value(WAIT_PID).and_then(|p| p.parse().ok()),
+            update_from: value(UPDATE_FROM)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned),
         });
     }
     Launch::App
@@ -139,9 +173,54 @@ mod tests {
             Launch::Install(InstallOptions {
                 silent: false,
                 desktop_shortcut: false,
-                launch: true
+                launch: true,
+                ..InstallOptions::default()
             })
         );
+    }
+
+    #[test]
+    fn an_update_waits_relaunches_and_names_what_it_replaces() {
+        let restart = update_args(4242, "0.3.4", true);
+        let restart: Vec<OsString> = restart.into_iter().map(OsString::from).collect();
+        assert_eq!(
+            classify(Some("CopperSetup-0.3.5-x64"), &restart),
+            Launch::Install(InstallOptions {
+                silent: true,
+                desktop_shortcut: false,
+                launch: true,
+                wait_pid: Some(4242),
+                update_from: Some("0.3.4".into()),
+            })
+        );
+        // Installed when Copper quits: the same, but nothing opens.
+        let on_quit: Vec<OsString> = update_args(7, "1.0.0-rc.1", false)
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+        match classify(Some("copper"), &on_quit) {
+            Launch::Install(o) => {
+                assert!(o.silent && !o.launch);
+                assert_eq!(
+                    (o.wait_pid, o.update_from.as_deref()),
+                    (Some(7), Some("1.0.0-rc.1"))
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // Malformed values are ignored, not guessed at.
+        match classify(
+            Some("copper"),
+            &args(&["--install", "--wait-pid=x", "--update-from="]),
+        ) {
+            Launch::Install(o) => assert_eq!((o.wait_pid, o.update_from), (None, None)),
+            other => panic!("{other:?}"),
+        }
+        // A plain silent install still never opens Copper.
+        match classify(Some("copper"), &args(&["--install", "/S"])) {
+            Launch::Install(o) => assert!(!o.launch && o.wait_pid.is_none()),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

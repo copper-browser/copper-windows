@@ -23,6 +23,7 @@ mod log;
 pub mod motion;
 pub mod plan;
 pub mod registration;
+pub mod signature;
 pub mod transfer;
 pub mod webview2;
 
@@ -41,6 +42,8 @@ pub use install::{
     cleanup_stale, install_dir, installed_exe, installed_version, is_installed, register,
     unregister,
 };
+#[cfg(windows)]
+pub use sys::http::download;
 #[cfg(windows)]
 pub use sys::process::COPPER_WINDOW_CLASS;
 
@@ -131,6 +134,16 @@ fn silent_install(options: &InstallOptions) -> i32 {
         }
         Err(e) => {
             log::line(&format!("silent install failed: {e}"));
+            // Restart to Update closed Copper for this: open the one there
+            // is rather than leave the person with none.
+            let exe = install::installed_exe();
+            if options.launch
+                && options.update_from.is_some()
+                && exe.is_file()
+                && let Err(e) = sys::process::launch(&exe)
+            {
+                log::line(&format!("couldn't open Copper: {e:#}"));
+            }
             exit::FAILED
         }
     }

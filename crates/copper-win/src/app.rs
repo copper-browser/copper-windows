@@ -353,9 +353,11 @@ fn canvas_tab(shell: &Shell, url: &str) -> Option<copper_core::browser::TabId> {
     copper_shell_core::canvas::tab_showing::<crate::platform::Win>(shell, &id)
 }
 
-/// Quit: remember the window's place, save the session, history and
-/// settings, stop the agents' server, close the window and end the loop.
+/// Quit: start a staged update's installer (it waits for this to end),
+/// remember the window's place, save the session, history and settings,
+/// stop the agents' server, close the window and end the loop.
 pub fn quit(shell: &Shell) {
+    crate::self_update::on_quit(shell);
     let chrome = shell.view().chrome().clone();
     if let Some(place) = sys::window::place(chrome.window().hwnd()) {
         sys::window::save(&place_file(), place);

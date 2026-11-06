@@ -208,6 +208,40 @@ pub fn close_running_copper(dir: &Path, grace: Duration, found: impl FnOnce()) -
     left
 }
 
+/// Wait (at most `limit`) for process `pid` to exit — the Copper that
+/// started this update, quitting. Only a process running from `dir` is
+/// waited for: by the time setup looks, the pid may be someone else's.
+pub fn wait_for_exit(pid: u32, dir: &Path, limit: Duration) {
+    // SAFETY: a handle to wait on and read the exe path of, closed below.
+    let opened = unsafe {
+        OpenProcess(
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        )
+    };
+    let Ok(handle) = opened else {
+        log!("Copper (pid {pid}) has already quit");
+        return;
+    };
+    if image_path(handle).is_some_and(|p| is_inside(&p, &dir.to_string_lossy())) {
+        let started = Instant::now();
+        // SAFETY: a handle opened with SYNCHRONIZE.
+        let r = unsafe { WaitForSingleObject(handle, limit.as_millis() as u32) };
+        log!(
+            "waited {:?} for Copper (pid {pid}) to quit{}",
+            started.elapsed(),
+            if r == WAIT_TIMEOUT {
+                "; it is still running"
+            } else {
+                ""
+            }
+        );
+    }
+    // SAFETY: the handle opened above, closed once.
+    let _ = unsafe { CloseHandle(handle) };
+}
+
 /// Start Copper, detached, from its own folder.
 pub fn launch(exe: &Path) -> anyhow::Result<()> {
     let dir = exe.parent().unwrap_or(Path::new("."));

@@ -62,6 +62,7 @@ mod picture;
 mod platform;
 #[cfg(windows)]
 mod reader;
+mod self_update;
 mod settings;
 #[cfg(windows)]
 mod signins;
@@ -69,6 +70,8 @@ mod signins;
 mod slot;
 #[cfg(windows)]
 mod sys;
+#[cfg(windows)]
+mod update_selftest;
 #[cfg(windows)]
 mod updates;
 #[cfg(windows)]

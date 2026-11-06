@@ -90,7 +90,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | App | Announcement toast, length-scaled timing | yes | yes | platform | shared `view::toast_time` |
 | App | Send Feedback (GitHub issue) | no | yes | platform | |
 | App | Update check (6 h + Check now) | yes | yes | shell-core `updates` | |
-| App | In-app update download + install + relaunch; update pill in the column | part | part | shell-core + installer | both notify + link only |
+| App | In-app update download + install + relaunch; update pill in the column | part | part | shell-core + installer | L notify + link only; W installed copy downloads, verifies (size, SHA-256, same signer) and stages, Restart to Update or install at quit, outcome in Settings › About (`self_update`); no pill (toast + palette) |
 | App | Links from other apps land in the front window; default browser; one instance | yes | yes | platform | |
 | App | Session never overwritten by a half-built launch | yes | yes | core `store` | |
 | App | Restore previous session (command) | no | no | core has the file | |
