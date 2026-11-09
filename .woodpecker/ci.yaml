@@ -13,6 +13,7 @@ when:
   - event: push
     branch: main
   - event: manual
+    evaluate: 'RELEASE_TAG == nil || RELEASE_TAG == ""'
 steps:
   - name: check
     image: bash
