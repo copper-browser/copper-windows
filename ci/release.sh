@@ -54,6 +54,7 @@ build() {
   fi
 
   rm -rf dist
+  export DO_NOT_TRACK=1 DAGGER_NO_NAG=1 DAGGER_NO_UPDATE_CHECK=1
   export _EXPERIMENTAL_DAGGER_RUNNER_HOST=${_EXPERIMENTAL_DAGGER_RUNNER_HOST:-unix:///run/dagger-engine/engine.sock}
   timeout 5400 dagger --progress=plain core container from --address="$RUST_IMAGE" \
     with-env-variable --name=CARGO_TERM_COLOR --value=never \
@@ -61,8 +62,8 @@ build() {
     with-env-variable --name=XWIN_ACCEPT_LICENSE --value=1 \
     with-env-variable --name=COMMIT --value="$commit" \
     with-env-variable --name=PUBLISHED_AT --value="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    with-directory --path=/ci --directory=ci \
-    with-directory --path=/src --directory="$src" --exclude=.git,target,dist,.release-src,.release-tools \
+    with-directory --path=/ci --source=ci \
+    with-directory --path=/src --source="$src" --exclude=.git,target,dist,.release-src,.release-tools \
     with-workdir --path=/src \
     with-exec --args=bash,/ci/release.sh,deps,"$tag" \
     with-exec --args=bash,/ci/release.sh,stage,"$tag" \
