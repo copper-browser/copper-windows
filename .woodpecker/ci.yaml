@@ -1,0 +1,47 @@
+# Roadrunner CI (Woodpecker + Dagger, https://cicd.apps.exowatt.com): replaces .github/workflows/ci.yml.
+# Linux x86_64 agents only, so everything is the MSVC cross build through cargo-xwin (as the
+# GitHub `cross` job). The Windows-only jobs' `cargo test` cannot run here (it needs a Windows
+# agent); clippy --all-targets on both MSVC targets still compiles the test code for x64 and ARM64.
+# xwin's MSVC CRT/SDK download (x64 + ARM64, ~1.1 GB, ~1 min) is cached in the rust primitive's
+# per-repo target volume (XWIN_CACHE_DIR=/cargo-target/xwin). ARM64: ring forces plain `clang` for
+# aarch64-pc-windows-msvc, which chokes on cargo-xwin's clang-cl CFLAGS (`/imsvc`), so the aarch64
+# commands add --driver-mode=cl to that target's C flags (see ci/release.sh). `$$` escapes `$`.
+labels:
+  tier: "0"
+when:
+  - event: pull_request
+  - event: push
+    branch: main
+  - event: manual
+steps:
+  - name: check
+    image: bash
+    commands:
+      - >-
+        ci-dagger v0.10.1 rust --src=. --repo=copper-windows --rust=1-trixie
+        --apt=clang,lld,llvm --tools=cargo-xwin@0.23.1
+        --components=clippy,rustfmt,rust-std-x86_64-pc-windows-msvc,rust-std-aarch64-pc-windows-msvc
+        --env=XWIN_ACCEPT_LICENSE=1,XWIN_CACHE_DIR=/cargo-target/xwin
+        --dep-cache=registry.dev.exowatt.com/cache --dep-cache-password=file:///etc/woodpecker/zot-ci-cache
+        --run='cargo fmt --all --check
+        && cargo xwin clippy --workspace --all-targets --target x86_64-pc-windows-msvc --locked -- -D warnings
+        && env CFLAGS_aarch64-pc-windows-msvc=--driver-mode=cl
+        cargo xwin clippy --workspace --all-targets --target aarch64-pc-windows-msvc --locked -- -D warnings'
+  # Release executables on main and manual runs only, as the GitHub workflow (no artifact upload:
+  # Roadrunner keeps none; releases come from release.yaml).
+  - name: build
+    image: bash
+    when:
+      - event: push
+        branch: main
+      - event: manual
+    commands:
+      - >-
+        ci-dagger v0.10.1 rust --src=. --repo=copper-windows --rust=1-trixie
+        --apt=clang,lld,llvm --tools=cargo-xwin@0.23.1
+        --components=clippy,rustfmt,rust-std-x86_64-pc-windows-msvc,rust-std-aarch64-pc-windows-msvc
+        --env=XWIN_ACCEPT_LICENSE=1,XWIN_CACHE_DIR=/cargo-target/xwin
+        --dep-cache=registry.dev.exowatt.com/cache --dep-cache-password=file:///etc/woodpecker/zot-ci-cache
+        --run='cargo xwin build --release -p copper-win --target x86_64-pc-windows-msvc --locked
+        && env CFLAGS_aarch64-pc-windows-msvc=--driver-mode=cl
+        cargo xwin build --release -p copper-win --target aarch64-pc-windows-msvc --locked'

@@ -1,0 +1,26 @@
+# Roadrunner release (Woodpecker + Dagger, https://cicd.apps.exowatt.com): replaces
+# .github/workflows/release.yml. A pushed v* tag (or a manual run with variable RELEASE_TAG=vX.Y.Z,
+# an existing tag: a retry without changing the sources) builds and publishes the GitHub release.
+# build: ci/release.sh cross-builds x64 + arm64 copper.exe with cargo-xwin in a rust container
+# (host `dagger` CLI) and exports dist/ (installers, zips, copper-version.json, SHA256SUMS; unsigned).
+# publish: pinned gh as exowatt-woodpecker-bot (repo secret github_release_token).
+# `$$` escapes `$` for Woodpecker. Docs: https://cicd.docs.exowatt.com/roadrunner/
+labels:
+  tier: "0"
+when:
+  - event: tag
+    ref: refs/tags/v*
+  - event: manual
+    evaluate: 'RELEASE_TAG != nil && RELEASE_TAG != ""'
+steps:
+  - name: build
+    image: bash
+    commands:
+      - bash ci/release.sh build "$$CI_COMMIT_TAG"
+  - name: publish
+    image: bash
+    environment:
+      GH_TOKEN:
+        from_secret: github_release_token
+    commands:
+      - bash ci/release.sh publish "$$CI_COMMIT_TAG"
