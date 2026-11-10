@@ -38,6 +38,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Tabs | Clear tabs ⌘⇧K + Undo; "↓ Clear" seam button | yes | yes | shell-core `clear` | L no seam button |
 | Tabs | Tab sleep (idle / memory), site marks, audio badge | yes | yes | shell-core `sleep` | W also freezes hidden WebView2s |
 | Tabs | Hot-tab CPU reading, sleep hot tabs sooner | no | no | platform sampling | |
+| Tabs | Heavy pages (over memory/32, at least 500 MB) and finished agent tabs sleep at the half hour, under the budget (Mac #131) | no | no | shell-core `sleep::choose` + per-page memory from the platform | W: WebView2 `GetProcessExtendedInfos`; L: WebKitGTK web process pid |
 | Tabs | Wake cover (last picture while a page rebuilds) | no | yes | shell-core `cover` | L never calls `on_cover` |
 | Tabs | Split view ⌘⇧D (two panes) | no | no | shell-core | |
 | Tabs | Multiple windows ⌘N, per-window space | no | no | shell-core | single window on both |
