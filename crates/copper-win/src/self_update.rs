@@ -124,6 +124,14 @@ pub fn settle(pending: &str, running: &str) -> (bool, String) {
     }
 }
 
+/// Settle a pending update to `pending` at this start (`running`) — unless
+/// a setup still runs and this isn't yet the Copper it installs: a start in
+/// the meantime (a second click). Its update isn't over, so it isn't a
+/// failure; the Copper after it settles it.
+pub fn settle_now(pending: &str, running: &str, setup_running: bool) -> bool {
+    pending == running || !setup_running
+}
+
 /// Install a staged `version` when Copper quits — unless installing that
 /// very version already failed (`outcome`): then only Restart to Update
 /// tries again, so a failure that keeps happening doesn't run at every quit.
@@ -195,6 +203,9 @@ mod imp {
 
     /// `FILE_SHARE_READ`: others may read (and run) it, not change it.
     const SHARE_READ: u32 = 1;
+
+    /// The pending note's mark of a Restart to Update (asked for by hand).
+    const ASKED: &str = "asked";
 
     #[derive(Default)]
     struct State {
@@ -338,14 +349,28 @@ mod imp {
         }
         let mut saved = load();
         let current = updates::version();
+        let now = saved
+            .pending
+            .as_ref()
+            .is_some_and(|p| settle_now(&p.version, current, copper_setup::setup_running()));
         let mut settled = false;
         let mut said = None;
-        if let Some(p) = saved.pending.take() {
+        if now && let Some(p) = saved.pending.take() {
             let (ok, detail) = settle(&p.version, current);
             tracing::info!(ok, %detail, from = %p.from, "update outcome");
             settled = true;
-            // Only good news is told; why not is in Settings › About.
-            said = ok.then(|| format!("Copper updated to {current}"));
+            // Good news is told; a failure only when Restart to Update was
+            // asked for (else Settings › About says why).
+            said = if ok {
+                Some(format!("Copper updated to {current}"))
+            } else if p.extra.get(ASKED) == Some(&Value::Bool(true)) {
+                Some(format!(
+                    "Copper {} wasn’t installed — Settings › About",
+                    p.version
+                ))
+            } else {
+                None
+            };
             let mut outcome = UpdateOutcome {
                 ok,
                 detail,
@@ -561,9 +586,11 @@ mod imp {
         Ok((to.to_path_buf(), sha))
     }
 
-    /// Start the staged installer: `relaunch` opens Copper again after.
-    /// `false` when nothing was started (the reason is in Settings).
-    fn apply(shell: &Shell, relaunch: bool) -> bool {
+    /// Start the staged installer: `by_hand` is Restart to Update (open
+    /// Copper again after, and say if it didn't install), else quitting
+    /// (open nothing). `false` when nothing was started (the reason is in
+    /// Settings).
+    fn apply(shell: &Shell, by_hand: bool) -> bool {
         let Some(staged) = with(|s| s.saved.staged.clone()).filter(|_| active(shell)) else {
             return false;
         };
@@ -572,7 +599,7 @@ mod imp {
         let offered =
             updates::available::<Win>().is_some_and(|v| !updates::is_newer(&staged.version, &v));
         let started = if offered {
-            run_installer(&staged, relaunch)
+            run_installer(&staged, by_hand, by_hand)
         } else {
             discard("The release is no longer offered");
             false
@@ -610,13 +637,13 @@ mod imp {
             return false;
         };
         with(|s| s.saved = saved);
-        run_installer(&staged, true)
+        run_installer(&staged, true, false)
     }
 
-    /// Hash the staged installer again, note it pending and start it
-    /// (`update_args`). `false` when nothing started; why is saved for
-    /// Settings › About.
-    fn run_installer(staged: &StagedUpdate, relaunch: bool) -> bool {
+    /// Hash the staged installer again, note it pending (`asked`: by hand)
+    /// and start it (`update_args`). `false` when nothing started; why is
+    /// saved for Settings › About.
+    fn run_installer(staged: &StagedUpdate, relaunch: bool, asked: bool) -> bool {
         // Held, without sharing writes, until the installer is running: the
         // bytes hashed are the bytes run.
         let held = std::fs::OpenOptions::new()
@@ -633,14 +660,16 @@ mod imp {
             }
         };
         let current = updates::version();
-        with(|s| {
-            s.saved.pending = Some(PendingUpdate {
-                version: staged.version.clone(),
-                from: current.to_owned(),
-                at: SwiftDate::now(),
-                ..Default::default()
-            });
-        });
+        let mut pending = PendingUpdate {
+            version: staged.version.clone(),
+            from: current.to_owned(),
+            at: SwiftDate::now(),
+            ..Default::default()
+        };
+        if asked {
+            pending.extra.insert(ASKED.into(), true.into());
+        }
+        with(|s| s.saved.pending = Some(pending));
         save();
         let args = copper_setup::cli::update_args(std::process::id(), current, relaunch);
         let started = std::process::Command::new(&staged.path)
@@ -651,22 +680,33 @@ mod imp {
         match started {
             Ok(child) => {
                 tracing::info!(pid = child.id(), ?args, "update installer started");
+                // The new Copper may come to the front: this one's right,
+                // passed on (copper-setup's `launch` passes it on again).
+                // SAFETY: no pointers; failing (no right to give) changes nothing.
+                let _ = unsafe {
+                    windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(child.id())
+                };
                 with(|s| s.applying = true);
                 true
             }
             Err(e) => {
                 tracing::warn!(error = %e, "update installer");
+                let mut outcome = UpdateOutcome {
+                    ok: false,
+                    detail: format!(
+                        "Couldn’t start the Copper {} installer: {e}",
+                        staged.version
+                    ),
+                    at: SwiftDate::now(),
+                    ..Default::default()
+                };
+                // Not again at every start and quit (`install_at_quit`).
+                outcome
+                    .extra
+                    .insert("version".into(), staged.version.clone().into());
                 with(|s| {
                     s.saved.pending = None;
-                    s.saved.outcome = Some(UpdateOutcome {
-                        ok: false,
-                        detail: format!(
-                            "Couldn’t start the Copper {} installer: {e}",
-                            staged.version
-                        ),
-                        at: SwiftDate::now(),
-                        ..Default::default()
-                    });
+                    s.saved.outcome = Some(outcome);
                 });
                 save();
                 false
@@ -879,6 +919,22 @@ mod tests {
         assert!(
             !go(&failed, Some("0.3.7")),
             "failed once: Restart to Update only"
+        );
+    }
+
+    #[test]
+    fn a_start_while_the_update_installs_leaves_it_pending() {
+        assert!(
+            settle_now("0.3.7", "0.3.7", true),
+            "the new Copper, its setup ending"
+        );
+        assert!(
+            settle_now("0.3.7", "0.3.6", false),
+            "the setup is over: it failed"
+        );
+        assert!(
+            !settle_now("0.3.7", "0.3.6", true),
+            "a second click meanwhile"
         );
     }
 
