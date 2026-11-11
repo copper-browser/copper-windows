@@ -1,7 +1,7 @@
 //! Copper updating itself, end to end: `COPPER_SELFTEST=update` (or
-//! `update-on-quit`, `update-refuse`) on the installed copy, with
-//! `COPPER_UPDATE_FEED` pointing at a test feed that offers a newer build
-//! (`tools/update-e2e.ps1` runs all three on a Windows runner). Results go
+//! `update-on-quit`, `update-at-launch`, `update-refuse`) on the installed
+//! copy, with `COPPER_UPDATE_FEED` pointing at a test feed that offers a
+//! newer build (`tools/update-e2e.ps1` runs them all on a Windows machine). Results go
 //! to `update-a.txt` (before) and `update-b.txt` (the Copper that started
 //! after the update) in `COPPER_SELFTEST_OUT` (default
 //! `%TEMP%\copper-update-selftest`): `PASS`/`FAIL` lines, then a count.
@@ -9,7 +9,8 @@
 //! - Before: the feed names a newer Copper; it is downloaded, its size and
 //!   SHA-256 checked and staged. `update` then runs Restart to Update;
 //!   `update-on-quit` just quits (the staged update installs then);
-//!   `update-refuse` expects a feed whose hash doesn't match to be refused
+//!   `update-at-launch` stays open for the test to end it (no quit: the
+//!   next start installs it); `update-refuse` expects a feed whose hash doesn't match to be refused
 //!   with nothing staged.
 //! - After (the same variable, inherited or set again): the pending update
 //!   settled as "Updated to" this version, and nothing is left staged.
@@ -21,7 +22,12 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-const MODES: [&str; 3] = ["update", "update-on-quit", "update-refuse"];
+const MODES: [&str; 4] = [
+    "update",
+    "update-on-quit",
+    "update-at-launch",
+    "update-refuse",
+];
 
 struct Run {
     file: PathBuf,
@@ -80,6 +86,10 @@ pub fn maybe_start(shell: &Shell) {
         }
         let restart = before(&shell, &mut r, &mode).await;
         r.finish();
+        if mode == "update-at-launch" {
+            // Left open for the test to end it, as a crash would.
+            return;
+        }
         if restart {
             self_update::restart(&shell);
         } else {

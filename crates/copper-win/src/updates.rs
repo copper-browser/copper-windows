@@ -60,12 +60,10 @@ impl UpdatesApp<Win> for WinUpdates {
     }
 
     fn announce(&self, shell: &Shell, version: &str) {
-        // The installed copy says so once the download is ready (or why it
-        // isn't); a portable one points at the release page.
+        // The installed copy updates itself without a word (Settings ›
+        // About tells); a portable one points at the release page.
         if !self_update::enabled() {
             shell.toast(&format!("Copper {version} is available — Settings › About"));
-        } else if self_update::ready().as_deref() == Some(version) {
-            shell.toast(&format!("Copper {version} is ready — Restart to Update"));
         }
         crate::settings::changed(shell, "about");
     }

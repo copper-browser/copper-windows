@@ -1,7 +1,8 @@
 //! The browser's start and end (`docs/APP.md`).
 //!
 //! In order: the taskbar identity; the command line; one browser per world
-//! (a second start hands over and leaves); the loop; WebView2 present or a
+//! (a second start hands over and leaves); a staged update installed (this
+//! start leaves; the new Copper opens); the loop; WebView2 present or a
 //! clear message; then the shell — the engine first, so the browser
 //! process starts while the window is made — the core commands and the
 //! lanes, the session restored and the window shown; then the loop runs
@@ -64,7 +65,7 @@ pub fn run(args: Vec<String>) -> i32 {
         .map(|a| args::command_line_url(a).unwrap_or_else(|| a.to_string()))
         .collect();
     open.extend(launch.single.clone());
-    let _guard = if opts.scripted() {
+    let guard = if opts.scripted() {
         None
     } else {
         match instance::claim(&open) {
@@ -73,6 +74,11 @@ pub fn run(args: Vec<String>) -> i32 {
         }
     };
     perf::step("claimed");
+    // A staged update installs now, before any window (or log): its
+    // installer waits for this process to end, then opens the new Copper.
+    if guard.is_some() && crate::self_update::at_launch(&args) {
+        return 0;
+    }
     // This start opens the window: the GPU device and the font system
     // are made on their own thread meanwhile.
     copper_win_ui::win::prewarm();
