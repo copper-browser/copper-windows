@@ -65,9 +65,9 @@ mod app {
 
     /// Tabs the list opens with: enough to scroll.
     const SITES: &[&str] = &[
-        "Office Commun",
+        "Orchard Studio",
         "Mac Studio — Apple",
-        "driceroland · GitHub",
+        "copper-browser · GitHub",
         "Are.na",
         "The Browser Company",
         "Hacker News",
