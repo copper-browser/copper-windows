@@ -83,8 +83,7 @@ impl Page for About {
         let mut f = Form::default();
         f.section("")
             .card_anchor("about.identity")
-            .note("Copper for Windows", Some("by Collin and Felipe"))
-            .footnote("Built on Search by Office Commun");
+            .note("Copper for Windows", Some("by Collin and Felipe"));
 
         super::updates::section(&mut f);
 

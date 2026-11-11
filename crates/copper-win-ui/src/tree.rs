@@ -1154,8 +1154,8 @@ mod tests {
             root,
             Node::column().width(232.0).drag().padding(Insets::all(8.0)),
         );
-        let row = t.add(side, Node::row().height(37.0).button("Office Commun"));
-        let _title = t.add(row, Node::text("Office Commun", 15.0));
+        let row = t.add(side, Node::row().height(37.0).button("Orchard Studio"));
+        let _title = t.add(row, Node::text("Orchard Studio", 15.0));
         let page = t.add(root, Node::slot().grow(1.0));
         t.layout(Size::new(1000.0, 700.0), &mut NoContent);
         (t, side, row, page)

@@ -508,7 +508,7 @@ mod tests {
         let mark = t.add(root, Node::new().size(16.0, 16.0));
         let title = t.add(
             root,
-            Node::text("Office Commun", 15.0).grow(1.0).shrink(1.0),
+            Node::text("Orchard Studio", 15.0).grow(1.0).shrink(1.0),
         );
         let close = t.add(root, Node::new().size(15.0, 15.0));
         layout(&mut t, root, Rect::new(0.0, 0.0, 216.0, 37.0), &mut Fixed);

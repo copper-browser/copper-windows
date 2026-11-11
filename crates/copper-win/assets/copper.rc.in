@@ -26,7 +26,7 @@ BEGIN
             VALUE "FileDescription", "Copper"
             VALUE "FileVersion", "@VERSION@"
             VALUE "InternalName", "copper"
-            VALUE "LegalCopyright", "Copyright (c) 2026 Office Commun"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Collin Rijock and Felipe Arce"
             VALUE "OriginalFilename", "copper.exe"
             VALUE "ProductName", "Copper"
             VALUE "ProductVersion", "@VERSION@"
