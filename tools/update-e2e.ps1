@@ -6,13 +6,17 @@ Copper updating itself, end to end, on a Windows machine (CI: update-e2e.yml).
 A and B are two copper.exe builds, B with the higher version. The script
 installs A, serves B from a local feed (COPPER_UPDATE_FEED; plain http is
 accepted only with that override) and runs the installed copy's update
-self-test (crates/copper-win/src/update_selftest.rs) three times:
+self-test (crates/copper-win/src/update_selftest.rs) four times:
 
   1. refuse          the feed's SHA-256 doesn't match: nothing is staged and A stays.
   2. restart         A downloads, verifies and stages B, runs Restart to Update;
                      B is installed, opens by itself and reports "updated to B".
   3. update-on-quit  A again (reinstalled by hand); it stages B and just quits;
                      B is installed at quit, and reports it when opened.
+  4. at-launch       A again; it stages B and is killed (no quit: a crash, a
+                     Windows restart). A started again leaves at once with no
+                     window of its own; B is installed, opens by itself and
+                     reports "updated to B".
 
 After each install the registry's DisplayVersion and the installed exe's
 SHA-256 must be the expected build's. Every wait is bounded.
@@ -152,7 +156,60 @@ try {
     Selftest 'update-on-quit' 'good.json' (Join-Path $Out 'quit')
     Report (Join-Path $Out 'quit\update-b.txt') 'on quit, after'
 
-    Write-Host 'update end-to-end: all three rounds passed'
+    # 4. Never quit (killed: a crash, Windows restarting): the next start
+    #    installs B before any window of its own, and B opens and says so.
+    Install $A
+    Expect $versionA $A 'A reinstalled'
+    $dir = Join-Path $Out 'launch'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $env:COPPER_UPDATE_FEED = "http://127.0.0.1:$Port/good.json"
+    $env:COPPER_SELFTEST = 'update-at-launch'
+    $env:COPPER_SELFTEST_OUT = $dir
+    $first = Start-Process -FilePath $installed -PassThru
+    Report (Join-Path $dir 'update-a.txt') 'at launch, before (A stages B and stays open)'
+    Start-Sleep -Seconds 3
+    Stop-Process -Id $first.Id -Force
+    WaitFor { NoCopperRunning } 60 'A to be ended'
+    Start-Sleep -Seconds 5
+    Expect $versionA $A 'ending A installed nothing'
+    $state = Get-Content -LiteralPath (Join-Path $env:LOCALAPPDATA 'Copper\Updates\state.json') -Raw | ConvertFrom-Json
+    $staged = if ($state.PSObject.Properties['staged']) { $state.staged.version } else { $null }
+    if ($staged -ne $versionB -or $state.PSObject.Properties['pending']) { Fail "after A was ended, B should be staged and nothing pending: $($state | ConvertTo-Json -Depth 5)" }
+    Write-Host "OK A ended with B staged ($staged), nothing pending"
+
+    # A started again: it must leave at once, without a window, having
+    # started B's installer.
+    $again = Start-Process -FilePath $installed -PassThru
+    $null = $again.Handle
+    $window = $false
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    while (-not $again.HasExited -and $clock.Elapsed.TotalSeconds -lt 30) {
+        $again.Refresh()
+        if ($again.MainWindowHandle -ne [IntPtr]::Zero) { $window = $true }
+        Start-Sleep -Milliseconds 10
+    }
+    if (-not $again.HasExited) { try { $again.Kill() } catch {}; Fail 'A started again kept running: no update at launch' }
+    if ($again.ExitCode -ne 0) { Fail "A started again exited $($again.ExitCode)" }
+    if ($window) { Fail 'A started again showed a window' }
+    Write-Host "OK A started again left after $([int]$clock.Elapsed.TotalMilliseconds) ms without a window"
+    # How long the person waits: from the start to the new Copper's window
+    # (only noted; B's report below is the proof it opened).
+    $shown = $null
+    while (-not $shown -and $clock.Elapsed.TotalSeconds -lt 60) {
+        $shown = Get-Process -Name copper -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero }
+        Start-Sleep -Milliseconds 50
+    }
+    Write-Host "$(if ($shown) { 'OK' } else { 'NOTE no' }) Copper window $([math]::Round($clock.Elapsed.TotalSeconds, 1)) s after A was started again"
+    Expect $versionB $B 'the next start installed B'
+    Report (Join-Path $dir 'update-b.txt') 'at launch, after (B opened by the installer)'
+    # B's start moved the last log aside: still A's killed run, so A's
+    # second start never got as far as a log, let alone a window.
+    $previous = Join-Path $env:LOCALAPPDATA 'Copper\Data\logs\copper.previous.log'
+    if (-not (Select-String -LiteralPath $previous -Pattern 'update staged' -Quiet)) { Fail "A's second start got as far as its own log" }
+    Write-Host "OK copper.previous.log is A's killed run: its second start opened nothing"
+    WaitFor { NoCopperRunning } 120 'B to quit'
+
+    Write-Host 'update end-to-end: all four rounds passed'
 }
 finally {
     if ($server -and -not $server.HasExited) { $server.Kill() }

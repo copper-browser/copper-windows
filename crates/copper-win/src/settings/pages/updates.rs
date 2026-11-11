@@ -90,7 +90,7 @@ pub(super) fn section(f: &mut Form) {
             &format!("Copper {ready} is ready"),
             Some(
                 if crate::self_update::install_at_quit(me.outcome.as_ref(), ready) {
-                    "Copper restarts and your tabs come back. Quitting installs it too"
+                    "Copper restarts and your tabs come back. It also installs itself when Copper next quits or opens"
                 } else {
                     "Copper restarts and your tabs come back"
                 },

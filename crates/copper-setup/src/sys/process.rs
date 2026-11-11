@@ -15,7 +15,8 @@ use windows::Win32::System::Threading::{
     QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW, WM_CLOSE,
+    AllowSetForegroundWindow, EnumWindows, GetClassNameW, GetWindowThreadProcessId, PostMessageW,
+    WM_CLOSE,
 };
 use windows_core::{BOOL, HSTRING, PCWSTR, PWSTR};
 
@@ -269,10 +270,14 @@ pub fn copper_open(dir: &Path) -> bool {
         })
 }
 
-/// Start Copper, detached, from its own folder.
+/// Start Copper, detached, from its own folder, and pass on the right to
+/// come to the front (an update's relaunch got it from the Copper it
+/// replaced; without it the window may open behind others).
 pub fn launch(exe: &Path) -> anyhow::Result<()> {
     let dir = exe.parent().unwrap_or(Path::new("."));
-    Command::new(exe).current_dir(dir).spawn()?;
+    let child = Command::new(exe).current_dir(dir).spawn()?;
+    // SAFETY: no pointers; failing (no right to give) changes nothing.
+    let _ = unsafe { AllowSetForegroundWindow(child.id()) };
     Ok(())
 }
 
