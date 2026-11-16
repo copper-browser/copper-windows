@@ -15,11 +15,12 @@ when:
   - event: manual
     evaluate: 'RELEASE_TAG == nil || RELEASE_TAG == ""'
 steps:
+  # --kache (ci-dagger v0.16.0): shared Rust compiler cache, read-only on pull requests; prints 'kache: disabled' until the VMs have the credential.
   - name: check
     image: bash
     commands:
       - >-
-        ci-dagger v0.10.1 rust --src=. --repo=copper-windows --rust=1-trixie
+        ci-dagger v0.16.0 rust --src=. --repo=copper-windows --kache=file:///etc/woodpecker/kache.env --rust=1-trixie
         --apt=clang,lld,llvm --tools=cargo-xwin@0.23.1
         --components=clippy,rustfmt,rust-std-x86_64-pc-windows-msvc,rust-std-aarch64-pc-windows-msvc
         --env=XWIN_ACCEPT_LICENSE=1,XWIN_CACHE_DIR=/cargo-target/xwin
@@ -38,7 +39,7 @@ steps:
       - event: manual
     commands:
       - >-
-        ci-dagger v0.10.1 rust --src=. --repo=copper-windows --rust=1-trixie
+        ci-dagger v0.16.0 rust --src=. --repo=copper-windows --kache=file:///etc/woodpecker/kache.env --rust=1-trixie
         --apt=clang,lld,llvm --tools=cargo-xwin@0.23.1
         --components=clippy,rustfmt,rust-std-x86_64-pc-windows-msvc,rust-std-aarch64-pc-windows-msvc
         --env=XWIN_ACCEPT_LICENSE=1,XWIN_CACHE_DIR=/cargo-target/xwin
