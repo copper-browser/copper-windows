@@ -11,7 +11,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use copper_engine::{
-    Bitmap, EngineError, FindOptions, Image, LocalFuture, Result, Snapshot, SnapshotRegion,
+    Bitmap, Capture, CaptureArea, CaptureRequest, EngineError, FindOptions, Image, LocalFuture,
+    Result, Snapshot, SnapshotRegion,
 };
 use copper_win_rt::{OneshotTx, oneshot};
 use serde_json::json;
@@ -29,6 +30,10 @@ use crate::win::controller::Wv;
 
 /// A hidden page may take a while to produce a frame for CDP.
 const SCREENSHOT_LIMIT: Duration = Duration::from_secs(10);
+/// Resolves once the page has drawn two more frames.
+const NEXT_FRAME: &str = "new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))";
+/// How long a capture waits for those frames.
+const FRAME_LIMIT: Duration = Duration::from_millis(300);
 /// How long hiding waits for the cover frame.
 const COVER_LIMIT: Duration = Duration::from_millis(150);
 /// How long `find` waits for WebView2 to count matches.
@@ -120,6 +125,77 @@ pub(super) fn snapshot_bitmap(page: &Rc<PageInner>) -> LocalFuture<Result<Bitmap
     Box::pin(async move {
         let image = visible.await?;
         crate::win::bitmap::decode_png(image.png).await
+    })
+}
+
+/// `PageView::capture`: an agent's screenshot of an area at a scale.
+///
+/// What a page shows at the display's scale (the viewport or part of it, of
+/// a page Chromium is rendering) is `CapturePreview`'s frame, as on screen:
+/// no CDP, so the page is not touched. Anything sharper, or beyond the
+/// viewport, is CDP `Page.captureScreenshot` with a `clip` (see `cdp.rs`
+/// for its coordinates), which re-renders the page at the scale asked: text
+/// stays sharp. For the tab on screen that re-render may show for a frame.
+pub(super) fn capture(
+    page: &Rc<PageInner>,
+    request: CaptureRequest,
+) -> LocalFuture<Result<Capture>> {
+    let page = page.clone();
+    Box::pin(async move {
+        let wv = page.view().await?;
+        let device_scale = page.host.scale();
+        let viewport_area = matches!(
+            request.area,
+            CaptureArea::Viewport | CaptureArea::ViewportRect(_)
+        );
+        if viewport_area && request.scale <= device_scale * 1.001 && page.host.rendering() {
+            let (width, _) = page.host.logical_size();
+            // The composited frame can lag a scroll the caller just made
+            // (an element scrolled into view): two animation frames on, it
+            // has it. Bounded; a page that never paints just goes on.
+            let settle = build::evaluate(NEXT_FRAME, None, true);
+            let _ = cdp::call_within(&wv.view, "Runtime.evaluate", settle, FRAME_LIMIT).await;
+            let png = capture_preview(
+                &wv,
+                COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+                SCREENSHOT_LIMIT,
+            )
+            .await?;
+            let bitmap = crate::win::bitmap::decode_png(png).await?;
+            let scale = if width > 0 {
+                f64::from(bitmap.width) / f64::from(width)
+            } else {
+                device_scale
+            };
+            let shot = Capture {
+                bitmap,
+                origin: (0.0, 0.0),
+                scale,
+            };
+            return Ok(match request.area.rect() {
+                Some(r) => shot.cropped(r),
+                None => shot,
+            });
+        }
+        let metrics = cdp::call(&wv.view, "Page.getLayoutMetrics", json!({}))
+            .await
+            .map_err(snap_err)?;
+        let (vw, vh) = page.host.logical_size();
+        let zoom = page.status.borrow().zoom;
+        let layout = build::layout(&metrics, zoom, (f64::from(vw), f64::from(vh)))
+            .ok_or_else(|| snap_err("the page has no size"))?;
+        let plan = build::shot_plan(request.area, &layout);
+        let params = build::shot_params(&plan, request.scale, device_scale);
+        let reply = cdp::call_within(&wv.view, "Page.captureScreenshot", params, SCREENSHOT_LIMIT)
+            .await
+            .map_err(snap_err)?;
+        let png = build::screenshot_bytes(&reply)?;
+        let bitmap = crate::win::bitmap::decode_png(png).await?;
+        Ok(Capture {
+            scale: f64::from(bitmap.width) / plan.clip.width,
+            bitmap,
+            origin: plan.origin,
+        })
     })
 }
 
