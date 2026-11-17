@@ -154,6 +154,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Agents | Copy prompt / Copy /jev / install command; `copper setup` for phi, Claude Code | no | no | shell-core, copper-mcp `cli` | |
 | Agents | 26 `browser_*`, 4 `jev_*`, 12 `canvas_*`, `cloud_history_delete` tools | yes | yes | copper-mcp `catalogue` | |
 | Agents | `voice_status`, `voice_transcript` | no | no | needs Voice | |
+| Agents | `browser_take_screenshot` / `copper shot` of any part: element (`ref`, `selector`), `region`, whole page; `padding`; `scale` 1–4 (HD); `filename` folder → `copper-YYYYMMDD-HHMMSS.png` | yes | yes | copper-mcp `screenshot`, `shot`; engine `PageView::capture` | Same schema, rules and answer as the Mac. HD is re-rendered: L for an agent's background tab (backstage lens: page laid out k× bigger at k× zoom for the snapshot), the tab on screen is enlarged and says `Upscaled`; W by CDP `clip.scale` (the tab on screen too, may show for a frame). `frame` (+ selector) is refused on both: no frame addressing yet |
 | Agents | Who is calling, per-caller agent tabs, backstage paints, announce each call | yes | yes | copper-mcp, shell-core | |
 | Agents | CLI page verbs, `signin`, `autofill`, `cloud-history` | yes | yes | copper-mcp `cli` | |
 | Agents | CLI `run --vision/--model/--strategy/--json-run` | no | no | copper-mcp `ultrafast` | |

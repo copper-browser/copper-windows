@@ -352,6 +352,13 @@ impl PageView for WebView2Page {
         capture::snapshot(&self.inner, region)
     }
 
+    fn capture(
+        &self,
+        request: copper_engine::CaptureRequest,
+    ) -> LocalFuture<Result<copper_engine::Capture>> {
+        capture::capture(&self.inner, request)
+    }
+
     fn find(&self, query: &str, opts: FindOptions) -> LocalFuture<Result<u32>> {
         capture::find(&self.inner, query.to_owned(), opts)
     }
