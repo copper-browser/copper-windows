@@ -51,7 +51,6 @@ pub enum Hit {
 struct Drawn {
     id: TabId,
     label: String,
-    letter: String,
     icon: Option<usize>,
     live: bool,
     pinned: bool,
@@ -224,7 +223,6 @@ impl Strip {
             .map(|t| Drawn {
                 id: t.id.clone(),
                 label: t.label.clone(),
-                letter: t.letter.clone(),
                 icon: t.favicon.as_ref().map(|i| Rc::as_ptr(i) as usize),
                 live: t.live,
                 pinned: t.pin.is_some(),
@@ -403,7 +401,7 @@ impl Strip {
             self.field = Some(field);
             return;
         }
-        mark(ui, node, icon, &t.letter, side::MARK);
+        mark(ui, node, icon, side::MARK);
         pin_light(ui, node, d.pinned && d.lit && !d.live, 3.0);
         self.targets.insert(node, Hit::Tab(t.id.clone()));
         if d.pinned || w < metrics::TAB_TITLED {

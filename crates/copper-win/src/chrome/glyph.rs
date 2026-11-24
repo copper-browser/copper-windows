@@ -20,6 +20,10 @@ pub const SEARCH: char = '\u{E721}';
 pub const SIDEBAR: char = '\u{E8A0}';
 /// `slider.horizontal.3`: the settings door at the foot.
 pub const SETTINGS: char = '\u{E9E9}';
+/// `exclamationmark.triangle`: a page that didn't load.
+pub const TRIANGLE: char = '\u{E7BA}';
+/// `wifi.exclamationmark`: a page that didn't load while offline.
+pub const WIFI: char = '\u{E701}';
 /// `globe`: a page with no icon yet.
 pub const GLOBE: char = '\u{E774}';
 /// `speaker.wave.2.fill`.

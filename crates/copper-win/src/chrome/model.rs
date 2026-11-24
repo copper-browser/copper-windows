@@ -41,6 +41,9 @@ pub struct Model {
     pub nav: Nav,
     /// The address field's text at rest: the host, or empty.
     pub host: String,
+    /// The page in front is plain http: the address says "Not secure"
+    /// under the pointer (copper-browser/Copper#181).
+    pub insecure: bool,
     pub space: SpaceView,
     pub spaces: Vec<SpaceView>,
     /// The column's colour; `None` for paper.
@@ -61,11 +64,12 @@ impl Model {
         let visible = shell.visible();
         let active = shell.active_id();
         let nav = Model::nav_of(shell);
-        let host = active
+        let front = active.as_ref().and_then(|id| shell.tab_view(id));
+        let host = front
             .as_ref()
-            .and_then(|id| shell.tab_view(id))
             .map(|t| shown_host(&t.host, &t.url))
             .unwrap_or_default();
+        let insecure = front.is_some_and(|t| copper_core::address::is_not_secure(&t.url));
         let b = shell.browser();
         let current = b.current_space_id().to_string();
         let spaces: Vec<SpaceView> = b
@@ -100,6 +104,7 @@ impl Model {
             active,
             nav,
             host,
+            insecure,
             space,
             spaces,
             tint,

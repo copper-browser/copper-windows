@@ -20,7 +20,7 @@
 use super::bring;
 use super::glyph;
 use crate::platform::Shell;
-use copper_core::settings::{Glyph, TabsPosition};
+use copper_core::settings::TabsPosition;
 use copper_win_ui::input::{Key, Mods};
 use copper_win_ui::tokens::motion;
 use copper_win_ui::win::Ui;
@@ -50,7 +50,6 @@ pub struct Welcome {
     is_default: bool,
     asked: bool,
     sidebar: bool,
-    glyph: Glyph,
 }
 
 /// What a button on the panel does.
@@ -63,7 +62,6 @@ pub enum Hit {
     Bookmarks,
     Bring,
     Way(bool),
-    Wear(Glyph),
     MakeDefault,
 }
 
@@ -94,7 +92,6 @@ pub fn wanted(shell: &Shell, opening: bool) -> bool {
 /// Put the panel over everything.
 pub fn show(shell: &Shell) {
     let sidebar = shell.tabs_position() == TabsPosition::Left;
-    let glyph = shell.settings().glyph();
     let chrome = shell.view().chrome().clone();
     chrome.edit(move |ui, st| {
         if st.welcome.is_some() {
@@ -104,7 +101,7 @@ pub fn show(shell: &Shell) {
             ui.set_image(ICON_IMAGE, p.bgra, p.w, p.h);
         }
         let content = ui.content();
-        let mut w = build(ui, content, sidebar, glyph);
+        let mut w = build(ui, content, sidebar);
         w.render(ui, None, 0.0);
         ui.focus(Some(w.go));
         st.welcome = Some(w);
@@ -159,7 +156,7 @@ fn icon() -> Option<crate::picture::Picture> {
     None
 }
 
-fn build(ui: &mut Ui, content: NodeId, sidebar: bool, glyph: Glyph) -> Welcome {
+fn build(ui: &mut Ui, content: NodeId, sidebar: bool) -> Welcome {
     let root = ui.tree.add(
         content,
         Node::column()
@@ -224,7 +221,6 @@ fn build(ui: &mut Ui, content: NodeId, sidebar: bool, glyph: Glyph) -> Welcome {
         is_default: false,
         asked: false,
         sidebar,
-        glyph,
     }
 }
 
@@ -541,22 +537,8 @@ impl Welcome {
         self.hits.push((a, Hit::Way(false)));
         let b = way(ui, ways, "Sidebar", true, self.sidebar);
         self.hits.push((b, Hit::Way(true)));
-        let wear = ui
-            .tree
-            .add(page, Node::row().gap(12.0).align(Align::Center));
-        ui.tree
-            .add(wear, Node::text("Tabs wear", 13.0).ink(Token::Muted));
-        segmented(
-            ui,
-            wear,
-            "Tabs wear",
-            &[
-                (Hit::Wear(Glyph::Letters), "Letters"),
-                (Hit::Wear(Glyph::Icons), "Icons"),
-            ],
-            Hit::Wear(self.glyph),
-            &mut self.hits,
-        );
+        // Mac (copper-browser/Copper#181): no "Tabs wear" choice; tabs
+        // always wear the site's icon.
     }
 
     fn links(&mut self, ui: &mut Ui, page: NodeId) {
@@ -929,16 +911,6 @@ fn act(shell: &Shell, hit: Hit) {
                 }
             });
         }
-        Hit::Wear(g) => {
-            shell.update_settings(|s| s.set_glyph(g));
-            shell.view().sync(shell);
-            chrome.edit(move |ui, st| {
-                if let Some(w) = st.welcome.as_mut() {
-                    w.glyph = g;
-                    w.refresh(ui);
-                }
-            });
-        }
         Hit::MakeDefault => make_default(shell),
     }
 }
@@ -1021,14 +993,12 @@ fn make_default(shell: &Shell) {
 }
 
 /// Skip or Start browsing: remember, and fade the panel away
-/// (`Motion.settle`). The layout and the tabs' marks chosen are written
-/// down too, so a later start reads them rather than defaults.
+/// (`Motion.settle`). The layout chosen is written down too, so a later
+/// start reads it rather than the default.
 fn finish(shell: &Shell) {
-    let glyph = shell.settings().glyph();
     let position = shell.tabs_position();
     shell.update_settings(|s| {
         s.set(copper_core::settings::keys::WELCOMED, true);
-        s.set_glyph(glyph);
         s.set_tabs_position(position);
     });
     let chrome = shell.view().chrome().clone();

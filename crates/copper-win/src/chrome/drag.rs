@@ -130,7 +130,7 @@ pub fn pointer(shell: &Shell) {
                     let Some(held) = h.as_mut() else { return };
                     chrome.read(|ui, st| {
                         held.target = held.target(&st.column.drop_layout(ui), y);
-                        st.column.show_drop(ui, &held.id, held.target.as_ref());
+                        st.column.show_drop(ui, held.target.as_ref());
                     });
                 });
             }

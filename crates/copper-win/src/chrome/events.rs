@@ -159,6 +159,9 @@ fn click(chrome: &Rc<Chrome>, shell: &Shell, id: NodeId) {
         Clicked::Column(h) => column_click(chrome, shell, h),
         Clicked::Strip(h) => strip_click(shell, h),
         Clicked::Stage(StageHit::StatusButton(tab)) => shell.reload(&tab),
+        Clicked::Stage(StageHit::StatusMore(tab)) => {
+            chrome.edit(move |ui, st| st.stage.toggle_more(ui, &tab));
+        }
         Clicked::Other(id) => {
             if crate::palette::click(shell, id) || crate::peek::click(shell, id) {
                 return;

@@ -140,12 +140,11 @@ struct Drawn {
     top: f32,
 }
 
-/// One row's picture: a site's icon, a glyph, a letter, or the plain
-/// field's open-page dot.
+/// One row's picture: a site's icon, a glyph (a globe for a site with no
+/// icon yet), or the plain field's open-page dot.
 pub enum RowMark {
     Icon(Icon),
     Glyph(char),
-    Letter(String),
     Dot,
     None,
 }
@@ -155,7 +154,6 @@ pub enum RowMark {
 enum MarkKey {
     Icon(usize),
     Glyph(char),
-    Letter(String),
     Dot,
     None,
 }
@@ -165,7 +163,6 @@ impl MarkKey {
         match m {
             RowMark::Icon(i) => MarkKey::Icon(std::rc::Rc::as_ptr(i) as usize),
             RowMark::Glyph(c) => MarkKey::Glyph(*c),
-            RowMark::Letter(l) => MarkKey::Letter(l.clone()),
             RowMark::Dot => MarkKey::Dot,
             RowMark::None => MarkKey::None,
         }
@@ -821,7 +818,7 @@ impl Card {
         match m {
             RowMark::Icon(icon) => {
                 let id = images.id(ui, &icon);
-                super::build::mark(ui, node, Some(id), "", card::ROW_MARK);
+                super::build::mark(ui, node, Some(id), card::ROW_MARK);
             }
             RowMark::Glyph(g) => {
                 glyph_node = Some(
@@ -835,11 +832,6 @@ impl Card {
                             .role(Role::None),
                     ),
                 );
-            }
-            RowMark::Letter(l) => {
-                let m = super::build::mark(ui, node, None, &l, card::ROW_MARK);
-                ui.tree
-                    .repaint(m, |n| n.look.fill = Swatch::Token(Token::Hover));
             }
             RowMark::Dot | RowMark::None => {
                 ui.tree
