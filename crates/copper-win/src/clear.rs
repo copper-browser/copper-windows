@@ -8,7 +8,9 @@
 //!   plain 13 px hairline to the Mac's 26 px, and "↓ Clear" appears in it
 //!   while the pointer is over it;
 //! * "Cleared N tabs · Undo" where the bars stand at the foot of the
-//!   window (over everything), for the six seconds Undo is offered.
+//!   window (over everything), for the six seconds Undo is offered. Tidy's
+//!   "Tidied N tabs into M folders · Undo" is the same pill ([`show_pill`],
+//!   `crate::tidy`).
 //!
 //! Ctrl+Shift+K clears (the palette's Clear Tabs too); Ctrl+Z undoes while
 //! the pill is up — otherwise it stays the page's.
@@ -29,6 +31,7 @@ use copper_win_ui::{
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
 /// The seam at rest: a hairline with 6 px above and below (`Side.swift`
 /// `divider`).
@@ -49,6 +52,8 @@ struct Ids {
     seam: Option<NodeId>,
     button: Option<NodeId>,
     pill: Option<Pill>,
+    /// The command the pill's Undo runs (`undo-clear`, `undo-tidy`).
+    undo: &'static str,
     /// Bumped by every pill shown, so an older one's timer leaves a newer
     /// alone.
     generation: u64,
@@ -196,7 +201,8 @@ pub fn click(shell: &Shell, id: NodeId) -> bool {
         clear(shell);
         true
     } else if undo == Some(id) {
-        self::undo(shell);
+        let command = IDS.with(|ids| ids.borrow().undo);
+        crate::commands::run(shell, command);
         true
     } else {
         false
@@ -207,7 +213,7 @@ pub fn click(shell: &Shell, id: NodeId) -> bool {
 pub fn clear(shell: &Shell) -> usize {
     let n = shell.clear_tabs();
     if n > 0 {
-        show_pill(shell, n);
+        show_pill(shell, &cleared_words(n), "undo-clear", UNDO_FOR);
     }
     n
 }
@@ -219,8 +225,10 @@ pub fn undo(shell: &Shell) -> usize {
     n
 }
 
-fn show_pill(shell: &Shell, count: usize) {
-    let text = cleared_words(count);
+/// The pill with `text` and an Undo that runs `undo`, for `offered`.
+pub fn show_pill(shell: &Shell, text: &str, undo: &'static str, offered: Duration) {
+    let text = text.to_string();
+    IDS.with(|ids| ids.borrow_mut().undo = undo);
     let shown = Rc::new(Cell::new(0));
     let g = shown.clone();
     let chrome = shell.view().chrome().clone();
@@ -258,7 +266,7 @@ fn show_pill(shell: &Shell, count: usize) {
     });
     let weak = Rc::downgrade(&chrome);
     copper_win_rt::spawn_local(async move {
-        copper_win_rt::sleep(UNDO_FOR).await;
+        copper_win_rt::sleep(offered).await;
         let Some(c) = weak.upgrade() else { return };
         let g = shown.get();
         c.edit(move |ui, _| {
@@ -269,7 +277,7 @@ fn show_pill(shell: &Shell, count: usize) {
     });
 }
 
-fn hide_pill(shell: &Shell) {
+pub fn hide_pill(shell: &Shell) {
     shell.view().chrome().edit(|ui, _| hide(ui));
 }
 

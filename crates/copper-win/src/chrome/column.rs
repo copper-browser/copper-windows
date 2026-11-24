@@ -487,6 +487,7 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
             .hidden(true),
     );
     crate::clear::seam(ui, divider);
+    crate::tidy::seam(ui, divider);
     let new_tab = ui.tree.add(
         list,
         Node::row()
@@ -711,6 +712,7 @@ impl Column {
         self.slide_band(ui, m);
         self.sync_header(ui, &m.space);
         crate::clear::sync_seam(ui, self.divider, m.clearable);
+        crate::tidy::sync_seam(ui, self.divider, m.tidyable, m.tidy_busy);
         self.sync_rows(ui, images, &m.visible.saved, &m.visible.today, &m.groups);
         self.sync_chips(ui, &m.spaces);
     }

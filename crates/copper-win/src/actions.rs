@@ -202,7 +202,11 @@ pub fn register(shell: &Shell) {
         )
         .when(|s| crate::chrome::permit::has_choices(s, crate::chrome::permit::PERMIT)),
     ];
-    for c in cmds.into_iter().chain(crate::clear::commands()) {
+    for c in cmds
+        .into_iter()
+        .chain(crate::clear::commands())
+        .chain(crate::tidy::commands())
+    {
         r.add(c);
     }
     crate::cover::register(shell);
