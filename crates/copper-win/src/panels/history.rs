@@ -411,7 +411,7 @@ fn row(ui: &mut Ui, card: NodeId, t: &Trace, icon: Option<u32>, hits: &mut Vec<(
             .button(title),
     );
     hits.push((r, Hit::Go(t.url.clone())));
-    plate::mark(ui, r, icon, &plate::letter(&t.key), 16.0);
+    plate::mark(ui, r, icon, 16.0);
     let words = ui
         .tree
         .add(r, Node::column().gap(2.0).grow(1.0).shrink(1.0));

@@ -977,7 +977,8 @@ fn commands(shell: &Shell) -> Vec<rank::Cmd> {
 }
 
 /// The pictures for the rows: an open tab's icon, else the site's kept one
-/// (asked for once when there is none, `Shell::want_mark`), else a letter.
+/// (asked for once when there is none, `Shell::want_mark`), else a globe —
+/// never a letter (Mac `RowMark`, copper-browser/Copper#181).
 fn marks(shell: &Shell, rows: &[Row]) -> HashMap<String, RowMark> {
     let icons = shell.favicons().borrow();
     let kept = |row: &Row| -> Option<RowMark> {
@@ -993,31 +994,17 @@ fn marks(shell: &Shell, rows: &[Row]) -> HashMap<String, RowMark> {
             let mark = match &row.action {
                 Action::Switch(id) => match icons.get(id) {
                     Some(i) => RowMark::Icon(i.clone()),
-                    None => kept(row).or_else(|| letter(row).map(RowMark::Letter))?,
+                    None => kept(row).unwrap_or(RowMark::Glyph(glyph::GLOBE)),
                 },
                 Action::Go(_) if matches!(row.kind, Kind::Visited | Kind::Bookmark) => {
                     if row.section == rank::Section::Plain {
                         return None;
                     }
-                    kept(row).or_else(|| letter(row).map(RowMark::Letter))?
+                    kept(row).unwrap_or(RowMark::Glyph(glyph::GLOBE))
                 }
                 _ => return None,
             };
             Some((row.identity(), mark))
         })
         .collect()
-}
-
-/// A place's letter (`Mark`): its host's first, uppercased.
-fn letter(row: &Row) -> Option<String> {
-    let key = row
-        .url
-        .as_deref()
-        .and_then(|u| url::Url::parse(u).ok())
-        .and_then(|u| {
-            u.host_str()
-                .map(|h| h.trim_start_matches("www.").to_string())
-        })
-        .unwrap_or_else(|| row.title.clone());
-    key.chars().next().map(|c| c.to_uppercase().to_string())
 }

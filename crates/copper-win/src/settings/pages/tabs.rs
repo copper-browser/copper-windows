@@ -7,7 +7,7 @@ use crate::chrome::glyph;
 use crate::platform::Shell;
 use crate::settings::Page;
 use crate::settings::form::{Form, Tone};
-use copper_core::settings::{ArchiveAfter, Glyph, TabSwitching, TabsPosition};
+use copper_core::settings::{ArchiveAfter, TabSwitching, TabsPosition};
 use copper_shell_core::calendar;
 use std::cell::RefCell;
 
@@ -37,14 +37,9 @@ impl Page for Tabs {
         // The shell's answer, not the stored one: with nothing stored yet
         // the tabs are down the side.
         let side = shell.tabs_position() == TabsPosition::Left;
-        let (letters, sleeps, switching, archive) = {
+        let (sleeps, switching, archive) = {
             let s = shell.settings();
-            (
-                s.glyph() == Glyph::Letters,
-                s.sleeps_tabs(),
-                s.tab_switching(),
-                s.archive_after(),
-            )
+            (s.sleeps_tabs(), s.tab_switching(), s.archive_after())
         };
         let mut f = Form::default();
         f.section("Layout")
@@ -54,15 +49,7 @@ impl Page for Tabs {
                 "sidebar",
                 side,
             )
-            .anchor("tabs.sidebar")
-            .choice(
-                "Tabs show",
-                Some("Beside the title, and on a pinned square"),
-                "glyph",
-                &[("letters", "Letters"), ("icons", "Site icons")],
-                if letters { "letters" } else { "icons" },
-            )
-            .anchor("tabs.glyph");
+            .anchor("tabs.sidebar");
 
         let sec = f.section("Switching");
         sec.choice(
@@ -149,12 +136,6 @@ impl Page for Tabs {
             } else {
                 TabsPosition::Top
             }),
-            "glyph" => {
-                if let Some(g) = Glyph::parse(value) {
-                    shell.update_settings(|s| s.set_glyph(g));
-                    shell.view().sync(shell);
-                }
-            }
             "sleep" => shell.update_settings(|s| s.set_sleeps_tabs(on(value))),
             "switching" => {
                 if let Some(v) = TabSwitching::parse(value) {

@@ -81,7 +81,6 @@ const FOLDER_STEP: f32 = 20.0;
 #[derive(Clone, Debug, PartialEq)]
 struct Drawn {
     label: String,
-    letter: String,
     icon: Option<usize>,
     live: bool,
     loading: bool,
@@ -95,7 +94,6 @@ impl Drawn {
     fn of(t: &TabView<Icon>) -> Drawn {
         Drawn {
             label: t.label.clone(),
-            letter: t.letter.clone(),
             icon: t.favicon.as_ref().map(|i| Rc::as_ptr(i) as usize),
             live: t.live,
             loading: t.loading,
@@ -314,10 +312,7 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Column {
             ))
             .align(Align::Center)
             .button("Address")
-            .tooltip(&format!(
-                "Change the address   {}",
-                crate::keys::shortcut("focus-field").unwrap_or_default()
-            )),
+            .tooltip(&address_tip(false)),
     );
     // The words give way to the downloads door (a long address would push
     // it out of sight), ending in an ellipsis.
@@ -709,7 +704,7 @@ impl Column {
     /// Draw `m`.
     pub fn sync(&mut self, ui: &mut Ui, images: &mut Images, m: &Model) {
         self.sync_nav(ui, m.nav);
-        self.sync_address(ui, &m.host);
+        self.sync_address(ui, &m.host, m.insecure);
         self.sync_pins(ui, images, &m.visible.pins);
         self.slide_band(ui, m);
         self.sync_header(ui, &m.space);
@@ -771,7 +766,20 @@ impl Column {
         ui.tree.edit(self.reload, |n| n.tooltip = Some(name));
     }
 
-    fn sync_address(&mut self, ui: &mut Ui, host: &str) {
+    fn sync_address(&mut self, ui: &mut Ui, host: &str, insecure: bool) {
+        // Mac `SideAddress.Host`: an http page says "Not secure" under the
+        // pointer (here, the address's tooltip leads with it).
+        let tip = address_tip(insecure);
+        if ui
+            .tree
+            .get(self.address)
+            .is_some_and(|n| n.tooltip.as_deref() != Some(&tip))
+        {
+            ui.tree.edit(self.address, |n| {
+                n.a11y.help = tip.clone();
+                n.tooltip = Some(tip);
+            });
+        }
         let (text, ink) = if host.is_empty() {
             (PLACEHOLDER, Swatch::Token(Token::ColumnFaint))
         } else {
@@ -887,7 +895,7 @@ impl Column {
                 }
                 let p = ui.tree.add(line, pin);
                 let icon = super::build::icon_id(ui, images, t.favicon.as_ref());
-                mark(ui, p, icon, &t.letter, side::pin_mark(h));
+                mark(ui, p, icon, side::pin_mark(h));
                 pin_light(ui, p, new, 5.0);
                 self.targets.insert(p, Hit::Tab(t.id.clone()));
             }
@@ -1404,10 +1412,9 @@ impl Column {
 
     /// Show where `id`'s row would land: a line, stepped in as the
     /// folder's rows are, or a ghost at the end of the favourites.
-    pub fn show_drop(&mut self, ui: &mut Ui, id: &TabId, target: Option<&Target>) {
+    pub fn show_drop(&mut self, ui: &mut Ui, target: Option<&Target>) {
         if target == Some(&Target::Pins) {
-            let letter = self.rows.get(id).map(|r| r.drawn.letter.clone());
-            self.show_pin_ghost(ui, &letter.unwrap_or_default());
+            self.show_pin_ghost(ui);
         } else {
             self.hide_pin_ghost(ui);
         }
@@ -1439,7 +1446,7 @@ impl Column {
         self.hide_pin_ghost(ui);
     }
 
-    fn show_pin_ghost(&mut self, ui: &mut Ui, letter: &str) {
+    fn show_pin_ghost(&mut self, ui: &mut Ui) {
         if self.pin_ghost.is_some_and(|g| ui.tree.get(g).is_some()) {
             return;
         }
@@ -1464,7 +1471,7 @@ impl Column {
                 .opacity(0.7)
                 .role(Role::None),
         );
-        mark(ui, ghost, None, letter, side::pin_mark(h));
+        mark(ui, ghost, None, side::pin_mark(h));
         ui.tree.set_hidden(self.pins_box, false);
         self.pin_ghost = Some(ghost);
     }
@@ -1641,7 +1648,7 @@ fn new_row(ui: &mut Ui, list: NodeId, t: &TabView<Icon>, icon: Option<u32>) -> R
             .button(&t.label)
             .role(Role::ListItem),
     );
-    let m = mark(ui, node, icon, &t.letter, side::MARK);
+    let m = mark(ui, node, icon, side::MARK);
     // A private tab says so before its title: `eye.slash`, 9, the title's
     // ink at 0.7 (`Side.swift` 614–617).
     let shy = ui.tree.add(
@@ -1823,8 +1830,8 @@ fn update_row(ui: &mut Ui, r: &mut Row, d: &Drawn, icon: Option<u32>) {
         let label = d.label.clone();
         ui.tree.edit(r.node, |n| n.a11y.name = label);
     }
-    if r.drawn.icon != d.icon || r.drawn.letter != d.letter {
-        fill_mark(ui, r.mark, icon, &d.letter, side::MARK);
+    if r.drawn.icon != d.icon {
+        fill_mark(ui, r.mark, icon, side::MARK);
     }
     style_row(ui, r, d);
 }
@@ -1854,4 +1861,22 @@ fn style_row(ui: &mut Ui, r: &mut Row, d: &Drawn) {
         Swatch::Token(Token::ColumnInk)
     };
     ui.tree.repaint(r.label, |n| n.look.ink = ink);
+}
+
+/// What the pointer on the address says: "Not secure" first for an http
+/// page, then how to change it.
+fn address_tip(insecure: bool) -> String {
+    let change = format!(
+        "Change the address   {}",
+        crate::keys::shortcut("focus-field").unwrap_or_default()
+    );
+    if insecure {
+        format!(
+            "{} \u{2014} {}\n{change}",
+            copper_core::address::NOT_SECURE,
+            copper_core::address::NOT_SECURE_HELP
+        )
+    } else {
+        change
+    }
 }

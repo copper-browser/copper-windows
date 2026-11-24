@@ -19,9 +19,7 @@
 use super::{State, card, column, images, menus, sheet, stage, strip, toast};
 use copper_win_ui::tokens::{metrics, side};
 use copper_win_ui::win::Ui;
-use copper_win_ui::{
-    Abs, Align, Insets, Justify, Node, NodeId, Role, Swatch, TextAlign, Token, Weight,
-};
+use copper_win_ui::{Abs, Align, Insets, Justify, Node, NodeId, Role, Swatch, Token};
 
 /// The skeleton's nodes.
 pub struct Ids {
@@ -175,9 +173,10 @@ pub fn pin_light(ui: &mut Ui, square: NodeId, lit: bool, inset: f32) {
     }
 }
 
-/// A site's mark: its icon, or its letter on a rounded square. Returns the
-/// mark's box; its child is the picture or the letter.
-pub fn mark(ui: &mut Ui, parent: NodeId, icon: Option<u32>, letter: &str, size: f32) -> NodeId {
+/// A site's mark: its icon, or a plain globe until it lands — never a
+/// letter (Mac `Mark`/`Globe`, copper-browser/Copper#181). Returns the
+/// mark's box; its child is the picture or the globe.
+pub fn mark(ui: &mut Ui, parent: NodeId, icon: Option<u32>, size: f32) -> NodeId {
     let m = ui.tree.add(
         parent,
         Node::stack()
@@ -186,37 +185,20 @@ pub fn mark(ui: &mut Ui, parent: NodeId, icon: Option<u32>, letter: &str, size: 
             .align(Align::Center)
             .justify(Justify::Center),
     );
-    fill_mark(ui, m, icon, letter, size);
+    fill_mark(ui, m, icon, size);
     m
 }
 
-/// Put an icon or a letter in mark `m` (replacing what it held).
-pub fn fill_mark(ui: &mut Ui, m: NodeId, icon: Option<u32>, letter: &str, size: f32) {
+/// Put an icon or the globe in mark `m` (replacing what it held).
+pub fn fill_mark(ui: &mut Ui, m: NodeId, icon: Option<u32>, size: f32) {
     ui.tree.clear_children(m);
-    match icon {
-        Some(id) => {
-            ui.tree.repaint(m, |n| {
-                n.look.fill = Swatch::Clear;
-                n.look.radius = 0.0;
-            });
-            ui.tree.add(m, Node::image(id, size).role(Role::Image));
-        }
-        None => {
-            let radius = side::mark_radius(size);
-            ui.tree.repaint(m, |n| {
-                n.look.fill = Swatch::Token(Token::Square);
-                n.look.radius = radius;
-            });
-            ui.tree.add(
-                m,
-                Node::text(letter, side::mark_letter(size))
-                    .weight(Weight::Semibold)
-                    .ink(Swatch::Fade(Token::ColumnInk, side::MARK_LETTER_INK))
-                    .text_align(TextAlign::Center)
-                    .role(Role::None),
-            );
-        }
-    }
+    let child = match icon {
+        Some(id) => Node::image(id, size).role(Role::Image),
+        None => Node::glyph(super::glyph::GLOBE, (size * 0.8).round(), size)
+            .ink(Swatch::Fade(Token::ColumnInk, side::MARK_LETTER_INK))
+            .role(Role::None),
+    };
+    ui.tree.add(m, child);
 }
 
 /// The picture id for a tab's favicon, registering it with the window.

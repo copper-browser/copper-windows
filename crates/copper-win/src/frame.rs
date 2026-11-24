@@ -5,8 +5,9 @@
 //! handling calls `Shell::reload`).
 //!
 //! What it says is the Mac's (`Stage.swift` `Trouble`, `Browser.swift`
-//! `message(for:)`): one sentence and a quiet `Try again`, never the
-//! engine's own error text. A page that stopped (its web process went
+//! `message(for:)`, copper-browser/Copper#181), as copper-shell-core words
+//! it: "Can't connect to <host>", why in one line, `Try Again` (Ctrl+R) and
+//! the engine's own words under Details. A page that stopped (its web process went
 //! away) is brought back by itself as on the Mac (`Tab.swift` revive): at
 //! once when it is on screen, checked 1.5 s later and tried once more if
 //! it is still not there; when it is behind another tab, as soon as it is
@@ -19,8 +20,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-/// The Mac's sentence for a page that never came, and the button under it.
-pub const TRY_AGAIN: &str = "Try again";
+/// The button under a page that stopped.
+pub const TRY_AGAIN: &str = "Try Again";
 /// What a page that stopped says once it would not come back (Windows).
 pub const STOPPED: &str = "This page stopped.";
 
@@ -119,33 +120,31 @@ impl WinFrame {
 
 impl PageFrame for WinFrame {
     fn show_status(&self, status: &PageStatus) {
-        let shown = match trouble(status) {
-            Trouble::Stopped => {
-                if self.stopped() {
-                    return;
-                }
-                STOPPED.to_string()
+        let status = if status.title.starts_with("This page stopped") {
+            if self.stopped() {
+                return;
             }
-            Trouble::Failed(s) => {
-                let handoff = self
-                    .chrome
-                    .shell()
-                    .and_then(|s| s.view().download_began())
-                    .is_some_and(|t| t.elapsed() < HANDOFF);
-                // A page that turned into a download ends its load as a
-                // dropped connection while the file goes on arriving.
-                if handoff && s == ABORTED {
-                    return;
-                }
-                s.to_string()
+            PageStatus {
+                title: STOPPED.into(),
+                description: String::new(),
+                button: TRY_AGAIN.into(),
+                detail: None,
+                offline: false,
             }
+        } else {
+            let handoff = self
+                .chrome
+                .shell()
+                .and_then(|s| s.view().download_began())
+                .is_some_and(|t| t.elapsed() < HANDOFF);
+            // A page that turned into a download ends its load as a
+            // dropped connection while the file goes on arriving.
+            if handoff && status.description == DIDNT_LOAD {
+                return;
+            }
+            status.clone()
         };
         let tab = self.tab.clone();
-        let status = PageStatus {
-            title: shown,
-            description: String::new(),
-            button: TRY_AGAIN.into(),
-        };
         self.chrome
             .edit(move |ui, st| st.stage.set_status(ui, &tab, Some(status)));
     }
@@ -158,99 +157,6 @@ impl PageFrame for WinFrame {
     }
 }
 
-/// What the shell's status is about.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Trouble {
-    /// The web process went away.
-    Stopped,
-    /// The page did not load: the Mac's sentence for why.
-    Failed(&'static str),
-}
-
-/// The Mac's fallback.
+/// copper-shell-core's line for a load that failed for no known reason
+/// (also a dropped connection, and a load handed to a download).
 const DIDNT_LOAD: &str = "The page didn't load.";
-/// What a dropped connection says (also a load handed to a download).
-const ABORTED: &str = DIDNT_LOAD;
-
-/// The shell's status (copper-shell-core `crash_status` /
-/// `failure_status`, whose description is the engine's error as a
-/// sentence) in the Mac's words (`Browser.swift` `message(for:)`).
-pub fn trouble(s: &PageStatus) -> Trouble {
-    if s.title.starts_with("This page stopped") {
-        return Trouble::Stopped;
-    }
-    if s.title.starts_with("You\u{2019}re offline") || s.title.starts_with("You're offline") {
-        return Trouble::Failed("No connection.");
-    }
-    let e = s
-        .description
-        .trim()
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    Trouble::Failed(match e.as_str() {
-        "host name not resolved" => "No site at that address.",
-        "disconnected" | "connection reset" => "No connection.",
-        "timeout" => "The site took too long to answer.",
-        "connection refused" | "cannot connect" | "server unreachable" => {
-            "The site refused the connection."
-        }
-        e if e.starts_with("certificate") || e.starts_with("client certificate") => {
-            "The connection isn't secure."
-        }
-        _ => DIDNT_LOAD,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn failed(title: &str, description: &str) -> PageStatus {
-        PageStatus {
-            title: title.into(),
-            description: description.into(),
-            button: "Try Again".into(),
-        }
-    }
-
-    #[test]
-    fn speaks_the_macs_sentences() {
-        let t = |d: &str| trouble(&failed("Couldn\u{2019}t open a.example", d));
-        assert_eq!(
-            t("Host name not resolved."),
-            Trouble::Failed("No site at that address.")
-        );
-        assert_eq!(t("Disconnected."), Trouble::Failed("No connection."));
-        assert_eq!(
-            t("Timeout."),
-            Trouble::Failed("The site took too long to answer.")
-        );
-        assert_eq!(
-            t("Cannot connect."),
-            Trouble::Failed("The site refused the connection.")
-        );
-        assert_eq!(
-            t("Connection refused."),
-            Trouble::Failed("The site refused the connection.")
-        );
-        assert_eq!(
-            t("Certificate expired."),
-            Trouble::Failed("The connection isn't secure.")
-        );
-        assert_eq!(
-            t("Something odd."),
-            Trouble::Failed("The page didn't load.")
-        );
-        assert_eq!(
-            trouble(&failed(
-                "You\u{2019}re offline",
-                "Copper will load this page once you are connected."
-            )),
-            Trouble::Failed("No connection.")
-        );
-        assert_eq!(
-            trouble(&failed("This page stopped", "Its process was ended.")),
-            Trouble::Stopped
-        );
-    }
-}

@@ -24,7 +24,7 @@ use copper_import::Browser;
 use copper_win_ui::tokens::motion;
 use copper_win_ui::win::Ui;
 use copper_win_ui::{
-    Align, Insets, Justify, Menu, Node, NodeId, Point, Prop, Role, Token, Trim, Weight,
+    Align, Insets, Justify, Menu, Node, NodeId, Point, Prop, Role, Swatch, Token, Trim, Weight,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -543,7 +543,18 @@ impl Panel for Bookmarks {
                                 .ink(Token::Faint)
                                 .role(Role::None),
                             );
-                            let m = plate::mark(ui, r, None, "", 15.0);
+                            // A folder's mark: its glyph on the faint square.
+                            let m = ui.tree.add(
+                                r,
+                                Node::stack()
+                                    .size(15.0, 15.0)
+                                    .shrink(0.0)
+                                    .radius(15.0 * 0.22)
+                                    .fill(Swatch::Fade(Token::Ink, 0.06))
+                                    .align(Align::Center)
+                                    .justify(Justify::Center)
+                                    .role(Role::None),
+                            );
                             ui.tree.add(
                                 m,
                                 Node::glyph(glyph::FOLDER_FILL, 9.0, 15.0)
@@ -552,12 +563,8 @@ impl Panel for Bookmarks {
                             );
                         } else {
                             ui.tree.add(r, Node::new().width(10.0).shrink(0.0));
-                            let host = url
-                                .as_deref()
-                                .map(copper_shell_core::shell::host_of)
-                                .unwrap_or_default();
                             let picture = icon.as_ref().map(|i| st.images.id(ui, i));
-                            plate::mark(ui, r, picture, &plate::letter(&host), 15.0);
+                            plate::mark(ui, r, picture, 15.0);
                         }
                         ui.tree.add(
                             r,

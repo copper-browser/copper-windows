@@ -482,47 +482,24 @@ pub fn search(ui: &mut Ui, parent: NodeId, prompt: &str) -> Hunt {
     Hunt { field, clear }
 }
 
-/// What stands for a page (`Mark`): its icon, or its letter on a faint
-/// rounded square. Returns the mark.
-pub fn mark(ui: &mut Ui, parent: NodeId, icon: Option<u32>, letter: &str, size: f32) -> NodeId {
-    let radius = size * 0.22;
+/// What stands for a page (`Mark`): its icon, or a plain globe until there
+/// is one — never a letter (copper-browser/Copper#181). Returns the mark.
+pub fn mark(ui: &mut Ui, parent: NodeId, icon: Option<u32>, size: f32) -> NodeId {
     match icon {
         Some(id) => ui.tree.add(
             parent,
             Node::image(id, size)
-                .radius(radius)
+                .radius(size * 0.22)
                 .clip()
                 .shrink(0.0)
                 .role(Role::None),
         ),
-        None => {
-            let m = ui.tree.add(
-                parent,
-                Node::stack()
-                    .size(size, size)
-                    .shrink(0.0)
-                    .radius(radius)
-                    .fill(Swatch::Fade(Token::Ink, 0.06))
-                    .align(Align::Center)
-                    .justify(Justify::Center)
-                    .role(Role::None),
-            );
-            ui.tree.add(
-                m,
-                Node::text(letter, size * 0.56)
-                    .weight(Weight::Medium)
-                    .ink(Token::Muted)
-                    .role(Role::None),
-            );
-            m
-        }
+        None => ui.tree.add(
+            parent,
+            Node::glyph(crate::chrome::glyph::GLOBE, (size * 0.8).round(), size)
+                .ink(Token::Muted)
+                .shrink(0.0)
+                .role(Role::None),
+        ),
     }
-}
-
-/// The letter a mark shows for a site key or host: its first, upper-cased.
-pub fn letter(key: &str) -> String {
-    key.chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "•".into())
 }

@@ -15,9 +15,14 @@ use copper_shell_core::PageStatus;
 use copper_win_ui::tokens::motion;
 use copper_win_ui::win::Ui;
 use copper_win_ui::{
-    Abs, Align, Insets, Justify, Node, NodeId, Prop, Role, TextAlign, Token, Trim,
+    Abs, Align, Insets, Justify, Node, NodeId, Prop, Role, TextAlign, Token, Trim, Weight,
 };
 use std::collections::HashMap;
+
+use super::glyph;
+
+/// The status's button when the shell names none.
+const TRY_AGAIN: &str = "Try Again";
 
 /// One page's place on the stage.
 struct Pane {
@@ -28,10 +33,14 @@ struct Pane {
     pane: NodeId,
     slot: NodeId,
     status: NodeId,
+    symbol: NodeId,
     title: NodeId,
     detail: NodeId,
     button: NodeId,
     button_text: NodeId,
+    /// "Details", and the engine's words it folds away.
+    more: NodeId,
+    more_text: NodeId,
 }
 
 /// The stage's nodes.
@@ -52,8 +61,10 @@ pub struct Stage {
 /// What a click on the stage means.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hit {
-    /// The status's button (Reload, Try again).
+    /// The status's button (Reload, Try Again).
     StatusButton(TabId),
+    /// The status's Details: show or fold the engine's words.
+    StatusMore(TabId),
 }
 
 const PROGRESS_HEIGHT: f32 = 2.0;
@@ -137,10 +148,23 @@ pub fn build(ui: &mut Ui, parent: NodeId) -> Stage {
 impl Stage {
     /// What clicking `id` means, if it is the stage's.
     pub fn hit(&self, id: NodeId) -> Option<Hit> {
-        self.panes
-            .iter()
-            .find(|(_, p)| p.button == id)
-            .map(|(t, _)| Hit::StatusButton(t.clone()))
+        self.panes.iter().find_map(|(t, p)| {
+            if p.button == id {
+                Some(Hit::StatusButton(t.clone()))
+            } else if p.more == id {
+                Some(Hit::StatusMore(t.clone()))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Show or fold `tab`'s status Details.
+    pub fn toggle_more(&mut self, ui: &mut Ui, tab: &TabId) {
+        if let Some(p) = self.panes.get(tab) {
+            let folded = ui.tree.get(p.more_text).is_none_or(|n| n.style.hidden);
+            ui.tree.set_hidden(p.more_text, !folded);
+        }
     }
 
     /// The slot node showing `tab`'s page.
@@ -185,36 +209,84 @@ impl Stage {
                 .hidden(true)
                 .role(Role::Group),
         );
+        // Mac (copper-browser/Copper#181): a symbol, which site, why in
+        // one line, a bordered Try Again with its key, Details on request.
+        let symbol = ui.tree.add(
+            status,
+            Node::glyph(glyph::TRIANGLE, 28.0, 40.0)
+                .ink(Token::Muted)
+                .role(Role::None),
+        );
         let title = ui.tree.add(
             status,
-            Node::text("", 14.0)
+            Node::text("", 17.0)
+                .weight(Weight::Semibold)
                 .ink(Token::Ink)
                 .text_align(TextAlign::Center)
                 .max_width(520.0),
         );
         let detail = ui.tree.add(
             status,
-            Node::text("", 12.5)
+            Node::text("", 13.0)
                 .trim(Trim::Wrap)
                 .ink(Token::Muted)
                 .text_align(TextAlign::Center)
                 .max_width(520.0),
         );
-        // `.buttonStyle(.plain)`: the words alone, no plate.
         let button = ui.tree.add(
             status,
             Node::row()
-                .height(22.0)
-                .padding(Insets::hv(6.0, 0.0))
-                .radius(6.0)
+                .height(28.0)
+                .padding(Insets::hv(14.0, 0.0))
+                .gap(8.0)
+                .radius(14.0)
+                .fill(Token::Ground)
+                .stroke(Token::Hairline, 1.0)
+                .hover_fill(Token::Hover)
                 .align(Align::Center)
-                .button("Try again"),
+                .button(TRY_AGAIN),
         );
         let button_text = ui.tree.add(
             button,
-            Node::text("Try again", 12.0)
+            Node::text(TRY_AGAIN, 13.0).ink(Token::Ink).role(Role::None),
+        );
+        ui.tree.add(
+            button,
+            Node::text(
+                &crate::keys::shortcut("reload").unwrap_or_else(|| "Ctrl+R".into()),
+                13.0,
+            )
+            .ink(Token::Muted)
+            .role(Role::None),
+        );
+        let more = ui.tree.add(
+            status,
+            Node::row()
+                .height(24.0)
+                .gap(4.0)
+                .align(Align::Center)
+                .button("Details"),
+        );
+        ui.tree.add(
+            more,
+            Node::glyph(glyph::CHEVRON, 9.0, 10.0)
                 .ink(Token::Muted)
                 .role(Role::None),
+        );
+        ui.tree.add(
+            more,
+            Node::text("Details", 12.0)
+                .ink(Token::Muted)
+                .role(Role::None),
+        );
+        let more_text = ui.tree.add(
+            status,
+            Node::text("", 11.5)
+                .trim(Trim::Wrap)
+                .ink(Token::Muted)
+                .text_align(TextAlign::Center)
+                .max_width(420.0)
+                .hidden(true),
         );
         ui.set_slot(slot, Box::new(PageHost::new(page.clone())));
         let p = Pane {
@@ -223,10 +295,13 @@ impl Stage {
             pane,
             slot,
             status,
+            symbol,
             title,
             detail,
             button,
             button_text,
+            more,
+            more_text,
         };
         if let Some(s) = self.statuses.get(tab) {
             fill_status(ui, &p, Some(s));
@@ -373,11 +448,21 @@ impl Stage {
 fn fill_status(ui: &mut Ui, p: &Pane, s: Option<&PageStatus>) {
     match s {
         Some(s) => {
+            let symbol = if s.offline {
+                glyph::WIFI
+            } else {
+                glyph::TRIANGLE
+            };
+            ui.tree.set_text(p.symbol, &symbol.to_string());
             ui.tree.set_text(p.title, &s.title);
             ui.tree.set_text(p.detail, &s.description);
             ui.tree.set_hidden(p.detail, s.description.is_empty());
+            ui.tree
+                .set_text(p.more_text, s.detail.as_deref().unwrap_or_default());
+            ui.tree.set_hidden(p.more, s.detail.is_none());
+            ui.tree.set_hidden(p.more_text, true);
             let label = if s.button.is_empty() {
-                "Try again"
+                TRY_AGAIN
             } else {
                 &s.button
             };
