@@ -47,6 +47,10 @@ pub struct Model {
     pub tint: Option<Tint>,
     /// How many rows Clear would close (`crate::clear`).
     pub clearable: usize,
+    /// How many rows Tidy would file, and whether it waits on the model
+    /// (`crate::tidy`).
+    pub tidyable: usize,
+    pub tidy_busy: bool,
     /// `groups.json`: the folders Saved and Today rows are filed in.
     pub groups: Vec<copper_core::groups::TabGroup>,
 }
@@ -100,6 +104,8 @@ impl Model {
             spaces,
             tint,
             clearable: shell.clearable_tabs().len(),
+            tidyable: shell.tidy_candidates().len(),
+            tidy_busy: shell.tidy_busy(),
             groups: copper_shell_core::agents::groups::all(shell),
         }
     }

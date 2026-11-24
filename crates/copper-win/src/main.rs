@@ -71,6 +71,8 @@ mod slot;
 #[cfg(windows)]
 mod sys;
 #[cfg(windows)]
+mod tidy;
+#[cfg(windows)]
 mod update_selftest;
 #[cfg(windows)]
 mod updates;
