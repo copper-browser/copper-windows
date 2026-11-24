@@ -12,6 +12,7 @@
 //! `capture` (snapshots, find, covers), `life` (suspend, sleep, history),
 //! `context_menu` (app-rendered menus), `nav_filter` (the navigation filter).
 
+mod agent;
 mod capture;
 mod chooser;
 mod context_menu;
@@ -141,6 +142,8 @@ pub(crate) struct PageInner {
     pub chooser: chooser::PageChooser,
     /// `set_trusted_input(false)`: every input action from script.
     pub script_input: Cell<bool>,
+    /// What agents' page tools take and read (dialogs, choosers, requests).
+    pub agent: agent::Agent,
     /// The current webview's first document: a navigation was sent to it
     /// (`doc_coming`), and it got as far as `DOMContentLoaded` or ended
     /// (`doc_ready`). See [`PageInner::first_document`].
@@ -220,6 +223,7 @@ impl WebView2Page {
             schemes: scheme::PageSchemes::default(),
             chooser: chooser::PageChooser::default(),
             script_input: Cell::new(false),
+            agent: agent::Agent::default(),
             doc_coming: Cell::new(false),
             doc_ready: Cell::new(false),
             doc_waiters: RefCell::default(),
@@ -458,6 +462,7 @@ impl PageInner {
         // (`scheme_added`), as the webview is now the page's.
         self.add_scheme_filters(&wv);
         self.intercept_file_choosers(&wv.view);
+        self.agent_adopted(&wv);
         *self.life.borrow_mut() = Life::Ready(wv.clone());
         self.visual_connected();
         // A fresh webview has WebView2's defaults (dialogs on, no focus
@@ -500,6 +505,7 @@ impl PageInner {
         self.schemes.released();
         // Its document goes with the webview.
         self.close_file_chooser(false);
+        self.release_agent_holds();
         let old = std::mem::replace(&mut *self.life.borrow_mut(), next);
         self.nav.borrow_mut().detach_native();
         match old {

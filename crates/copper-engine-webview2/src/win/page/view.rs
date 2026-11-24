@@ -12,7 +12,7 @@ use serde_json::json;
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use windows::core::Interface;
 
-use super::{PageInner, WebView2Page, capture, input, life, script};
+use super::{PageInner, WebView2Page, agent, capture, input, life, script};
 use crate::filter::WebView2ContentFilter;
 use crate::history::Step;
 use crate::util::url_host;
@@ -144,6 +144,45 @@ impl PageView for WebView2Page {
 
     fn cancel_file_chooser(&self) -> bool {
         self.inner.close_file_chooser(true)
+    }
+
+    /// Offered only the questions of a page held backstage: WebView2 raises
+    /// them only while its own dialogs are off (see `agent`).
+    fn set_dialog_handler(&self, handler: Option<copper_engine::DialogHandler>) {
+        self.inner.set_dialog_handler(handler);
+    }
+
+    fn answer_dialog(&self, id: copper_engine::DialogId, accept: bool, text: Option<&str>) -> bool {
+        self.inner.answer_dialog(id, accept, text)
+    }
+
+    fn set_file_chooser_handler(&self, handler: Option<copper_engine::FileChooserHandler>) {
+        self.inner.set_chooser_handler(handler);
+    }
+
+    fn answer_file_chooser(&self, files: copper_engine::ChosenFiles) -> bool {
+        self.inner.answer_agent_chooser(files)
+    }
+
+    fn watch_network(&self) {
+        self.inner.watch_network();
+    }
+
+    fn network(&self) -> Option<copper_engine::NetLog> {
+        self.inner.network()
+    }
+
+    fn print_pdf(&self, path: &std::path::Path) -> LocalFuture<Result<()>> {
+        agent::print_pdf(&self.inner, path)
+    }
+
+    fn set_permission_handler(&self, handler: Option<copper_engine::PermissionHandler>) {
+        self.inner.set_permission_handler(handler);
+    }
+
+    /// Per page (CDP `Emulation.setGeolocationOverride`).
+    fn set_geolocation(&self, position: Option<copper_engine::GeoPosition>) {
+        self.inner.set_geolocation(position);
     }
 
     type Filter = WebView2ContentFilter;
