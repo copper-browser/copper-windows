@@ -181,10 +181,13 @@ fn save(f: &Rc<Forms<WinForms>>, shell: &Shell, data: OfferData) {
             changed,
         } = data;
         let host = sent.host.clone();
-        let r =
-            rt::run(async move { v.save(target, &sent.host, &sent.user, &sent.password).await })
+        let r = rt::run(async move {
+            let origin = sent.origin.as_deref();
+            v.save(target, &sent.host, &sent.user, &sent.password, origin)
                 .await
-                .unwrap_or_else(|| Err(String::new()));
+        })
+        .await
+        .unwrap_or_else(|| Err(String::new()));
         let said = match r {
             Ok(()) => fill::saved(&host, target, changed),
             Err(e) => {
