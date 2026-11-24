@@ -8,7 +8,7 @@
 //! Return goes there, Escape or looking away puts the tab back. `Ctrl+L`
 //! is the plain field over the page, as in the column (`Browser.edit`).
 
-use super::build::{door, mark, tip};
+use super::build::{door, mark, pin_light, tip};
 use super::doors;
 use super::glyph;
 use super::images::Images;
@@ -55,6 +55,7 @@ struct Drawn {
     icon: Option<usize>,
     live: bool,
     pinned: bool,
+    lit: bool,
 }
 
 /// The strip's nodes.
@@ -227,6 +228,7 @@ impl Strip {
                 icon: t.favicon.as_ref().map(|i| Rc::as_ptr(i) as usize),
                 live: t.live,
                 pinned: t.pin.is_some(),
+                lit: t.lit,
             })
             .collect();
         let width = ui.size().w;
@@ -353,7 +355,11 @@ impl Strip {
             })
             .radius(RADIUS)
             .hover_fill(Token::ColumnHover)
-            .button(&t.label)
+            .button(&if d.lit && !d.live {
+                format!("{}, new", t.label)
+            } else {
+                t.label.clone()
+            })
             .tooltip(&t.label)
             .role(Role::TabItem)
             .selected(d.live);
@@ -398,6 +404,7 @@ impl Strip {
             return;
         }
         mark(ui, node, icon, &t.letter, side::MARK);
+        pin_light(ui, node, d.pinned && d.lit && !d.live, 3.0);
         self.targets.insert(node, Hit::Tab(t.id.clone()));
         if d.pinned || w < metrics::TAB_TITLED {
             return;

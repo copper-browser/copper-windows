@@ -1,6 +1,6 @@
 //! General (`Settings.swift` 273–326, `SettingsFork.swift` 1175–1217): the
-//! default browser, how Copper looks, downloads ([`super::downloads`]),
-//! and moving in from another browser.
+//! default browser, how Copper looks, the morning page, downloads
+//! ([`super::downloads`]), and moving in from another browser.
 //!
 //! Windows doesn't let an app make itself the default browser; "Make
 //! default" opens Settings › Default apps on Copper's page, and the row
@@ -14,7 +14,8 @@ use crate::platform::Shell;
 use crate::settings::Page;
 use crate::settings::form::{Form, Tone};
 use copper_core::address::ENGINES;
-use copper_core::settings::Look;
+use copper_core::settings::{Look, keys};
+use copper_shell_core::daily;
 use copper_shell_core::forms::rt;
 use std::cell::RefCell;
 use std::time::Duration;
@@ -165,9 +166,10 @@ impl Page for General {
     }
 
     fn draw(&self, shell: &Shell) -> Form {
-        let (look, engine) = {
+        let (look, engine, daily_url) = {
             let s = shell.settings();
-            (s.look(), s.search_engine().id)
+            let daily_url = s.string(keys::DAILY_URL).unwrap_or_default().to_string();
+            (s.look(), s.search_engine().id, daily_url)
         };
         let places = shell.history().len();
         let (asked, reading, history) = STATE.with(|s| {
@@ -216,6 +218,16 @@ impl Page for General {
             "Not yet on Windows — pages keep the engine's own spelling underline",
         )
         .anchor("general.autocorrect");
+        // Mac `DailyPageLine` (Fork/DailyPage.swift): empty is off.
+        sec.field(
+            daily::TITLE,
+            Some(daily::DETAIL),
+            "daily",
+            &daily_url,
+            daily::PLACEHOLDER,
+        )
+        .anchor("general.daily")
+        .keywords(&daily::KEYWORDS);
 
         super::downloads::section(shell, &mut f);
 
@@ -290,6 +302,7 @@ impl Page for General {
             "move-in" => crate::settings::movein::open(shell),
             "history" => bring_in_history(shell),
             "engine" => shell.update_settings(|s| s.set_search_engine(value)),
+            "daily" => shell.update_settings(|s| s.set(keys::DAILY_URL, value)),
             _ => {}
         }
     }

@@ -10,11 +10,13 @@ use super::strip::Hit as StripHit;
 use super::{Chrome, State};
 use crate::keys::{self, Chord};
 use crate::platform::Shell;
+use crate::sys::calendar::WinCalendar;
 use copper_core::browser::TabId;
 use copper_engine_webview2::WebView2Page;
 use copper_engine_webview2::hosting::{FocusExit, KeyEventKind, PageChange};
 use copper_shell_core::OpenTab;
 use copper_shell_core::agents::groups;
+use copper_shell_core::daily;
 use copper_shell_core::palette::complete::Purpose;
 use copper_win_ui::input::Key;
 use copper_win_ui::input::Mods;
@@ -76,8 +78,14 @@ pub fn handle(chrome: &Rc<Chrome>, e: Event) {
         Event::Appearance { .. } => shell.dark_changed(),
         // A link's address does not outlive the window's attention.
         Event::Activated(false) => chrome.edit(|ui, st| st.stage.set_hover(ui, None)),
-        // Settings may have changed where downloads go.
-        Event::Activated(true) => shell.view().apply_download_ask(&shell),
+        Event::Activated(true) => {
+            // Settings may have changed where downloads go.
+            shell.view().apply_download_ask(&shell);
+            daily::check::<WinCalendar, _>(&shell); // back to Copper: the morning page, once a day
+        }
+        Event::Woke if crate::canvas::notify::frontmost() => {
+            daily::check::<WinCalendar, _>(&shell);
+        }
         Event::CloseRequested => crate::app::quit(&shell),
         Event::Closed => copper_win_rt::quit(0),
         _ => {}
