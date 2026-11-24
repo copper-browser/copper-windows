@@ -157,7 +157,10 @@ impl Manager {
         let said = host.clone();
         Self::vault(
             shell,
-            move |v| async move { v.save(Source::Keychain, &host, &user, &password).await },
+            move |v| async move {
+                v.save(Source::Keychain, &host, &user, &password, None)
+                    .await
+            },
             move |s, m, r| {
                 let mut st = m.st.borrow_mut();
                 st.saving = false;

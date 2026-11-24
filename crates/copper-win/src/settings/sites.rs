@@ -100,6 +100,7 @@ mod tests {
             host: host.into(),
             user: user.into(),
             used,
+            origin: None,
         }
     }
 
