@@ -2,10 +2,12 @@
 //! (copper-shell-core's `agents`, started here when `agent.json` says so),
 //! the engine's backstage for tabs an agent works in while the user looks
 //! at another, what the agent is doing said in a line, who is driving
-//! which tab ([`hands`], drawn by [`marks`]), and passwords for
+//! which tab ([`hands`], drawn by [`marks`]), the bar when an agent hands
+//! the person a step ([`handoff`]), and passwords for
 //! `browser_sign_in` / `browser_autofill`.
 
 pub mod brain;
+pub mod handoff;
 mod hands;
 pub mod marks;
 
@@ -122,6 +124,10 @@ impl AgentsApp<Win> for App {
         marks::clear();
     }
 
+    fn attention(&self) {
+        handoff::attention();
+    }
+
     fn sign_in(
         &self,
         shell: Shell,
@@ -162,6 +168,7 @@ fn let_go(shell: &Shell, tab: &TabId) {
 pub fn register(shell: &Shell) {
     let server = agents::start::<Win>(shell, Rc::new(App::default()));
     marks::install(shell);
+    handoff::install(shell, &server);
     brain::register(shell);
     let r = shell.view().commands();
     let s = server.clone();

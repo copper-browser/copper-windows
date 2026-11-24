@@ -110,7 +110,9 @@ mod win {
 
     /// A click on a chrome node: `true` if it was the slot's.
     pub fn click(shell: &Shell, id: NodeId) -> bool {
-        pane::click(shell, id) || crate::agents::marks::click(shell, id)
+        pane::click(shell, id)
+            || crate::agents::marks::click(shell, id)
+            || crate::agents::handoff::click(shell, id)
     }
 
     /// The addons, their state or the cloud's answer changed: bring the
