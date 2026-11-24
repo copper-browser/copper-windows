@@ -407,6 +407,7 @@ dependencies = [
  "copper-engine",
  "copper-pagejs",
  "futures-util",
+ "icu_normalizer",
  "jpeg-encoder",
  "percent-encoding",
  "png",
