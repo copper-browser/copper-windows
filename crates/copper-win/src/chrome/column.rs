@@ -7,7 +7,7 @@
 //! and removes the rest and puts them in order, so a long column costs
 //! what its changes do.
 
-use super::build::{door, fill_mark, mark, tip};
+use super::build::{door, fill_mark, mark, pin_light, tip};
 use super::doors;
 use super::glyph;
 use super::images::Images;
@@ -88,6 +88,7 @@ struct Drawn {
     audio: bool,
     crashed: bool,
     private: bool,
+    lit: bool,
 }
 
 impl Drawn {
@@ -101,6 +102,7 @@ impl Drawn {
             audio: t.audio,
             crashed: t.crashed,
             private: t.private,
+            lit: t.lit,
         }
     }
 }
@@ -852,6 +854,12 @@ impl Column {
         for chunk in pins.chunks(cols) {
             let line = ui.tree.add(self.pins_box, Node::row().gap(side::PIN_GAP));
             for t in chunk {
+                let new = t.lit && !t.live;
+                let name = if new {
+                    format!("{}, new", t.label)
+                } else {
+                    t.label.clone()
+                };
                 let mut pin = Node::stack()
                     .size(w, h)
                     .shrink(0.0)
@@ -860,7 +868,7 @@ impl Column {
                     .hover_fill(Token::ColumnHover)
                     .align(Align::Center)
                     .justify(Justify::Center)
-                    .button(&t.label)
+                    .button(&name)
                     .selected(t.live);
                 // A Calendar pin's card says more than its name would.
                 if !copper_shell_core::calendar::peeks(&t.url) {
@@ -880,6 +888,7 @@ impl Column {
                 let p = ui.tree.add(line, pin);
                 let icon = super::build::icon_id(ui, images, t.favicon.as_ref());
                 mark(ui, p, icon, &t.letter, side::pin_mark(h));
+                pin_light(ui, p, new, 5.0);
                 self.targets.insert(p, Hit::Tab(t.id.clone()));
             }
         }

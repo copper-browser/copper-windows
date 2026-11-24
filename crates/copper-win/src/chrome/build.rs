@@ -152,6 +152,29 @@ pub fn tip(text: &str, command: &str) -> String {
     }
 }
 
+/// The pin light (Mac `PinLightDot`, copper-shell-core `pinlight`): 6 DIPs
+/// of copper in pin square `square`'s top-right corner, `inset` from its
+/// edges, while the pin's title has an unread count and it isn't the live
+/// tab. Clicks go through to the square.
+pub fn pin_light(ui: &mut Ui, square: NodeId, lit: bool, inset: f32) {
+    if lit {
+        ui.tree.add(
+            square,
+            Node::new()
+                .size(6.0, 6.0)
+                .radius(3.0)
+                .fill(Token::Accent)
+                .absolute(Abs {
+                    top: Some(inset),
+                    right: Some(inset),
+                    ..Abs::default()
+                })
+                .inert()
+                .role(Role::None),
+        );
+    }
+}
+
 /// A site's mark: its icon, or its letter on a rounded square. Returns the
 /// mark's box; its child is the picture or the letter.
 pub fn mark(ui: &mut Ui, parent: NodeId, icon: Option<u32>, letter: &str, size: f32) -> NodeId {

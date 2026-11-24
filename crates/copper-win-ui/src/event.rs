@@ -67,6 +67,8 @@ pub enum Event {
     Appearance { dark: bool },
     /// The window became (or stopped being) the foreground window.
     Activated(bool),
+    /// The computer woke from sleep (`PBT_APMRESUMEAUTOMATIC`).
+    Woke,
     /// The user asked to close the window (the close button, Alt+F4). The
     /// toolkit does nothing more until the app calls `close`.
     CloseRequested,

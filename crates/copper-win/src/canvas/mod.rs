@@ -23,7 +23,7 @@ mod inbox;
 #[cfg(windows)]
 mod look;
 #[cfg(windows)]
-mod notify;
+pub(crate) mod notify;
 #[cfg(windows)]
 mod ops;
 #[cfg(windows)]

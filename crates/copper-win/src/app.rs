@@ -105,6 +105,8 @@ pub fn run(args: Vec<String>) -> i32 {
         }
     });
     shell.view().apply_download_ask(&shell);
+    // The morning page, before the command line's addresses (they stay in front).
+    copper_shell_core::daily::check::<crate::sys::calendar::WinCalendar, _>(&shell);
     open_all(&shell, &open);
     if crate::chrome::welcome::wanted(&shell, !open.is_empty()) {
         crate::chrome::welcome::show(&shell);
