@@ -23,7 +23,7 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
-use copper_engine::JsonValue;
+use copper_engine::{ChosenFiles, JsonValue};
 use serde_json::json;
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2;
 use windows::Win32::Foundation::HWND;
@@ -115,6 +115,9 @@ impl PageInner {
     pub(super) fn file_chooser_opened(self: &Rc<Self>, params: &JsonValue) {
         let node = params.get("backendNodeId").and_then(JsonValue::as_i64);
         let multiple = params.get("mode").and_then(JsonValue::as_str) == Some("selectMultiple");
+        if self.take_chooser(node, multiple) {
+            return;
+        }
         if self.backstaged() {
             self.profile.engine.backstage.blocked();
             self.answer_cancel(node);
@@ -168,12 +171,19 @@ impl PageInner {
         }
         let open = self.chooser.open.borrow_mut().take();
         CHOOSING.with(|c| *c.borrow_mut() = Weak::new());
-        let Some(open) = open else { return };
+        if let Some(open) = open {
+            self.hand_files(open.node, Some(paths));
+        }
+    }
+
+    /// Give input `node` `files`, or tell it nothing was chosen.
+    pub(super) fn hand_files(&self, node: Option<i64>, files: ChosenFiles) {
+        let paths = files.unwrap_or_default();
         if paths.is_empty() {
-            self.answer_cancel(open.node);
+            self.answer_cancel(node);
             return;
         }
-        let (Some(wv), Some(node)) = (self.wv(), open.node) else {
+        let (Some(wv), Some(node)) = (self.wv(), node) else {
             return;
         };
         let files: Vec<String> = paths

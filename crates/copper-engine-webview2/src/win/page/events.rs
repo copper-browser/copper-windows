@@ -17,7 +17,7 @@ use windows::Win32::UI::Shell::SHCreateMemStream;
 use windows::core::Interface;
 
 use super::hosting::{MODIFIED_CLICK_WINDOW, accelerator_key, focus_changed};
-use super::{Life, PageInner, PendingPermission, WebView2Page, scheme, script};
+use super::{Life, PageInner, PendingPermission, WebView2Page, agent, scheme, script};
 use crate::convert::{
     CONNECTION_REFUSED, WEB_ERROR_CANCELED, WEB_ERROR_UNKNOWN, crash_reason, knock_target,
     permission_kind, refuses, web_error_name,
@@ -94,6 +94,7 @@ fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
                 // file chooser.
                 p.deny_pending_permissions();
                 p.close_file_chooser(false);
+                p.release_agent_holds();
                 p.set_progress(PROGRESS_COMMITTED);
                 script::bind_documents(&p);
                 p.emit(PageEvent::Load(LoadState::Committed { url }));
@@ -372,7 +373,9 @@ fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
         ScriptDialogOpening,
         ScriptDialogOpeningEventHandler,
         move |_, a: Option<ICoreWebView2ScriptDialogOpeningEventArgs>| {
-            if let (Some(p), Some(a)) = (pw.upgrade(), a) {
+            if let (Some(p), Some(a)) = (pw.upgrade(), a)
+                && !p.take_dialog(&a)?
+            {
                 p.swallow_dialog(&a);
             }
             Ok(())
@@ -474,6 +477,15 @@ fn wire_into(page: &Rc<PageInner>, wv: &Wv, t: &mut Tokens) -> WinResult {
             script::route_binding(&p, &params);
         }
     })?;
+    // Silent until `watch_network` enables the domain.
+    for event in agent::NET_EVENTS {
+        let pw = w.clone();
+        cdp::subscribe(view, event, t, move |params| {
+            if let Some(p) = pw.upgrade() {
+                p.net_event(event, &params);
+            }
+        })?;
+    }
 
     // -- hosting: cursor, keys, focus -------------------------------------------------
     let pw = w.clone();
@@ -781,6 +793,7 @@ impl PageInner {
             COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED => {
                 self.status.borrow_mut().loading = false;
                 self.close_file_chooser(false);
+                self.release_agent_holds();
                 let why = crash_reason(reason, self.terminating.replace(false));
                 self.emit(PageEvent::Crashed(why));
             }
@@ -793,6 +806,16 @@ impl PageInner {
 
     fn permission_requested(&self, a: ICoreWebView2PermissionRequestedEventArgs) -> WinResult {
         let kind = get(|k| unsafe { a.PermissionKind(k) })?;
+        // A site the user or an agent allowed: granted, nobody asked.
+        let page_url = self.status.borrow().url.clone();
+        if self.grants(&permission_kind(kind.0), page_url.as_deref()) {
+            if let Ok(a3) = a.cast::<ICoreWebView2PermissionRequestedEventArgs3>() {
+                // The grant is the handler's, not Edge's to remember.
+                unsafe { a3.SetSavesInProfile(false)? };
+            }
+            unsafe { a.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)? };
+            return Ok(());
+        }
         if self.backstaged() {
             unsafe { a.SetState(COREWEBVIEW2_PERMISSION_STATE_DENY)? };
             self.profile.engine.backstage.blocked();

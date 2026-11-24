@@ -5,7 +5,8 @@
 //! the Windows modules pass `value.0`.
 
 use copper_engine::{
-    Cookie, CrashReason, DownloadId, EngineError, PermissionKind, SameSite, WebsiteDataKinds,
+    Cookie, CrashReason, DialogKind, DownloadId, EngineError, PermissionKind, SameSite,
+    WebsiteDataKinds,
 };
 
 /// `COREWEBVIEW2_WEB_ERROR_STATUS` as a short, stable error name.
@@ -108,6 +109,45 @@ pub(crate) fn permission_kind(kind: i32) -> PermissionKind {
         12 => PermissionKind::Other("window-management".into()),
         _ => PermissionKind::Other("unknown".into()),
     }
+}
+
+/// `COREWEBVIEW2_SCRIPT_DIALOG_KIND` → the engine's kind.
+pub(crate) fn dialog_kind(kind: i32) -> Option<DialogKind> {
+    match kind {
+        0 => Some(DialogKind::Alert),
+        1 => Some(DialogKind::Confirm),
+        2 => Some(DialogKind::Prompt),
+        3 => Some(DialogKind::BeforeUnload),
+        _ => None,
+    }
+}
+
+/// A CDP `Network.ResourceType` → the Mac's `NetLog.kind` name.
+pub(crate) fn net_kind(resource_type: &str) -> &'static str {
+    match resource_type {
+        "Document" => "document",
+        "Stylesheet" => "stylesheet",
+        "Image" => "image",
+        "Media" => "media",
+        "Font" => "font",
+        "Script" => "script",
+        "XHR" => "xhr",
+        "Fetch" => "fetch",
+        _ => "other",
+    }
+}
+
+/// Whether a CDP `Network.requestWillBeSent` is the main frame's new
+/// document: a document request that starts its own loader, in the main
+/// frame (`main`; any frame while it is not known yet).
+pub(crate) fn starts_document(
+    resource_type: &str,
+    request: &str,
+    loader: Option<&str>,
+    frame: Option<&str>,
+    main: Option<&str>,
+) -> bool {
+    resource_type == "Document" && loader == Some(request) && main.is_none_or(|m| frame == Some(m))
 }
 
 /// `COREWEBVIEW2_PROCESS_FAILED_REASON` of an exited renderer → why.
@@ -267,6 +307,51 @@ pub(crate) fn new_download_id() -> DownloadId {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dialog_and_request_kinds() {
+        use super::{dialog_kind, net_kind};
+        use copper_engine::DialogKind;
+        assert_eq!(dialog_kind(0), Some(DialogKind::Alert));
+        assert_eq!(dialog_kind(1), Some(DialogKind::Confirm));
+        assert_eq!(dialog_kind(2), Some(DialogKind::Prompt));
+        assert_eq!(dialog_kind(3), Some(DialogKind::BeforeUnload));
+        assert_eq!(dialog_kind(4), None);
+        for (cdp, kind) in [
+            ("Document", "document"),
+            ("Stylesheet", "stylesheet"),
+            ("Image", "image"),
+            ("Media", "media"),
+            ("Font", "font"),
+            ("Script", "script"),
+            ("XHR", "xhr"),
+            ("Fetch", "fetch"),
+            ("WebSocket", "other"),
+            ("", "other"),
+        ] {
+            assert_eq!(net_kind(cdp), kind, "{cdp}");
+        }
+    }
+
+    #[test]
+    fn a_new_document_is_the_main_frames_own_load() {
+        use super::starts_document;
+        let doc = |ty, loader, frame, main| starts_document(ty, "R1", loader, frame, main);
+        assert!(doc("Document", Some("R1"), Some("F"), Some("F")));
+        assert!(
+            doc("Document", Some("R1"), Some("F"), None),
+            "main not known yet"
+        );
+        assert!(
+            !doc("Document", Some("R1"), Some("child"), Some("F")),
+            "an iframe"
+        );
+        assert!(
+            !doc("Document", Some("L0"), Some("F"), Some("F")),
+            "not its own loader"
+        );
+        assert!(!doc("Script", Some("R1"), Some("F"), Some("F")));
+    }
+
     #[test]
     fn knocks_only_where_chromium_would_connect() {
         use super::knock_target;
