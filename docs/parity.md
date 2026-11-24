@@ -5,8 +5,9 @@ whether Copper for Linux (`copper-linux`, GTK) and Copper for Windows (this
 repo) have it. It is the to-do list for both ports: when a Mac change lands,
 add or update its row here (the Mac repo's CONTRIBUTING.md asks for that).
 
-**Audited against** `copper-browser/copper` `fork` @ **34649ab** (2026-10-29);
-statuses as of copper-linux 0.6.1, copper-windows 0.3.0 (2026-10-30). Update the commit when you re-audit.
+**Audited against** `copper-browser/copper` `fork` @ **ebb6883** (2026-11-23; before
+that 34649ab, 2026-10-29); statuses as of copper-linux 0.7.0, copper-windows 0.4.0
+(2026-11-24). Update the commit when you re-audit.
 
 Status: **yes** · **part** (partial, note says what's missing) · **no** ·
 **mac** (can't exist off the Mac; note says why). *Shared* names the
@@ -37,9 +38,14 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Tabs | Recently Closed list | part | part | core `closed_tabs` | Ctrl+T / palette section on both |
 | Tabs | Clear tabs ⌘⇧K + Undo; "↓ Clear" seam button | yes | yes | shell-core `clear` | L no seam button |
 | Tabs | Tab sleep (idle / memory), site marks, audio badge | yes | yes | shell-core `sleep` | W also freezes hidden WebView2s |
-| Tabs | Hot-tab CPU reading, sleep hot tabs sooner | no | no | platform sampling | |
-| Tabs | Heavy pages (over memory/32, at least 500 MB) and finished agent tabs sleep at the half hour, under the budget (Mac #131) | no | no | shell-core `sleep::choose` + per-page memory from the platform | W: WebView2 `GetProcessExtendedInfos`; L: WebKitGTK web process pid |
-| Tabs | Wake cover (last picture while a page rebuilds) | no | yes | shell-core `cover` | L never calls `on_cover` |
+| Tabs | Heavy pages (over memory/32, at least 500 MB) and finished agent tabs sleep at the half hour, under the budget; pages that may sleep keep at most memory/16 (Mac #131, #181) | yes | yes | shell-core `sleep::choose`/`Plan`, engine `PageView::weight` | L: the WebKit web process that started during the page's load, by PSS; W: the renderer of the page's main frame, by working set |
+| Tabs | Pinned tabs never unload: loaded in the background at launch and when pinned, Ctrl+W steps away, Close Others leaves pins, a crashed pin reloads in the background at most 3× in 10 min (Mac #134) | yes | yes | shell-core `pins`, `crash::Limit` | |
+| Tabs | Let big pins sleep (Settings › Tabs, on by default): a pin over 300 MB not looked at for 2 h sleeps; a pin asleep at quit stays asleep at launch; `copper pins [status] / sleep on\|off` (Mac #181) | yes | yes | shell-core `pins`, copper-mcp `copper/pins` | |
+| Tabs | Hot-tab CPU sleep sooner | no | no | platform sampling | no per-tab CPU reading on either |
+| Tabs | Tidy: "Tidy" on the seam from 3 loose tabs and ⌘K › Tidy Tabs file loose tabs into named folders (model names them from titles + hosts only; by site without one or past 8 s), Undo pill + Ctrl+Z (Mac #200) | yes | yes | shell-core `tidy`, core `browser/tidy` | private tabs never filed; no bench verb |
+| Tabs | Pin light: a pin whose title starts with an unread count (`(1) Paper`, `Inbox (3)`) wears a copper dot on its square (column + top strip) until you go to it; a sleeping pin keeps it (Mac #199) | yes | yes | shell-core `pinlight` | |
+| Tabs | Tabs and pins always show the site's icon; a plain globe until it lands, never a letter; the Letters choice is gone (Mac #181) | yes | yes | core `Glyph` (ignored), platform | a pin sent to a sign-in page keeps its own site's icon: no on both |
+| Tabs | Wake cover (last picture while a page rebuilds), kept on disk across a launch by address and profile (100 MB, never private, cleared with browsing data) (Mac #181) | no | yes | shell-core `cover`, `cover::CoverStore` | L draws no covers |
 | Tabs | Split view ⌘⇧D (two panes) | no | no | shell-core | |
 | Tabs | Multiple windows ⌘N, per-window space | no | no | shell-core | single window on both |
 | Tabs | Full screen | yes | yes | platform | L F11, W F11 |
@@ -62,6 +68,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Field | ⌘K palette: tabs, other spaces, bookmarks, canvases, commands | part | yes | shell-core | L no Canvases, no commands on empty |
 | Field | ⌘K held walks rows, release lands; page's own ⌘K wins (Linear, Slack) | no | part | platform, pagejs | W walk yes, PageFirst no |
 | Field | Copy address ⇧⌘C, Paste and Go ⇧⌘V | part | part | platform | commands exist, keys missing |
+| Field | http pages say "Not secure" under the pointer (Mac #181) | yes | yes | core `address::is_not_secure` | L inline in the field, W first line of the address tooltip |
 | Panels | History (by day, search, remove, clear) ⌘Y | yes | yes | core | L Ctrl+Y, W Ctrl+H |
 | Panels | Bookmarks panel; Bookmark this page ⇧⌘B | yes | yes | core | L Ctrl+D |
 | Panels | Downloads panel ⇧⌘J, door ring, Show in folder, cancel/retry | yes | yes | shell-core `downloads` | |
@@ -85,6 +92,10 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Page | Sharing *tab* with *site* · Stop at the foot of the window; closing the tab, leaving the call or the page's stop end it (`ended`) | no | no | platform | |
 | Page | Bad certificate: ask once, local hosts trusted | no | part | engine, shell-core | L load just fails |
 | Page | JS dialogs, HTTP auth, file chooser, crashed-tab page | yes | yes | engine | |
+| Page | A page that can't load: "Can't connect to <site>", why, Try Again (Ctrl+R), Details (Mac #181) | yes | yes | shell-core `failure_status`, core reasons | W Details arrow doesn't turn |
+| Page | A page that keeps closing as it loads stops after its third crash in 30 s: "This page keeps closing as it loads." + Try Again (Mac #127); the page in front whose process dies reloads at once | yes | yes | shell-core `crash` | the Mac's extension-shim half is Mac-only |
+| Page | Tab audio in a shared tab; a second page's microphone never mutes a call (Mac #192) | no | no | platform | needs tab share first |
+| Page | `window.copper.voice.listen()` for listed sites (Phonon-2 on audio the page pushes) (Mac #121, #122) | no | no | needs Voice | |
 | Page | Print ⌘P | yes | yes | platform | L print dialog, W WebView2's own |
 | Page | Zoom ⌘+/−/0; zoom remembered per site | yes | yes | shell-core `zoom` | L per-site memory missing; W per site from shell-core (`pages.rs`) |
 | Page | Light / Dark / System | yes | yes | core | |
@@ -97,6 +108,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | App | Restore previous session (command) | no | no | core has the file | |
 | App | Crash records, `copper crashes`, About › Diagnostics | part | part | shell-core `crash` | web-process faults only, no panic capture |
 | App | Welcome / onboarding | no | yes | platform | |
+| App | Morning page: Settings › General › Morning page (`daily.url`, empty = off); the first launch, return to Copper or wake after `daily.hour` (default 3, local) opens it as the active tab or brings back the tab showing it, once a day (Mac #198) | yes | yes | core settings `daily.*`, shell-core `daily` | L wake = logind PrepareForSleep (Flatpak talks to login1); W wake = PBT_APMRESUMEAUTOMATIC (Modern Standby may not send it) |
 | App | Keyboard shortcuts list in About | no | part | platform | W lists a dead Reading mode key |
 | App | Launch watchdog, traffic lights, column scroll bounce, menu-bar menus | mac | mac | — | AppKit / SwiftUI |
 | Cloud | Settings › Cloud: Connect (link code / join link / pairing code), by hand, pinned cert, TOFU | yes | yes | copper-cloud `link`, `tls` | |
@@ -130,6 +142,7 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Passwords | Fill only on click; list under the box; merged sources | yes | yes | shell-core `vault` | |
 | Passwords | Sites never asked (Forget / Forget all); no save/fill in private tabs | yes | yes | shell-core | |
 | Passwords | Sign-ins inside iframes | no | no | pagejs relay, shell-core `watch` | relay is main-frame only |
+| Passwords | Google / Microsoft name-first sign-in pages fill the picked account (`fillName` → Next → sign in) | yes | yes | pagejs `forms` | ahead of the Mac (the Mac still says "Couldn't find the sign-in fields") |
 | Passwords | Accounts popup (key door, ⇧⌘Y, search, Fill / Copy / Open) | no | no | shell-core `vault::all_credentials` | data there, no UI |
 | Passwords | Two-step code rows (Bitwarden / 1Password TOTP) | yes | yes | copper-creds `totp` | |
 | Passwords | Fill two-step codes on their own after a pick (setting) | yes | yes | shell-core `watch` | |
@@ -152,19 +165,31 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 | Agents | Loopback MCP server, bearer, Origin check, `--mcp-stdio` bridge | yes | yes | copper-mcp | |
 | Agents | Settings › Agents: switch, status, port, token, Copy config / stdio config | yes | yes | shell-core `agents` | W port not typed |
 | Agents | Copy prompt / Copy /jev / install command; `copper setup` for phi, Claude Code | no | no | shell-core, copper-mcp `cli` | |
-| Agents | 26 `browser_*`, 4 `jev_*`, 12 `canvas_*`, `cloud_history_delete` tools | yes | yes | copper-mcp `catalogue` | |
+| Agents | The Mac's tool catalogue (one-line descriptions, a third smaller; canvas tools beyond create/join once a canvas is in use; op shapes with the first `canvas_read`) (Mac #181) | yes | yes | copper-mcp `catalogue` | leaves out what the ports don't do: frames, autofill new-password, Jev vision |
+| Agents | `browser_history`, `browser_bookmarks`, `browser_spaces`, `browser_downloads` (+ `copper downloads`) (Mac #181) | yes | yes | copper-mcp `state_tools`, `downloads` | `spaces move` takes only the caller's own tab; 1 in 10 popup downloads missed from the opener's list in e2e |
+| Agents | `browser_mouse_click_xy`; `browser_handoff` bar (Show / Done / Not now, the call waits) (Mac #181) | yes | yes | copper-mcp, shell-core `agents/handoff` | L no urgency hint; W bar unseen on real Windows |
+| Agents | `browser_vault_save` / `browser_vault_note` + `copper bitwarden save -` / `note -` (Mac #136) | yes | yes | copper-creds `bitwarden/save` | other `copper bitwarden` ops not yet |
+| Agents | `browser_handle_dialog`, `browser_file_upload` (+ drop on `ref`), `browser_pdf_save`, `browser_network_requests`, `browser_cookies`, `browser_permissions`; CLI hover/select/scroll/wait/back/forward/upload/dialog/pdf (Mac #181) | yes | part | copper-mcp `page_tools`, `dialogs`; engine | W dialogs only on agents' background tabs; L no folder uploads |
+| Agents | Page tools say what really happened: `browser_evaluate` awaits Promises / takes an expression (compact JSON), covered or hidden clicks are errors naming what's in the way, unfilled fields, unknown keys, no history, absurd numbers refused (Mac #181) | yes | yes | copper-mcp `tools`, pagejs | no `:hover` check, no drag "page did not change", no scroll-lazy full-page shots |
+| Agents | An all-digit tab id (8+ digits or a leading zero) is an id (Mac #125) | yes | yes | copper-mcp `agent_tabs::reading` | |
+| Agents | A login or custom field fills only on the exact address it was saved for (scheme, host, port; bare loopback never agent-filled); keyring / Credential Manager keep protocol + port (Mac #181) | yes | yes | copper-creds `origin`, shell-core `forms/mcp` | |
+| Agents | Every agent fill and the account list fill only while the page is still the origin they started on (Mac #181) | yes | yes | pagejs `Call::at`, shell-core `watch` | fills go to the main frame only |
+| Agents | A tab-less agent reads but never changes the user's tab; `browser_close` closes only its own; a named tab that closes mid-call fails the call (Mac #181) | yes | yes | copper-mcp `agent_tabs` | |
+| Agents | A one-time code fill sends its form; Agents-folder cards / identities count as shared; an unshared account says where to share it; page titles one quoted line; page text fenced as untrusted (Mac #181) | yes | yes | pagejs, copper-creds, copper-mcp | |
+| Agents | Agents work inside frames (`[frame=f2]`, `f2:e7`, `frame` arg); Copper's page scripts in an isolated world (Mac #181) | no | no | pagejs, engine | L needs a web-process extension; W can use CoreWebView2Frame / CDP isolated worlds |
 | Agents | `voice_status`, `voice_transcript` | no | no | needs Voice | |
 | Agents | `browser_take_screenshot` / `copper shot` of any part: element (`ref`, `selector`), `region`, whole page; `padding`; `scale` 1–4 (HD); `filename` folder → `copper-YYYYMMDD-HHMMSS.png` | yes | yes | copper-mcp `screenshot`, `shot`; engine `PageView::capture` | Same schema, rules and answer as the Mac. HD is re-rendered: L for an agent's background tab (backstage lens: page laid out k× bigger at k× zoom for the snapshot), the tab on screen is enlarged and says `Upscaled`; W by CDP `clip.scale` (the tab on screen too, may show for a frame). `frame` (+ selector) is refused on both: no frame addressing yet |
 | Agents | A secret Copper filled (password, one-time code, card number/code, vault field) never reads back: placeholder in every read path (snapshot, text, find, evaluate, console, network, Jev/extract, screenshots, errors, agent pane, timeline); `browser_sign_in` only into a real shown password box beside the same account | yes | yes | copper-mcp `secrets`, pagejs `forms/sign_in.js`, `page/helper.js`, `jev/fast.js` | Same two layers as the Mac (copper-browser/Copper#188): structural placeholder + per-tab in-memory scrubber |
 | Agents | Who is calling, per-caller agent tabs, backstage paints, announce each call | yes | yes | copper-mcp, shell-core | |
 | Agents | CLI page verbs, `signin`, `autofill`, `cloud-history` | yes | yes | copper-mcp `cli` | |
 | Agents | CLI `run --vision/--model/--strategy/--json-run` | no | no | copper-mcp `ultrafast` | |
-| Agents | CLI `intelligence`, `claude`, `link`, `bitwarden`, `session`, `crashes`, `listen` | part | part | copper-mcp `Host::control` | `intelligence` and `claude` work on both; the rest need lanes |
+| Agents | CLI `intelligence`, `claude`, `link`, `bitwarden`, `session`, `crashes`, `listen` | part | part | copper-mcp `Host::control` | `intelligence`, `claude`, `pins`, `downloads` and `bitwarden save/note` work on both; the rest need lanes |
 | Agents | Headless mode | yes | no | platform | L weston; low value on W |
 | Jev | Jev mode switch, ultrafast loop, page trail | yes | yes | copper-mcp `ultrafast`, pagejs `trail` | |
 | Jev | TypeSafe key in Settings (+ Get a key); text model picker | yes | part | copper-core `intelligence` | W no text-model row |
 | Jev | Fast mode + strategies (literal / burst / paste / watch / lean) | yes | no | copper-mcp `ultrafast` | shared; no Settings switch, `jevFast` in intelligence.json |
 | Jev | What Jev sees (auto / marks / box / pixels), `json` trace | no | no | copper-mcp `ultrafast`, `shot` | |
+| Jev | The Mac's loop (Mac #181, #182): one-edit typing + Return in a lone search box, values the goal states typed without a model (fast model first), waits for the page's own requests (engine log), second look under the 80% floor → unsure, payments/forms sent once, question goals end DONE on the answer found (`answer` + `snippet`), covered controls left out, four empty scrolls stop, shadow DOM + same-origin frames, human checks hand back, sponsored links skipped, `private: true`; `browser_click` waits for a late navigation | yes | yes | copper-mcp `ultrafast`, `ultrafast/{rules,net,strategies}`, pagejs `jev/*` | no picture loop (box / pixels); L guesses request kinds from address + type |
 | Jev | SIGN_IN / AUTOFILL controls inside a run | yes | no | shell-core `jev_extras` | |
 | Jev | Text helper over the Claude account | yes | yes | copper-mcp `claude`, shell-core `AppHost::claude_ask` | |
 | Driving | Drive events; "X is driving" pill + Stop; Stop refuses 30 s | yes | yes | copper-mcp `drive` | |
@@ -231,6 +256,8 @@ platform shells only draw it. "L" = Linux, "W" = Windows.
 
 ## Mac-only, in one line each
 
+- **See-through window (Mac #202), arrow keys that no longer beep (#130), an agent's tab that no longer flashes on a desktop switch (#129), Core Animation space slides and motion (#183, #185, #186), App Nap pacing for tab share (#124), Safari's version in the user agent (#184)**: AppKit / Core Animation / macOS behaviour with no counterpart off the Mac.
+- **Folders survive a second window (#128)**: both ports have one window.
 - **Menu bar, Dock, traffic lights, scroll bounce, launch watchdog**: AppKit / SwiftUI.
 - **Chrome extensions on Linux**: WebKitGTK 2.52 has no WebExtensions API. (Windows is *not* Mac-only: WebView2 supports extensions.)
 - **1Password extension sign-in / app link**: needs WebExtensions with native messaging.
