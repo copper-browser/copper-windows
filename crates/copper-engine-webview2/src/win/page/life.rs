@@ -9,11 +9,11 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use copper_engine::{EngineError, LocalFuture, Result};
+use copper_engine::{EngineError, LocalFuture, Result, Weight};
 use copper_win_rt::oneshot;
 use serde_json::json;
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
-use webview2_com::TrySuspendCompletedHandler;
+use webview2_com::{GetProcessExtendedInfosCompletedHandler, TrySuspendCompletedHandler};
 use windows::core::Interface;
 
 use super::{Life, PageInner, WebView2Page, capture, view};
@@ -199,4 +199,96 @@ pub(super) fn terminate(page: &Rc<PageInner>) {
             p.terminating.set(false);
         }
     });
+}
+
+/// What the page weighs (`PageView::weight`): the renderer its main frame
+/// runs in — the environment lists every process with the frames it runs,
+/// and the webview names its main frame — and that process's working set.
+/// `None` while the page sleeps (no webview), before its first frame, or on
+/// a Runtime too old to say. Pages of one site may share a renderer.
+pub(super) fn weight(page: &Rc<PageInner>) -> LocalFuture<Option<Weight>> {
+    let wv = page.wv();
+    let env = page.profile.engine.env.now();
+    Box::pin(async move {
+        let (wv, env) = (wv?, env?);
+        let mut frame = 0u32;
+        let v20: ICoreWebView2_20 = wv.view.cast().ok()?;
+        // SAFETY: an out-parameter on a live webview.
+        unsafe { v20.FrameId(&mut frame) }.ok()?;
+        let env13: ICoreWebView2Environment13 = env.cast().ok()?;
+        let (tx, rx) = oneshot::<Option<ICoreWebView2ProcessExtendedInfoCollection>>();
+        let handler = GetProcessExtendedInfosCompletedHandler::create(Box::new(move |hr, list| {
+            tx.send(hr.ok().and(list));
+            Ok(())
+        }));
+        // SAFETY: the handler outlives the call (COM holds it).
+        unsafe { env13.GetProcessExtendedInfos(&handler) }.ok()?;
+        let list = within(rx, cdp::CALL_TIMEOUT).await??;
+        let process = renderer_of(&list, frame)?;
+        Some(Weight {
+            process,
+            bytes: working_set(process)?,
+        })
+    })
+}
+
+/// The renderer whose frames include `frame`.
+fn renderer_of(list: &ICoreWebView2ProcessExtendedInfoCollection, frame: u32) -> Option<u32> {
+    let mut count = 0u32;
+    // SAFETY: out-parameters and getters on live COM objects WebView2 gave.
+    unsafe {
+        list.Count(&mut count).ok()?;
+        for i in 0..count {
+            let Ok(info) = list.GetValueAtIndex(i) else {
+                continue;
+            };
+            let Ok(process) = info.ProcessInfo() else {
+                continue;
+            };
+            let mut kind = COREWEBVIEW2_PROCESS_KIND::default();
+            if process.Kind(&mut kind).is_err() || kind != COREWEBVIEW2_PROCESS_KIND_RENDERER {
+                continue;
+            }
+            let Ok(frames) = info.AssociatedFrameInfos().and_then(|f| f.GetIterator()) else {
+                continue;
+            };
+            let mut more = windows::core::BOOL::default();
+            while frames.HasCurrent(&mut more).is_ok() && more.as_bool() {
+                let mut id = 0u32;
+                let ours = frames
+                    .GetCurrent()
+                    .ok()
+                    .and_then(|f| f.cast::<ICoreWebView2FrameInfo2>().ok())
+                    .is_some_and(|f| f.FrameId(&mut id).is_ok() && id == frame);
+                if ours {
+                    let mut pid = 0i32;
+                    process.ProcessId(&mut pid).ok()?;
+                    return u32::try_from(pid).ok();
+                }
+                if frames.MoveNext(&mut more).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `pid`'s working set in bytes.
+fn working_set(pid: u32) -> Option<u64> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: a handle opened here, read once and closed; the counters are
+    // sized as the call asks.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut counters = PROCESS_MEMORY_COUNTERS {
+            cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            ..Default::default()
+        };
+        let ok = K32GetProcessMemoryInfo(handle, &mut counters, counters.cb).as_bool();
+        let _ = CloseHandle(handle);
+        ok.then_some(counters.WorkingSetSize as u64)
+    }
 }
