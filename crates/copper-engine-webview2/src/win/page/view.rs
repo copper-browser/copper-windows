@@ -474,4 +474,8 @@ impl PageView for WebView2Page {
     fn terminate_web_process(&self) {
         life::terminate(&self.inner);
     }
+
+    fn weight(&self) -> LocalFuture<Option<copper_engine::Weight>> {
+        life::weight(&self.inner)
+    }
 }

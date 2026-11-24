@@ -66,6 +66,8 @@ fn clear_history(shell: &Shell) {
 /// Clear `kinds` from every profile's jar (the default one first), then
 /// say `done`.
 fn clear_jars(shell: &Shell, kinds: WebsiteDataKinds, done: &'static str) {
+    // Pages' kept pictures go with whatever is cleared (Mac `Covers.clear`).
+    shell.cover_store().remove_all();
     let mut names: Vec<Option<String>> = vec![None];
     names.extend(shell.browser().profiles().into_iter().map(Some));
     let engine = shell.engine().clone();

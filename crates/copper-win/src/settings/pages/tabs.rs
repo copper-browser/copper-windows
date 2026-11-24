@@ -37,9 +37,14 @@ impl Page for Tabs {
         // The shell's answer, not the stored one: with nothing stored yet
         // the tabs are down the side.
         let side = shell.tabs_position() == TabsPosition::Left;
-        let (sleeps, switching, archive) = {
+        let (sleeps, big_pins, switching, archive) = {
             let s = shell.settings();
-            (s.sleeps_tabs(), s.tab_switching(), s.archive_after())
+            (
+                s.sleeps_tabs(),
+                s.big_pins_sleep(),
+                s.tab_switching(),
+                s.archive_after(),
+            )
         };
         let mut f = Form::default();
         f.section("Layout")
@@ -76,11 +81,19 @@ impl Page for Tabs {
         let sec = f.section("Tabs you leave");
         sec.switch(
             "Sleep tabs you aren't using",
-            Some("When many pages are open or memory runs short, the tabs you left longest sleep and come back where you were. Pinned tabs, sound, calls and anything typed stay awake."),
+            Some("When many pages are open, a page is heavy or memory runs short, the tabs you left longest sleep and come back where you were. Sound, calls and anything typed stay awake; pins follow the setting below."),
             "sleep",
             sleeps,
         )
         .anchor("tabs.sleep");
+        // Mac `BigPinsLine` (Fork/PinsAwake.swift); the rule is shell-core's `pins`.
+        sec.switch(
+            "Let big pins sleep",
+            Some("A pinned page over 300 MB that you haven't looked at for two hours sleeps, and comes back under its last picture. Turn it off and pins never sleep."),
+            "pins.sleep",
+            big_pins,
+        )
+        .anchor("tabs.pins");
         // Mac `ArchiveLine` (Fork/Sections.swift); the sweep is shell-core's.
         sec.choice(
             "Archive Today after",
@@ -137,6 +150,9 @@ impl Page for Tabs {
                 TabsPosition::Top
             }),
             "sleep" => shell.update_settings(|s| s.set_sleeps_tabs(on(value))),
+            "pins.sleep" => {
+                shell.update_settings(|s| s.set(copper_core::settings::keys::PINS_SLEEP, on(value)))
+            }
             "switching" => {
                 if let Some(v) = TabSwitching::parse(value) {
                     shell.update_settings(|s| s.set_tab_switching(v));
